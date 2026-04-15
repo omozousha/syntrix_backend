@@ -9,6 +9,7 @@ const { resourceRouter } = require('./src/modules/resource/resource.routes');
 const { importRouter } = require('./src/modules/import/import.routes');
 
 const app = express();
+app.set('trust proxy', 1);
 
 app.use(helmetMiddleware);
 app.use(corsMiddleware);
