@@ -15,6 +15,21 @@ function toCsvList(value, fallback = '') {
     .filter(Boolean);
 }
 
+function toBoolean(value, fallback) {
+  if (value == null || value === '') {
+    return fallback;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['false', '0', 'no', 'n', 'off'].includes(normalized)) {
+    return false;
+  }
+  return fallback;
+}
+
 function getRequired(name, fallback) {
   const value = process.env[name] || fallback;
 
@@ -28,6 +43,7 @@ function getRequired(name, fallback) {
 const env = {
   port: toNumber(process.env.PORT, 3000),
   nodeEnv: process.env.NODE_ENV || 'development',
+  serveTestUi: toBoolean(process.env.SERVE_TEST_UI, (process.env.NODE_ENV || 'development') !== 'production'),
   corsOrigins: (process.env.CORS_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000')
     .split(',')
     .map((item) => item.trim())

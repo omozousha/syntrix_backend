@@ -16,7 +16,22 @@ app.use(corsMiddleware);
 app.use(express.json({ limit: env.apiBodyLimit }));
 app.use(express.urlencoded({ extended: true }));
 app.use(apiRateLimiter);
-app.use(express.static(path.join(__dirname, 'public')));
+
+if (env.serveTestUi) {
+  app.use(express.static(path.join(__dirname, 'public')));
+}
+
+app.get('/', (_req, res) => {
+  if (env.serveTestUi) {
+    return res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  }
+
+  return res.json({
+    success: true,
+    service: 'syntrix-backend',
+    message: 'Backend API is running. Use /health and /api/v1/* endpoints.',
+  });
+});
 
 app.get('/health', (_req, res) => {
   res.json({
