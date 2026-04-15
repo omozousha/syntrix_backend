@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Syntrix Simple Frontend</title>
+  <style>
+    :root {
+      --bg: #f3f7fb;
+      --card: #ffffff;
+      --line: #d8e2ee;
+      --text: #0f172a;
+      --muted: #475569;
+      --primary: #0f766e;
+      --danger: #b91c1c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at top right, #dff4ef 0%, var(--bg) 55%);
+    }
+    .wrap {
+      max-width: 980px;
+      margin: 24px auto;
+      padding: 0 16px 40px;
+    }
+    h1 { margin: 0 0 8px; }
+    .subtitle { margin: 0 0 24px; color: var(--muted); }
+    .grid {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 6px 16px rgba(15, 23, 42, 0.06);
+    }
+    h2 { margin: 0 0 12px; font-size: 18px; }
+    label { display: block; font-size: 13px; margin: 10px 0 4px; color: var(--muted); }
+    input, select, textarea, button {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    button {
+      cursor: pointer;
+      background: var(--primary);
+      color: #fff;
+      border: 0;
+      font-weight: 600;
+      margin-top: 10px;
+    }
+    button.secondary {
+      background: #1d4ed8;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .status {
+      margin-top: 10px;
+      font-size: 13px;
+      white-space: pre-wrap;
+      border-radius: 8px;
+      padding: 10px;
+      background: #f8fafc;
+      border: 1px dashed #cbd5e1;
+    }
+    .status.error {
+      color: var(--danger);
+      border-color: #fecaca;
+      background: #fef2f2;
+    }
+    .footer-note {
+      margin-top: 16px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .table-wrap {
+      margin-top: 20px;
+      overflow: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #f1f5f9;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .toolbar input {
+      max-width: 320px;
+      margin: 0;
+    }
+    .toolbar button {
+      width: auto;
+      margin: 0;
+      padding: 10px 14px;
+    }
+    .action-btn {
+      width: auto;
+      margin: 0;
+      padding: 6px 10px;
+      font-size: 12px;
+    }
+    .action-btn.delete {
+      background: var(--danger);
+    }
+    .action-group {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Syntrix Frontend Sederhana</h1>
+    <p class="subtitle">Login, tambah data POP via form, dan import data POP dari file.</p>
+
+    <div class="grid">
+      <section class="card">
+        <h2>1) Login</h2>
+        <form id="loginForm">
+          <label for="baseUrl">Base URL API</label>
+          <input id="baseUrl" />
+
+          <label for="email">Email</label>
+          <input id="email" value="admin@syntrix.local" />
+
+          <label for="password">Password</label>
+          <input id="password" type="password" value="AdminKuat123!" />
+
+          <button id="btnLogin" type="submit">Login</button>
+          <button class="secondary" id="btnLoadRegions" type="button">Load Regions</button>
+        </form>
+        <div id="loginStatus" class="status">Belum login</div>
+      </section>
+
+      <section class="card">
+        <h2>2) Add POP (Form)</h2>
+        <label for="popName">POP Name</label>
+        <input id="popName" placeholder="Contoh: POP Frontend A" />
+
+        <label for="popCode">POP Code (3 huruf)</label>
+        <input id="popCode" placeholder="Contoh: CBO" maxlength="3" />
+
+        <div class="row">
+          <div>
+            <label for="regionId">Region</label>
+            <select id="regionId"></select>
+          </div>
+          <div>
+            <label for="statusPop">Status POP</label>
+            <select id="statusPop">
+              <option value="planning">planning</option>
+              <option value="active" selected>active</option>
+              <option value="inactive">inactive</option>
+              <option value="maintenance">maintenance</option>
+            </select>
+          </div>
+        </div>
+
+        <label for="popType">POP Type</label>
+        <input id="popType" value="metro" />
+
+        <label for="address">Address</label>
+        <input id="address" value="Jl. Frontend Test" />
+
+        <div class="row">
+          <div>
+            <label for="tenant">Tenant</label>
+            <input id="tenant" placeholder="Contoh: Telkom, Biznet" />
+          </div>
+          <div>
+            <label for="plnCidNumber">PLN CID Number</label>
+            <input id="plnCidNumber" placeholder="Contoh: CID123456" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="longitude">Longitude</label>
+            <input id="longitude" value="106.816666" />
+          </div>
+          <div>
+            <label for="latitude">Latitude</label>
+            <input id="latitude" value="-6.2" />
+          </div>
+        </div>
+
+        <button id="btnAddPop" type="button">Submit POP</button>
+        <div id="popStatus" class="status">Siap tambah POP via form</div>
+      </section>
+
+      <section class="card">
+        <h2>3) Import POP</h2>
+        <label for="importFile">File Import (.xlsx/.xls/.csv/.kml/.kmz)</label>
+        <input id="importFile" type="file" />
+
+        <div class="row">
+          <div>
+            <label for="importRegionId">Default Region</label>
+            <select id="importRegionId"></select>
+          </div>
+          <div>
+            <label for="applyImport">Apply Import?</label>
+            <select id="applyImport">
+              <option value="false">Preview saja</option>
+              <option value="true" selected>Apply ke database</option>
+            </select>
+          </div>
+        </div>
+
+        <button id="btnImport" type="button">Upload & Import</button>
+        <div id="importStatus" class="status">Siap import data POP</div>
+      </section>
+    </div>
+
+    <section class="card table-wrap">
+      <h2>4) List POP (Data Saat Ini)</h2>
+      <div class="toolbar">
+        <input id="popSearch" placeholder="Cari POP name / code..." />
+        <button class="secondary" id="btnLoadPops" type="button">Refresh List POP</button>
+        <button id="btnExportPops" type="button">Export XLSX</button>
+      </div>
+      <div id="popListStatus" class="status">Belum memuat data POP</div>
+      <table>
+        <thead>
+          <tr>
+            <th>No</th>
+            <th>POP ID</th>
+            <th>POP Code</th>
+            <th>POP Name</th>
+            <th>Region</th>
+            <th>Status</th>
+            <th>POP Type</th>
+            <th>Longitude</th>
+            <th>Latitude</th>
+            <th>Address</th>
+            <th>Tenant</th>
+            <th>PLN CID</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="popTableBody">
+          <tr>
+            <td colspan="13">Tidak ada data</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <p class="footer-note">
+      Catatan: frontend ini hanya untuk uji cepat lokal. Semua otorisasi utama tetap dilakukan oleh backend.
+    </p>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

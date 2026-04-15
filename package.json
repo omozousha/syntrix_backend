@@ -1,0 +1,33 @@
+{
+  "name": "syntrix_backend",
+  "version": "1.0.0",
+  "description": "Syntrix backend service for fiber optic asset inventory and monitoring",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "node --watch app.js",
+    "test": "node --check app.js",
+    "audit:deps": "npm audit",
+    "smoke": "node scripts/smoke-test.js",
+    "check:ci-env": "node scripts/check-ci-env.js",
+    "test:pop-flow": "node scripts/test-pop-form-import.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "adm-zip": "^0.5.17",
+    "axios": "^1.15.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.3.2",
+    "fast-xml-parser": "^5.5.12",
+    "form-data": "^4.0.4",
+    "helmet": "^8.1.0",
+    "multer": "^2.1.1",
+    "uuid": "^13.0.0",
+    "xlsx": "^0.18.5"
+  }
+}
