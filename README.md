@@ -130,3 +130,10 @@ Panduan uji manual Postman:
 Panduan push dan deploy ke Vercel:
 
 - `docs/DEPLOY_GITHUB_VERCEL.md`
+
+Checklist go-live production:
+
+- `docs/GO_LIVE_CHECKLIST.md`
+- `docs/GO_LIVE_STATUS.md`
+- `docs/RUNBOOK_OPERATIONS.md`
+- `docs/MONITORING_ALERT_POLICY.md`
