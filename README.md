@@ -137,3 +137,4 @@ Checklist go-live production:
 - `docs/GO_LIVE_STATUS.md`
 - `docs/RUNBOOK_OPERATIONS.md`
 - `docs/MONITORING_ALERT_POLICY.md`
+- `docs/FRONTEND_INTEGRATION_CHECKLIST.md`

@@ -2,6 +2,19 @@
 
 Panduan ini menjelaskan cara membuat bearer token dan mengetes endpoint backend Syntrix.
 
+## Akun Operasional
+
+Gunakan akun operasional berikut (jangan gunakan akun default lama):
+
+- `admin.ops@syntrix.local` (role: `admin`)
+- `ops.region@syntrix.local` (role: `user_region`)
+
+Catatan:
+
+- Password tidak ditulis di dokumen ini demi keamanan.
+- Ambil password terbaru dari password manager/tim backend.
+- Akun default `admin@syntrix.local` sudah dinonaktifkan di layer aplikasi Syntrix.
+
 ## 1) Generate Bearer Token
 
 Endpoint login:
@@ -20,8 +33,8 @@ Body login:
 
 ```json
 {
-  "email": "admin@syntrix.local",
-  "password": "AdminKuat123!"
+  "email": "admin.ops@syntrix.local",
+  "password": "<PASSWORD_OPERASIONAL>"
 }
 ```
 
@@ -51,7 +64,7 @@ GET /api/v1/pops?page=1&limit=5
 ```bash
 curl -X POST "https://syntrix-backend.vercel.app/api/v1/auth/login" \
   -H "Content-Type: application/json" \
-  -d "{\"email\":\"admin@syntrix.local\",\"password\":\"AdminKuat123!\"}"
+  -d "{\"email\":\"admin.ops@syntrix.local\",\"password\":\"<PASSWORD_OPERASIONAL>\"}"
 ```
 
 ### 3.2 Test endpoint protected
@@ -68,8 +81,8 @@ curl "https://syntrix-backend.vercel.app/api/v1/pops?page=1&limit=5" \
 ```powershell
 $base = "https://syntrix-backend.vercel.app/api/v1"
 $loginBody = @{
-  email = "admin@syntrix.local"
-  password = "AdminKuat123!"
+  email = "admin.ops@syntrix.local"
+  password = "<PASSWORD_OPERASIONAL>"
 } | ConvertTo-Json
 
 $login = Invoke-RestMethod -Method POST -Uri "$base/auth/login" -ContentType "application/json" -Body $loginBody
