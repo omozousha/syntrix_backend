@@ -14,6 +14,11 @@ const {
 } = require('../../shared/resource.service');
 const { validateDevicePayload } = require('../device/device.validation');
 const { validatePopPayload } = require('../pop/pop.validation');
+const {
+  validateDeviceLinkPayload,
+  validateDevicePortPayload,
+  validatePortConnectionPayload,
+} = require('../device/connectivity.validation');
 
 function validatePayloadByResource(resourceName, payload, mode = 'create') {
   if (resourceName === 'devices') {
@@ -23,6 +28,21 @@ function validatePayloadByResource(resourceName, payload, mode = 'create') {
 
   if (resourceName === 'pops') {
     validatePopPayload(payload, mode);
+    return;
+  }
+
+  if (resourceName === 'deviceLinks') {
+    validateDeviceLinkPayload(payload, mode);
+    return;
+  }
+
+  if (resourceName === 'devicePorts') {
+    validateDevicePortPayload(payload, mode);
+    return;
+  }
+
+  if (resourceName === 'portConnections') {
+    validatePortConnectionPayload(payload, mode);
   }
 }
 

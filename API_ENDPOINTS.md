@@ -244,6 +244,42 @@ Setiap resource di bawah ini saat ini mendukung metode:
   - baca: `admin`, `user_region`, `user_all_region`
   - tulis: `admin`, `user_region`, `user_all_region`
 
+### Device Links
+
+- resource: `deviceLinks`
+- metode tersedia:
+  - `GET`
+  - `POST`
+  - `PATCH`
+  - `DELETE`
+- akses:
+  - baca: `admin`, `user_region`, `user_all_region`
+  - tulis: `admin`, `user_region`, `user_all_region`
+
+### Device Ports
+
+- resource: `devicePorts`
+- metode tersedia:
+  - `GET`
+  - `POST`
+  - `PATCH`
+  - `DELETE`
+- akses:
+  - baca: `admin`, `user_region`, `user_all_region`
+  - tulis: `admin`, `user_region`, `user_all_region`
+
+### Port Connections
+
+- resource: `portConnections`
+- metode tersedia:
+  - `GET`
+  - `POST`
+  - `PATCH`
+  - `DELETE`
+- akses:
+  - baca: `admin`, `user_region`, `user_all_region`
+  - tulis: `admin`, `user_region`, `user_all_region`
+
 ### Core Management
 
 - resource: `coreManagement`
@@ -424,6 +460,17 @@ Catatan implementasi saat ini:
   - auth: bearer token wajib
   - role: `admin`
   - fungsi: melihat konfigurasi internal resource registry backend
+
+### Device Trace
+
+- `GET /api/v1/devices/:id/trace`
+  - auth: bearer token wajib
+  - role: `admin`, `user_region`, `user_all_region`
+  - fungsi:
+    - melihat graph koneksi perangkat dari titik device tertentu
+    - ringkasan upstream/downstream berdasarkan `device_type_key`
+  - query opsional:
+    - `max_depth` (default `6`, minimum `1`, maksimum `12`)
 
 ## Import Endpoint
 

@@ -36,8 +36,16 @@ function validatePopPayload(payload, mode = 'create') {
     payload.pop_code = popCode;
   }
 
+  if (payload.validation_status != null) {
+    payload.validation_status = String(payload.validation_status).trim().toLowerCase();
+  }
+
   if (payload.validation_status != null && !VALIDATION_STATUS_VALUES.includes(payload.validation_status)) {
     throw createHttpError(400, `validation_status must be one of: ${VALIDATION_STATUS_VALUES.join(', ')}`);
+  }
+
+  if (payload.validation_status && payload.validation_status !== 'unvalidated' && !payload.validation_date) {
+    throw createHttpError(400, 'validation_date is required when validation_status is not unvalidated');
   }
 
   ensureValidDate(payload.validation_date, 'validation_date');

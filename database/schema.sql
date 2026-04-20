@@ -52,6 +52,8 @@ create sequence if not exists public.pole_hid_seq start 1;
 create sequence if not exists public.customer_hid_seq start 1;
 create sequence if not exists public.device_hid_seq start 1;
 create sequence if not exists public.route_hid_seq start 1;
+create sequence if not exists public.device_port_hid_seq start 1;
+create sequence if not exists public.port_connection_hid_seq start 1;
 create sequence if not exists public.core_hid_seq start 1;
 create sequence if not exists public.manufacturer_hid_seq start 1;
 create sequence if not exists public.brand_hid_seq start 1;
@@ -585,6 +587,7 @@ for each row execute function public.set_current_timestamp_updated_at();
 create table if not exists public.device_links (
   id uuid primary key default gen_random_uuid(),
   link_id text unique default public.generate_prefixed_code('LNK', 'public.route_hid_seq'),
+  region_id uuid not null references public.regions(id) on update cascade on delete restrict,
   from_device_id uuid not null references public.devices(id) on update cascade on delete cascade,
   to_device_id uuid not null references public.devices(id) on update cascade on delete cascade,
   link_type text not null default 'fiber',
@@ -602,6 +605,62 @@ create table if not exists public.device_links (
 drop trigger if exists trg_device_links_updated_at on public.device_links;
 create trigger trg_device_links_updated_at
 before update on public.device_links
+for each row execute function public.set_current_timestamp_updated_at();
+
+create table if not exists public.device_ports (
+  id uuid primary key default gen_random_uuid(),
+  port_id text unique default public.generate_prefixed_code('PRT', 'public.device_port_hid_seq'),
+  region_id uuid not null references public.regions(id) on update cascade on delete restrict,
+  device_id uuid not null references public.devices(id) on update cascade on delete cascade,
+  port_index integer not null check (port_index > 0),
+  port_label text,
+  port_type text not null default 'ethernet' check (port_type in ('ethernet', 'pon', 'uplink', 'fiber', 'splitter', 'other')),
+  direction text not null default 'bidirectional' check (direction in ('in', 'out', 'bidirectional')),
+  status text not null default 'idle' check (status in ('idle', 'used', 'reserved', 'down', 'maintenance')),
+  speed_profile text,
+  core_capacity integer check (core_capacity is null or core_capacity >= 0),
+  core_used integer check (core_used is null or core_used >= 0),
+  splitter_ratio text,
+  is_active boolean not null default true,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (device_id, port_index),
+  constraint chk_device_ports_core_usage check (core_capacity is null or core_used is null or core_used <= core_capacity)
+);
+
+drop trigger if exists trg_device_ports_updated_at on public.device_ports;
+create trigger trg_device_ports_updated_at
+before update on public.device_ports
+for each row execute function public.set_current_timestamp_updated_at();
+
+create table if not exists public.port_connections (
+  id uuid primary key default gen_random_uuid(),
+  connection_id text unique default public.generate_prefixed_code('PCN', 'public.port_connection_hid_seq'),
+  region_id uuid not null references public.regions(id) on update cascade on delete restrict,
+  from_port_id uuid not null references public.device_ports(id) on update cascade on delete cascade,
+  to_port_id uuid not null references public.device_ports(id) on update cascade on delete cascade,
+  connection_type text not null default 'fiber' check (connection_type in ('fiber', 'patch', 'uplink', 'crossconnect', 'other')),
+  status text not null default 'active' check (status in ('active', 'planned', 'inactive', 'cutover')),
+  route_id uuid references public.network_routes(id) on update cascade on delete set null,
+  cable_device_id uuid references public.devices(id) on update cascade on delete set null,
+  core_start integer,
+  core_end integer,
+  fiber_count integer check (fiber_count is null or fiber_count >= 0),
+  installed_at timestamptz,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint chk_port_connections_not_same_port check (from_port_id <> to_port_id),
+  constraint chk_port_connections_core_range check (
+    (core_start is null and core_end is null)
+    or (core_start is not null and core_end is not null and core_start > 0 and core_end >= core_start)
+  )
+);
+
+drop trigger if exists trg_port_connections_updated_at on public.port_connections;
+create trigger trg_port_connections_updated_at
+before update on public.port_connections
 for each row execute function public.set_current_timestamp_updated_at();
 
 create table if not exists public.core_management (
@@ -825,6 +884,12 @@ create index if not exists idx_devices_project_id on public.devices(project_id);
 create index if not exists idx_devices_customer_id on public.devices(customer_id);
 create index if not exists idx_devices_type_key on public.devices(device_type_key);
 create index if not exists idx_routes_region_id on public.network_routes(region_id);
+create index if not exists idx_device_links_region_id on public.device_links(region_id);
+create index if not exists idx_device_links_from_to on public.device_links(from_device_id, to_device_id);
+create index if not exists idx_device_ports_region_id on public.device_ports(region_id);
+create index if not exists idx_device_ports_device_id on public.device_ports(device_id);
+create index if not exists idx_port_connections_region_id on public.port_connections(region_id);
+create index if not exists idx_port_connections_from_to on public.port_connections(from_port_id, to_port_id);
 create index if not exists idx_core_management_region_id on public.core_management(region_id);
 create index if not exists idx_monitoring_snapshots_device_captured on public.monitoring_snapshots(device_id, captured_at desc);
 create index if not exists idx_validation_records_entity on public.validation_records(entity_type, entity_id);
