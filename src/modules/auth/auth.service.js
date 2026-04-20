@@ -6,14 +6,20 @@ async function loginWithPassword(email, password) {
   return data;
 }
 
-async function signUpUser({ email, password, displayName, metadata = {} }) {
+async function signUpUser({ email, password, displayName, metadata = {}, redirectTo = '' }) {
+  const options = {
+    displayName,
+    metadata,
+  };
+
+  if (redirectTo) {
+    options.redirectTo = redirectTo;
+  }
+
   const { data } = await nhostAuthClient.post('/signup/email-password', {
     email,
     password,
-    options: {
-      displayName,
-      metadata,
-    },
+    options,
   });
 
   return data;
@@ -21,6 +27,31 @@ async function signUpUser({ email, password, displayName, metadata = {} }) {
 
 async function logout(refreshToken) {
   const { data } = await nhostAuthClient.post('/signout', { refreshToken });
+  return data;
+}
+
+async function changePassword(token, newPassword) {
+  const { data } = await nhostAuthClient.post(
+    '/user/password',
+    { newPassword },
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  );
+
+  return data;
+}
+
+async function requestPasswordReset(email, redirectTo = '') {
+  const payload = { email };
+
+  if (redirectTo) {
+    payload.options = { redirectTo };
+  }
+
+  const { data } = await nhostAuthClient.post('/user/password/reset', payload);
   return data;
 }
 
@@ -89,6 +120,7 @@ async function findAuthUserByEmail(email) {
       users(where: { email: { _eq: $email } }, limit: 1) {
         id
         email
+        emailVerified
         displayName
         createdAt
       }
@@ -97,6 +129,22 @@ async function findAuthUserByEmail(email) {
 
   const data = await executeHasura(query, { email });
   return data.users?.[0] || null;
+}
+
+async function activateAppUserByAuthUserId(authUserId) {
+  const mutation = `
+    mutation ActivateAppUserByAuthUserId($authUserId: uuid!) {
+      update_app_users(
+        where: { auth_user_id: { _eq: $authUserId } }
+        _set: { is_active: true }
+      ) {
+        affected_rows
+      }
+    }
+  `;
+
+  const data = await executeHasura(mutation, { authUserId });
+  return data.update_app_users?.affected_rows || 0;
 }
 
 async function insertUserRegionScopes(appUserId, regionIds = []) {
@@ -125,9 +173,12 @@ module.exports = {
   loginWithPassword,
   signUpUser,
   logout,
+  changePassword,
+  requestPasswordReset,
   createAppUser,
   countAppUsers,
   findAppUserByEmail,
   findAuthUserByEmail,
+  activateAppUserByAuthUserId,
   insertUserRegionScopes,
 };

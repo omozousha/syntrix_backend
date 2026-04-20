@@ -41,6 +41,8 @@ resourceRouter.get('/exports/pops.xlsx', authenticate, requireRole('admin', 'use
       pop_name: item.pop_name || '',
       region_id: item.region_id || '',
       status_pop: item.status_pop || '',
+      validation_status: item.validation_status || '',
+      validation_date: item.validation_date || '',
       pop_type: item.pop_type || '',
       longitude: item.longitude ?? '',
       latitude: item.latitude ?? '',

@@ -5,10 +5,13 @@ const {
   loginWithPassword,
   signUpUser,
   logout,
+  changePassword,
+  requestPasswordReset,
   createAppUser,
   countAppUsers,
   findAppUserByEmail,
   findAuthUserByEmail,
+  activateAppUserByAuthUserId,
   insertUserRegionScopes,
 } = require('./auth.service');
 
@@ -48,6 +51,8 @@ async function createSyntrixUser(payload) {
     default_region_id,
     region_ids = [],
     metadata = {},
+    require_email_verification = true,
+    email_redirect_to,
   } = payload;
 
   const existingUser = await findAppUserByEmail(email);
@@ -59,7 +64,13 @@ async function createSyntrixUser(payload) {
   let authUser = await findAuthUserByEmail(email);
 
   if (!authUser) {
-    await signUpUser({ email, password, displayName: full_name, metadata });
+    await signUpUser({
+      email,
+      password,
+      displayName: full_name,
+      metadata,
+      redirectTo: email_redirect_to || env.nhostEmailRedirectTo || '',
+    });
     authUser = await findAuthUserByEmail(email);
   }
 
@@ -75,8 +86,12 @@ async function createSyntrixUser(payload) {
     email,
     role_name,
     default_region_id: default_region_id || null,
-    is_active: true,
-    metadata,
+    is_active: !require_email_verification,
+    metadata: {
+      ...(metadata || {}),
+      pending_email_verification: !!require_email_verification,
+      verification_email_sent_at: new Date().toISOString(),
+    },
   });
 
   const scopes = await insertUserRegionScopes(appUser.id, region_ids);
@@ -97,6 +112,27 @@ async function login(req, res, next) {
     }
 
     const data = await loginWithPassword(email, password);
+    const appUser = await findAppUserByEmail(email);
+
+    if (!appUser) {
+      throw createHttpError(403, 'User is not registered in Syntrix');
+    }
+
+    if (!appUser.is_active) {
+      const pendingVerification = Boolean(appUser.metadata?.pending_email_verification);
+
+      if (!pendingVerification) {
+        throw createHttpError(403, 'User is inactive in Syntrix');
+      }
+
+      const authUser = await findAuthUserByEmail(email);
+      if (!authUser?.emailVerified) {
+        throw createHttpError(403, 'Please verify your email before logging in');
+      }
+
+      await activateAppUserByAuthUserId(authUser.id);
+    }
+
     return sendSuccess(res, data, 'Login successful');
   } catch (error) {
     return next(createHttpError(error.response?.status || 400, error.response?.data?.message || error.message));
@@ -106,8 +142,16 @@ async function login(req, res, next) {
 async function register(req, res, next) {
   try {
     validateRegistrationPayload(req.body);
-    const result = await createSyntrixUser(req.body);
-    return sendSuccess(res, result, 'User registered successfully', 201);
+    const result = await createSyntrixUser({
+      ...req.body,
+      require_email_verification: true,
+    });
+    return sendSuccess(
+      res,
+      result,
+      'User created. Verification email has been sent to the user email address.',
+      201,
+    );
   } catch (error) {
     return next(createHttpError(error.response?.status || error.statusCode || 400, error.response?.data?.message || error.message));
   }
@@ -143,6 +187,7 @@ async function bootstrapAdmin(req, res, next) {
       ...req.body,
       role_name: 'admin',
       region_ids: [],
+      require_email_verification: false,
     });
 
     return sendSuccess(res, result, 'Bootstrap admin created successfully', 201);
@@ -175,4 +220,34 @@ async function signout(req, res, next) {
   }
 }
 
-module.exports = { login, register, bootstrapAdmin, me, signout };
+async function changeCurrentPassword(req, res, next) {
+  try {
+    const { new_password } = req.body;
+
+    if (!new_password || String(new_password).length < 8) {
+      throw createHttpError(400, 'new_password is required and must be at least 8 characters');
+    }
+
+    const data = await changePassword(req.auth.token, new_password);
+    return sendSuccess(res, data, 'Password changed successfully');
+  } catch (error) {
+    return next(createHttpError(error.response?.status || 400, error.response?.data?.message || error.message));
+  }
+}
+
+async function resetPassword(req, res, next) {
+  try {
+    const { email, redirect_to } = req.body;
+
+    if (!email) {
+      throw createHttpError(400, 'email is required');
+    }
+
+    const data = await requestPasswordReset(email, redirect_to || env.nhostEmailRedirectTo || '');
+    return sendSuccess(res, data, 'Password reset email sent successfully');
+  } catch (error) {
+    return next(createHttpError(error.response?.status || 400, error.response?.data?.message || error.message));
+  }
+}
+
+module.exports = { login, register, bootstrapAdmin, me, signout, changeCurrentPassword, resetPassword };

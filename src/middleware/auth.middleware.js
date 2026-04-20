@@ -54,6 +54,36 @@ async function loadAppUser(userId) {
   return appUser;
 }
 
+async function loadAuthUserVerification(userId) {
+  const query = `
+    query LoadAuthUserVerification($userId: uuid!) {
+      users(where: { id: { _eq: $userId } }, limit: 1) {
+        id
+        email
+        emailVerified
+      }
+    }
+  `;
+
+  const data = await executeHasura(query, { userId });
+  return data.users?.[0] || null;
+}
+
+async function activatePendingAppUser(userId) {
+  const mutation = `
+    mutation ActivatePendingAppUser($userId: uuid!) {
+      update_app_users(
+        where: { auth_user_id: { _eq: $userId } }
+        _set: { is_active: true }
+      ) {
+        affected_rows
+      }
+    }
+  `;
+
+  await executeHasura(mutation, { userId });
+}
+
 async function authenticate(req, _res, next) {
   try {
     const authHeader = req.headers.authorization || '';
@@ -83,8 +113,40 @@ async function authenticate(req, _res, next) {
 
     const appUser = await loadAppUser(userId);
 
-    if (!appUser || !appUser.is_active) {
-      throw createHttpError(403, 'User is not registered or inactive in Syntrix');
+    if (!appUser) {
+      throw createHttpError(403, 'User is not registered in Syntrix');
+    }
+
+    if (!appUser.is_active) {
+      const pendingVerification = Boolean(appUser.metadata?.pending_email_verification);
+
+      if (pendingVerification) {
+        const authUser = await loadAuthUserVerification(userId);
+
+        if (!authUser?.emailVerified) {
+          throw createHttpError(403, 'Please verify your email before accessing Syntrix');
+        }
+
+        await activatePendingAppUser(userId);
+        const refreshed = await loadAppUser(userId);
+        if (refreshed) {
+          appUser.id = refreshed.id;
+          appUser.user_code = refreshed.user_code;
+          appUser.auth_user_id = refreshed.auth_user_id;
+          appUser.full_name = refreshed.full_name;
+          appUser.email = refreshed.email;
+          appUser.role_name = refreshed.role_name;
+          appUser.default_region_id = refreshed.default_region_id;
+          appUser.is_active = refreshed.is_active;
+          appUser.metadata = {
+            ...(refreshed.metadata || {}),
+            pending_email_verification: false,
+          };
+          appUser.user_region_scopes = refreshed.user_region_scopes || [];
+        }
+      } else {
+        throw createHttpError(403, 'User is inactive in Syntrix');
+      }
     }
 
     req.auth = {

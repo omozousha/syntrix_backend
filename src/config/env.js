@@ -53,6 +53,7 @@ const env = {
   hasuraAdminSecret: getRequired('HASURA_ADMIN_SECRET'),
   nhostAuthUrl: getRequired('NHOST_AUTH_URL', process.env.NHOST_AUTH_URL),
   nhostStorageUrl: getRequired('NHOST_STORAGE_URL'),
+  nhostEmailRedirectTo: process.env.NHOST_EMAIL_REDIRECT_TO || '',
   defaultStorageBucket: process.env.DEFAULT_STORAGE_BUCKET || 'default',
   maxUploadSizeMb: toNumber(process.env.MAX_UPLOAD_SIZE_MB, 25),
   authRateLimitWindowMs: toNumber(process.env.AUTH_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),

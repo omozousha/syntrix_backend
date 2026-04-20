@@ -177,6 +177,8 @@ function mapRowToEntity(entityType, row, defaults = {}) {
       category_asset: pick('category_asset', 'Category Asset') || null,
       bast_id: pick('bast_id', 'Bast ID') || null,
       status: pick('status', 'Status') || 'draft',
+      validation_status: pick('validation_status', 'Validation Status') || 'unvalidated',
+      validation_date: pick('validation_date', 'Validation Date', 'Tanggal Validasi') || null,
       longitude: pick('longitude', 'Longitude'),
       latitude: pick('latitude', 'Latitude'),
       address: pick('address', 'Address') || null,
@@ -202,6 +204,8 @@ function mapRowToEntity(entityType, row, defaults = {}) {
       province: pick('province', 'Provinsi') || null,
       city: pick('city', 'Kota/Kabupaten') || null,
       status_pop: pick('status_pop', 'status_id', 'Status POP') || 'planning',
+      validation_status: pick('validation_status', 'Validation Status') || 'unvalidated',
+      validation_date: pick('validation_date', 'Validation Date', 'Tanggal Validasi') || null,
       pop_type: pick('pop_type', 'POP Type') || null,
       custom_fields: row,
     };
