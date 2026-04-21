@@ -127,6 +127,24 @@ Catatan:
 }
 ```
 
+### Audit Avatar Orphans (Admin)
+
+- `GET /api/v1/auth/avatar-orphans`
+  - auth: bearer token wajib
+  - role: `admin`
+  - fungsi: audit attachment avatar yang sudah tidak direferensikan user
+  - query opsional:
+    - `limit` (default `100`, max `1000`)
+
+### Cleanup Avatar Orphans (Admin)
+
+- `POST /api/v1/auth/avatar-orphans/cleanup`
+  - auth: bearer token wajib
+  - role: `admin`
+  - fungsi: hapus metadata + file storage untuk avatar orphan
+  - body/query opsional:
+    - `limit` (default `100`, max `1000`)
+
 ## Dashboard Endpoint
 
 Base path:

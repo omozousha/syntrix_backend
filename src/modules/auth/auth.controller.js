@@ -15,6 +15,9 @@ const {
   insertUserRegionScopes,
   loadAttachmentById,
   updateOwnProfileByAuthUserId,
+  cleanupUnusedAvatarAttachment,
+  listOrphanAvatarAttachments,
+  cleanupOrphanAvatarAttachments,
 } = require('./auth.service');
 
 function validateRegistrationPayload(payload, { allowAdmin = true } = {}) {
@@ -211,6 +214,10 @@ async function updateMe(req, res, next) {
   try {
     const { full_name, avatar_attachment_id } = req.body || {};
     const changes = {};
+    const previousAvatarAttachmentId = req.auth.appUser?.metadata?.avatar_attachment_id
+      || req.auth.appUser?.avatar_attachment_id
+      || null;
+    let nextAvatarAttachmentId = previousAvatarAttachmentId;
 
     if (full_name !== undefined) {
       const nextName = String(full_name || '').trim();
@@ -225,6 +232,8 @@ async function updateMe(req, res, next) {
         const nextMetadata = { ...(req.auth.appUser.metadata || {}) };
         delete nextMetadata.avatar_attachment_id;
         changes.metadata = nextMetadata;
+        changes.avatar_attachment_id = null;
+        nextAvatarAttachmentId = null;
       } else {
         const attachment = await loadAttachmentById(avatar_attachment_id);
         if (!attachment) {
@@ -244,6 +253,8 @@ async function updateMe(req, res, next) {
           ...(req.auth.appUser.metadata || {}),
           avatar_attachment_id: attachment.id,
         };
+        changes.avatar_attachment_id = attachment.id;
+        nextAvatarAttachmentId = attachment.id;
       }
     }
 
@@ -254,6 +265,10 @@ async function updateMe(req, res, next) {
     const updated = await updateOwnProfileByAuthUserId(req.auth.userId, changes);
     if (!updated) {
       throw createHttpError(404, 'Profile not found');
+    }
+
+    if (previousAvatarAttachmentId && previousAvatarAttachmentId !== nextAvatarAttachmentId) {
+      cleanupUnusedAvatarAttachment(previousAvatarAttachmentId).catch(() => null);
     }
 
     return sendSuccess(res, updated, 'Profile updated successfully');
@@ -307,4 +322,44 @@ async function resetPassword(req, res, next) {
   }
 }
 
-module.exports = { login, register, bootstrapAdmin, me, updateMe, signout, changeCurrentPassword, resetPassword };
+async function auditAvatarOrphans(req, res, next) {
+  try {
+    const limitRaw = req.query?.limit;
+    const limit = limitRaw !== undefined ? Number(limitRaw) : 100;
+    const orphans = await listOrphanAvatarAttachments(limit);
+    return sendSuccess(
+      res,
+      {
+        total: orphans.length,
+        items: orphans,
+      },
+      'Avatar orphan audit completed',
+    );
+  } catch (error) {
+    return next(createHttpError(error.response?.status || error.statusCode || 400, error.response?.data?.message || error.message));
+  }
+}
+
+async function cleanupAvatarOrphans(req, res, next) {
+  try {
+    const limitRaw = req.body?.limit ?? req.query?.limit;
+    const limit = limitRaw !== undefined ? Number(limitRaw) : 100;
+    const result = await cleanupOrphanAvatarAttachments(limit);
+    return sendSuccess(res, result, 'Avatar orphan cleanup completed');
+  } catch (error) {
+    return next(createHttpError(error.response?.status || error.statusCode || 400, error.response?.data?.message || error.message));
+  }
+}
+
+module.exports = {
+  login,
+  register,
+  bootstrapAdmin,
+  me,
+  updateMe,
+  signout,
+  changeCurrentPassword,
+  resetPassword,
+  auditAvatarOrphans,
+  cleanupAvatarOrphans,
+};

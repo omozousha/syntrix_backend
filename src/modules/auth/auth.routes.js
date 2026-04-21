@@ -12,5 +12,7 @@ authRouter.patch('/me', authenticate, requireRole('admin', 'user_region', 'user_
 authRouter.post('/logout', controller.signout);
 authRouter.post('/change-password', authenticate, requireRole('admin', 'user_region', 'user_all_region'), controller.changeCurrentPassword);
 authRouter.post('/reset-password', controller.resetPassword);
+authRouter.get('/avatar-orphans', authenticate, requireRole('admin'), controller.auditAvatarOrphans);
+authRouter.post('/avatar-orphans/cleanup', authenticate, requireRole('admin'), controller.cleanupAvatarOrphans);
 
 module.exports = { authRouter };

@@ -28,6 +28,7 @@ async function loadAppUser(userId) {
         role_name
         default_region_id
         is_active
+        avatar_attachment_id
         metadata
       }
     }
@@ -138,6 +139,7 @@ async function authenticate(req, _res, next) {
           appUser.role_name = refreshed.role_name;
           appUser.default_region_id = refreshed.default_region_id;
           appUser.is_active = refreshed.is_active;
+          appUser.avatar_attachment_id = refreshed.avatar_attachment_id;
           appUser.metadata = {
             ...(refreshed.metadata || {}),
             pending_email_verification: false,
