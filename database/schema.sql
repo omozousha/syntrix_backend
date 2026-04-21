@@ -778,16 +778,22 @@ create table if not exists public.import_rows (
 create table if not exists public.custom_field_definitions (
   id uuid primary key default gen_random_uuid(),
   entity_type text not null check (entity_type in ('region', 'pop', 'device', 'project', 'customer', 'route', 'pole')),
+  region_id uuid references public.regions(id) on update cascade on delete set null,
+  device_type_key text,
+  pop_type text,
   field_key text not null,
   field_label text not null,
   field_type text not null check (field_type in ('text', 'textarea', 'number', 'boolean', 'date', 'datetime', 'select', 'multiselect', 'json')),
   options jsonb not null default '[]'::jsonb,
   is_required boolean not null default false,
+  layout_span integer not null default 12 check (layout_span in (6, 12)),
+  sort_order integer not null default 0,
+  help_text text,
   default_value jsonb,
   is_active boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (entity_type, field_key)
+  unique (entity_type, region_id, device_type_key, pop_type, field_key)
 );
 
 drop trigger if exists trg_custom_field_definitions_updated_at on public.custom_field_definitions;
@@ -894,6 +900,7 @@ create index if not exists idx_core_management_region_id on public.core_manageme
 create index if not exists idx_monitoring_snapshots_device_captured on public.monitoring_snapshots(device_id, captured_at desc);
 create index if not exists idx_validation_records_entity on public.validation_records(entity_type, entity_id);
 create index if not exists idx_import_rows_job_id on public.import_rows(import_job_id);
+create index if not exists idx_custom_field_definitions_entity_scope on public.custom_field_definitions(entity_type, region_id, device_type_key, pop_type, is_active);
 create index if not exists idx_regions_tags on public.regions using gin(tags);
 create index if not exists idx_pops_tags on public.pops using gin(tags);
 create index if not exists idx_devices_tags on public.devices using gin(tags);
