@@ -809,6 +809,7 @@ create table if not exists public.app_users (
   email text not null unique,
   role_name text not null check (role_name in ('admin', 'user_region', 'user_all_region')),
   default_region_id uuid references public.regions(id) on update cascade on delete set null,
+  avatar_attachment_id uuid references public.attachments(id) on update cascade on delete set null,
   is_active boolean not null default true,
   metadata jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
@@ -901,6 +902,7 @@ create index if not exists idx_monitoring_snapshots_device_captured on public.mo
 create index if not exists idx_validation_records_entity on public.validation_records(entity_type, entity_id);
 create index if not exists idx_import_rows_job_id on public.import_rows(import_job_id);
 create index if not exists idx_custom_field_definitions_entity_scope on public.custom_field_definitions(entity_type, region_id, device_type_key, pop_type, is_active);
+create index if not exists idx_app_users_avatar_attachment_id on public.app_users(avatar_attachment_id);
 create index if not exists idx_regions_tags on public.regions using gin(tags);
 create index if not exists idx_pops_tags on public.pops using gin(tags);
 create index if not exists idx_devices_tags on public.devices using gin(tags);

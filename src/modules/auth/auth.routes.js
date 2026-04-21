@@ -8,6 +8,7 @@ authRouter.post('/login', controller.login);
 authRouter.post('/bootstrap-admin', controller.bootstrapAdmin);
 authRouter.post('/register', authenticate, requireRole('admin'), controller.register);
 authRouter.get('/me', authenticate, controller.me);
+authRouter.patch('/me', authenticate, requireRole('admin', 'user_region', 'user_all_region'), controller.updateMe);
 authRouter.post('/logout', controller.signout);
 authRouter.post('/change-password', authenticate, requireRole('admin', 'user_region', 'user_all_region'), controller.changeCurrentPassword);
 authRouter.post('/reset-password', controller.resetPassword);

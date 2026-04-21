@@ -13,6 +13,8 @@ const {
   findAuthUserByEmail,
   activateAppUserByAuthUserId,
   insertUserRegionScopes,
+  loadAttachmentById,
+  updateOwnProfileByAuthUserId,
 } = require('./auth.service');
 
 function validateRegistrationPayload(payload, { allowAdmin = true } = {}) {
@@ -205,6 +207,56 @@ async function me(req, res) {
   }, 'Current user fetched successfully');
 }
 
+async function updateMe(req, res, next) {
+  try {
+    const { full_name, avatar_attachment_id } = req.body || {};
+    const changes = {};
+
+    if (full_name !== undefined) {
+      const nextName = String(full_name || '').trim();
+      if (!nextName) {
+        throw createHttpError(400, 'full_name cannot be empty');
+      }
+      changes.full_name = nextName;
+    }
+
+    if (avatar_attachment_id !== undefined) {
+      if (avatar_attachment_id === null || avatar_attachment_id === '') {
+        changes.avatar_attachment_id = null;
+      } else {
+        const attachment = await loadAttachmentById(avatar_attachment_id);
+        if (!attachment) {
+          throw createHttpError(404, 'Avatar attachment not found');
+        }
+        if (attachment.file_category !== 'image') {
+          throw createHttpError(400, 'Avatar attachment must be an image');
+        }
+        if (
+          req.auth.role !== 'admin'
+          && attachment.uploaded_by_user_id
+          && attachment.uploaded_by_user_id !== req.auth.appUser.id
+        ) {
+          throw createHttpError(403, 'You can only use your own uploaded image as avatar');
+        }
+        changes.avatar_attachment_id = attachment.id;
+      }
+    }
+
+    if (!Object.keys(changes).length) {
+      throw createHttpError(400, 'No profile field to update');
+    }
+
+    const updated = await updateOwnProfileByAuthUserId(req.auth.userId, changes);
+    if (!updated) {
+      throw createHttpError(404, 'Profile not found');
+    }
+
+    return sendSuccess(res, updated, 'Profile updated successfully');
+  } catch (error) {
+    return next(createHttpError(error.response?.status || error.statusCode || 400, error.response?.data?.message || error.message));
+  }
+}
+
 async function signout(req, res, next) {
   try {
     const { refresh_token } = req.body;
@@ -250,4 +302,4 @@ async function resetPassword(req, res, next) {
   }
 }
 
-module.exports = { login, register, bootstrapAdmin, me, signout, changeCurrentPassword, resetPassword };
+module.exports = { login, register, bootstrapAdmin, me, updateMe, signout, changeCurrentPassword, resetPassword };

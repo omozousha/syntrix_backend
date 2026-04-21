@@ -66,6 +66,7 @@ async function createAppUser(object) {
         email
         role_name
         default_region_id
+        avatar_attachment_id
         is_active
         metadata
         created_at
@@ -103,6 +104,7 @@ async function findAppUserByEmail(email) {
         email
         role_name
         default_region_id
+        avatar_attachment_id
         is_active
         metadata
         created_at
@@ -147,6 +149,56 @@ async function activateAppUserByAuthUserId(authUserId) {
   return data.update_app_users?.affected_rows || 0;
 }
 
+async function loadAttachmentById(id) {
+  const query = `
+    query LoadAttachmentById($id: uuid!) {
+      item: attachments_by_pk(id: $id) {
+        id
+        file_category
+        uploaded_by_user_id
+      }
+    }
+  `;
+
+  const data = await executeHasura(query, { id });
+  return data.item || null;
+}
+
+async function updateOwnProfileByAuthUserId(authUserId, changes) {
+  const mutation = `
+    mutation UpdateOwnProfileByAuthUserId(
+      $authUserId: uuid!,
+      $set: app_users_set_input!
+    ) {
+      item: update_app_users(
+        where: { auth_user_id: { _eq: $authUserId } }
+        _set: $set
+      ) {
+        returning {
+          id
+          user_code
+          auth_user_id
+          full_name
+          email
+          role_name
+          default_region_id
+          avatar_attachment_id
+          is_active
+          metadata
+          updated_at
+        }
+      }
+    }
+  `;
+
+  const data = await executeHasura(mutation, {
+    authUserId,
+    set: changes,
+  });
+
+  return data.item?.returning?.[0] || null;
+}
+
 async function insertUserRegionScopes(appUserId, regionIds = []) {
   if (!regionIds.length) {
     return [];
@@ -181,4 +233,6 @@ module.exports = {
   findAuthUserByEmail,
   activateAppUserByAuthUserId,
   insertUserRegionScopes,
+  loadAttachmentById,
+  updateOwnProfileByAuthUserId,
 };

@@ -216,9 +216,9 @@ const RESOURCE_CONFIG = {
   users: {
     table: 'app_users',
     pk: 'id',
-    listFields: ['id', 'user_code', 'auth_user_id', 'full_name', 'email', 'role_name', 'default_region_id', 'is_active', 'metadata', 'created_at', 'updated_at'],
-    insertFields: ['auth_user_id', 'full_name', 'email', 'role_name', 'default_region_id', 'is_active', 'metadata'],
-    updateFields: ['full_name', 'email', 'role_name', 'default_region_id', 'is_active', 'metadata'],
+    listFields: ['id', 'user_code', 'auth_user_id', 'full_name', 'email', 'role_name', 'default_region_id', 'avatar_attachment_id', 'is_active', 'metadata', 'created_at', 'updated_at'],
+    insertFields: ['auth_user_id', 'full_name', 'email', 'role_name', 'default_region_id', 'avatar_attachment_id', 'is_active', 'metadata'],
+    updateFields: ['full_name', 'email', 'role_name', 'default_region_id', 'avatar_attachment_id', 'is_active', 'metadata'],
     searchColumns: ['user_code', 'full_name', 'email', 'role_name'],
     filterKeys: ['role_name', 'default_region_id', 'is_active'],
     defaultOrderBy: [{ created_at: 'desc' }],
