@@ -66,7 +66,6 @@ async function createAppUser(object) {
         email
         role_name
         default_region_id
-        avatar_attachment_id
         is_active
         metadata
         created_at
@@ -104,7 +103,6 @@ async function findAppUserByEmail(email) {
         email
         role_name
         default_region_id
-        avatar_attachment_id
         is_active
         metadata
         created_at
@@ -182,7 +180,6 @@ async function updateOwnProfileByAuthUserId(authUserId, changes) {
           email
           role_name
           default_region_id
-          avatar_attachment_id
           is_active
           metadata
           updated_at

@@ -222,7 +222,9 @@ async function updateMe(req, res, next) {
 
     if (avatar_attachment_id !== undefined) {
       if (avatar_attachment_id === null || avatar_attachment_id === '') {
-        changes.avatar_attachment_id = null;
+        const nextMetadata = { ...(req.auth.appUser.metadata || {}) };
+        delete nextMetadata.avatar_attachment_id;
+        changes.metadata = nextMetadata;
       } else {
         const attachment = await loadAttachmentById(avatar_attachment_id);
         if (!attachment) {
@@ -238,7 +240,10 @@ async function updateMe(req, res, next) {
         ) {
           throw createHttpError(403, 'You can only use your own uploaded image as avatar');
         }
-        changes.avatar_attachment_id = attachment.id;
+        changes.metadata = {
+          ...(req.auth.appUser.metadata || {}),
+          avatar_attachment_id: attachment.id,
+        };
       }
     }
 
