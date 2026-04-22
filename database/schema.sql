@@ -468,6 +468,7 @@ create table if not exists public.devices (
   total_ports integer check (total_ports is null or total_ports >= 0),
   used_ports integer check (used_ports is null or used_ports >= 0),
   splitter_ratio text,
+  image_attachment_id uuid,
   installation_date date,
   last_seen_at timestamptz,
   validation_status text not null default 'unvalidated' check (validation_status in ('unvalidated', 'valid', 'warning', 'invalid')),
