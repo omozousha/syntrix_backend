@@ -5,6 +5,7 @@ const {
   loginWithPassword,
   signUpUser,
   logout,
+  refreshSession,
   changePassword,
   requestPasswordReset,
   createAppUser,
@@ -292,6 +293,20 @@ async function signout(req, res, next) {
   }
 }
 
+async function refresh(req, res, next) {
+  try {
+    const { refresh_token } = req.body;
+    if (!refresh_token) {
+      throw createHttpError(400, 'refresh_token is required');
+    }
+
+    const data = await refreshSession(refresh_token);
+    return sendSuccess(res, data, 'Session refreshed successfully');
+  } catch (error) {
+    return next(createHttpError(error.response?.status || 400, error.response?.data?.message || error.message));
+  }
+}
+
 async function changeCurrentPassword(req, res, next) {
   try {
     const { new_password } = req.body;
@@ -358,6 +373,7 @@ module.exports = {
   me,
   updateMe,
   signout,
+  refresh,
   changeCurrentPassword,
   resetPassword,
   auditAvatarOrphans,

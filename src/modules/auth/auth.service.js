@@ -31,6 +31,11 @@ async function logout(refreshToken) {
   return data;
 }
 
+async function refreshSession(refreshToken) {
+  const { data } = await nhostAuthClient.post('/token', { refreshToken });
+  return data;
+}
+
 async function changePassword(token, newPassword) {
   const { data } = await nhostAuthClient.post(
     '/user/password',
@@ -394,6 +399,7 @@ module.exports = {
   loginWithPassword,
   signUpUser,
   logout,
+  refreshSession,
   changePassword,
   requestPasswordReset,
   createAppUser,

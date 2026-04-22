@@ -10,6 +10,7 @@ authRouter.post('/register', authenticate, requireRole('admin'), controller.regi
 authRouter.get('/me', authenticate, controller.me);
 authRouter.patch('/me', authenticate, requireRole('admin', 'user_region', 'user_all_region'), controller.updateMe);
 authRouter.post('/logout', controller.signout);
+authRouter.post('/refresh', controller.refresh);
 authRouter.post('/change-password', authenticate, requireRole('admin', 'user_region', 'user_all_region'), controller.changeCurrentPassword);
 authRouter.post('/reset-password', controller.resetPassword);
 authRouter.get('/avatar-orphans', authenticate, requireRole('admin'), controller.auditAvatarOrphans);
