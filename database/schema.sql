@@ -252,6 +252,7 @@ create table if not exists public.pops (
   tenant text,
   tanggal_pop_aktif date,
   image_attachment_id uuid,
+  image_attachments jsonb not null default '[]'::jsonb,
   pln_cid_number text,
   pln_payment_method text,
   pln_phase text,
@@ -259,7 +260,9 @@ create table if not exists public.pops (
   pop_type text,
   custom_fields jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint chk_pops_image_attachments_json check (jsonb_typeof(image_attachments) = 'array'),
+  constraint chk_pops_image_attachments_max_10 check (jsonb_array_length(image_attachments) <= 10)
 );
 
 create or replace function public.set_pop_codes()
@@ -469,6 +472,7 @@ create table if not exists public.devices (
   used_ports integer check (used_ports is null or used_ports >= 0),
   splitter_ratio text,
   image_attachment_id uuid,
+  image_attachments jsonb not null default '[]'::jsonb,
   installation_date date,
   last_seen_at timestamptz,
   validation_status text not null default 'unvalidated' check (validation_status in ('unvalidated', 'valid', 'warning', 'invalid')),
@@ -481,6 +485,8 @@ create table if not exists public.devices (
   custom_fields jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
+  constraint chk_devices_image_attachments_json check (jsonb_typeof(image_attachments) = 'array'),
+  constraint chk_devices_image_attachments_max_10 check (jsonb_array_length(image_attachments) <= 10),
   constraint chk_device_core_usage check (capacity_core is null or used_core is null or used_core <= capacity_core),
   constraint chk_device_port_usage check (total_ports is null or used_ports is null or used_ports <= total_ports)
 );

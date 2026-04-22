@@ -56,6 +56,7 @@ const env = {
   nhostEmailRedirectTo: process.env.NHOST_EMAIL_REDIRECT_TO || '',
   defaultStorageBucket: process.env.DEFAULT_STORAGE_BUCKET || 'default',
   maxUploadSizeMb: toNumber(process.env.MAX_UPLOAD_SIZE_MB, 25),
+  imageUploadMaxSizeMb: toNumber(process.env.IMAGE_UPLOAD_MAX_SIZE_MB, 5),
   authRateLimitWindowMs: toNumber(process.env.AUTH_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
   authRateLimitMax: toNumber(process.env.AUTH_RATE_LIMIT_MAX, 25),
   apiRateLimitWindowMs: toNumber(process.env.API_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),

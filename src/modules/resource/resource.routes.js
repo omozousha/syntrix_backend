@@ -367,6 +367,14 @@ resourceRouter.post('/attachments/upload', authenticate, requireRole('admin', 'u
       throw createHttpError(400, 'file is required');
     }
 
+    const fileCategory = String(req.body.file_category || 'document').toLowerCase();
+    if (fileCategory === 'image') {
+      const maxImageSize = env.imageUploadMaxSizeMb * 1024 * 1024;
+      if (req.file.size > maxImageSize) {
+        throw createHttpError(400, `Image file exceeds ${env.imageUploadMaxSizeMb}MB limit`);
+      }
+    }
+
     const bucketId = req.body.bucket_id || env.defaultStorageBucket;
     const formData = new FormData();
     formData.append('file[]', req.file.buffer, {
