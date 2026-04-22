@@ -194,7 +194,7 @@ const RESOURCE_CONFIG = {
     pk: 'id',
     listFields: ['id', 'attachment_id', 'bucket_id', 'storage_file_id', 'entity_type', 'entity_id', 'file_category', 'original_name', 'stored_name', 'mime_type', 'extension', 'size_bytes', 'is_public', 'metadata', 'uploaded_by_user_id', 'created_at', 'updated_at'],
     insertFields: ['bucket_id', 'storage_file_id', 'entity_type', 'entity_id', 'file_category', 'original_name', 'stored_name', 'mime_type', 'extension', 'size_bytes', 'checksum', 'is_public', 'metadata', 'uploaded_by_user_id'],
-    updateFields: ['entity_type', 'entity_id', 'file_category', 'metadata', 'is_public'],
+    updateFields: ['entity_type', 'entity_id', 'file_category', 'original_name', 'metadata', 'is_public'],
     searchColumns: ['attachment_id', 'original_name', 'stored_name', 'file_category', 'mime_type'],
     filterKeys: ['entity_type', 'entity_id', 'file_category'],
     defaultOrderBy: [{ created_at: 'desc' }],
