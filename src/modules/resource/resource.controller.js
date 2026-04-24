@@ -258,4 +258,48 @@ async function restore(req, res, next) {
   }
 }
 
-module.exports = { list, getById, create, update, remove, restore };
+async function purge(req, res, next) {
+  try {
+    if (req.auth.role !== 'admin') {
+      throw createHttpError(403, 'Only admin can purge data permanently');
+    }
+
+    if (!req.resourceConfig.softDelete) {
+      throw createHttpError(400, `${req.resourceName} does not support purge`);
+    }
+
+    const existing = await getResourceById(req.resourceConfig, req.params.id);
+
+    if (!existing) {
+      throw createHttpError(404, `${req.resourceName} not found`);
+    }
+
+    if (!existing.deleted_at) {
+      throw createHttpError(409, `${req.resourceName} must be archived before purge`);
+    }
+
+    const confirm = String(req.body?.confirm || '').trim().toUpperCase();
+    if (confirm !== 'PURGE') {
+      throw createHttpError(400, 'Purge confirmation failed');
+    }
+
+    await deleteResource(req.resourceConfig, req.params.id);
+
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: `purge:${req.resourceName}`,
+      entityType: req.resourceName,
+      entityId: existing.id,
+      beforeData: existing,
+      afterData: null,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return sendSuccess(res, { id: req.params.id, mode: 'purge' }, `${req.resourceName} purged permanently`);
+  } catch (error) {
+    return next(error);
+  }
+}
+
+module.exports = { list, getById, create, update, remove, restore, purge };

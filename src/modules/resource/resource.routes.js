@@ -274,6 +274,7 @@ function bindResource(resourceName, config) {
     router.delete('/:id', requireRole(...config.auth.write), controller.remove);
     if (config.softDelete) {
       router.post('/:id/restore', requireRole(...config.auth.write), controller.restore);
+      router.post('/:id/purge', requireRole('admin'), controller.purge);
     }
   }
 
