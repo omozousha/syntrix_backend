@@ -33,7 +33,10 @@ function buildWhereClause(config, query, auth) {
 
   if (config.softDelete) {
     const includeDeleted = String(query.include_deleted || '').toLowerCase() === 'true';
-    if (!includeDeleted || auth.role !== 'admin') {
+    const archivedOnly = String(query.archived_only || '').toLowerCase() === 'true';
+    if (archivedOnly && auth.role === 'admin') {
+      andConditions.push({ deleted_at: { _is_null: false } });
+    } else if (!includeDeleted || auth.role !== 'admin') {
       andConditions.push({ deleted_at: { _is_null: true } });
     }
   }
