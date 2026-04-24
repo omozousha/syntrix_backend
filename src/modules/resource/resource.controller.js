@@ -220,4 +220,42 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { list, getById, create, update, remove };
+async function restore(req, res, next) {
+  try {
+    if (!req.resourceConfig.softDelete) {
+      throw createHttpError(400, `${req.resourceName} does not support restore`);
+    }
+
+    const existing = await getResourceById(req.resourceConfig, req.params.id);
+
+    if (!existing) {
+      throw createHttpError(404, `${req.resourceName} not found`);
+    }
+
+    if (!existing.deleted_at) {
+      return sendSuccess(res, existing, `${req.resourceName} is already active`);
+    }
+
+    const item = await updateResource(req.resourceConfig, req.params.id, {
+      deleted_at: null,
+      deleted_by_user_id: null,
+    });
+
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: `restore:${req.resourceName}`,
+      entityType: req.resourceName,
+      entityId: item.id,
+      beforeData: existing,
+      afterData: item,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return sendSuccess(res, item, `${req.resourceName} restored successfully`);
+  } catch (error) {
+    return next(error);
+  }
+}
+
+module.exports = { list, getById, create, update, remove, restore };

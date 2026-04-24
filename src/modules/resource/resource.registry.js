@@ -2,7 +2,7 @@ const RESOURCE_CONFIG = {
   regions: {
     table: 'regions',
     pk: 'id',
-    listFields: ['id', 'region_id', 'region_name', 'region_color', 'description', 'tags', 'custom_fields', 'created_at', 'updated_at'],
+    listFields: ['id', 'region_id', 'region_name', 'region_color', 'description', 'tags', 'custom_fields', 'deleted_at', 'deleted_by_user_id', 'created_at', 'updated_at'],
     insertFields: ['region_name', 'region_color', 'description', 'tags', 'custom_fields'],
     updateFields: ['region_name', 'region_color', 'description', 'tags', 'custom_fields'],
     searchColumns: ['region_name', 'description'],
@@ -134,7 +134,7 @@ const RESOURCE_CONFIG = {
   manufacturers: {
     table: 'manufacturers',
     pk: 'id',
-    listFields: ['id', 'manufacturer_code', 'manufacturer_name', 'description', 'tags', 'created_at', 'updated_at'],
+    listFields: ['id', 'manufacturer_code', 'manufacturer_name', 'description', 'tags', 'deleted_at', 'deleted_by_user_id', 'created_at', 'updated_at'],
     insertFields: ['manufacturer_name', 'description', 'tags'],
     updateFields: ['manufacturer_name', 'description', 'tags'],
     searchColumns: ['manufacturer_name', 'manufacturer_code'],
@@ -146,7 +146,7 @@ const RESOURCE_CONFIG = {
   brands: {
     table: 'brands',
     pk: 'id',
-    listFields: ['id', 'brand_code', 'brand_name', 'manufacturer_id', 'description', 'tags', 'created_at', 'updated_at'],
+    listFields: ['id', 'brand_code', 'brand_name', 'manufacturer_id', 'description', 'tags', 'deleted_at', 'deleted_by_user_id', 'created_at', 'updated_at'],
     insertFields: ['brand_name', 'manufacturer_id', 'description', 'tags'],
     updateFields: ['brand_name', 'manufacturer_id', 'description', 'tags'],
     searchColumns: ['brand_name', 'brand_code'],
@@ -171,7 +171,7 @@ const RESOURCE_CONFIG = {
   assetModels: {
     table: 'asset_models',
     pk: 'id',
-    listFields: ['id', 'model_code', 'model_name', 'asset_type_id', 'brand_id', 'manufacturer_id', 'description', 'specification_template', 'created_at', 'updated_at'],
+    listFields: ['id', 'model_code', 'model_name', 'asset_type_id', 'brand_id', 'manufacturer_id', 'description', 'specification_template', 'deleted_at', 'deleted_by_user_id', 'created_at', 'updated_at'],
     insertFields: ['model_name', 'asset_type_id', 'brand_id', 'manufacturer_id', 'description', 'specification_template'],
     updateFields: ['model_name', 'asset_type_id', 'brand_id', 'manufacturer_id', 'description', 'specification_template'],
     searchColumns: ['model_name', 'model_code', 'description'],
@@ -184,7 +184,7 @@ const RESOURCE_CONFIG = {
   deviceTypes: {
     table: 'device_type_catalog',
     pk: 'id',
-    listFields: ['id', 'device_type_key', 'device_type_name', 'asset_group', 'description', 'sort_order', 'is_active', 'created_at', 'updated_at'],
+    listFields: ['id', 'device_type_key', 'device_type_name', 'asset_group', 'description', 'sort_order', 'is_active', 'deleted_at', 'deleted_by_user_id', 'created_at', 'updated_at'],
     insertFields: ['device_type_key', 'device_type_name', 'asset_group', 'description', 'sort_order', 'is_active'],
     updateFields: ['device_type_key', 'device_type_name', 'asset_group', 'description', 'sort_order', 'is_active'],
     searchColumns: ['device_type_key', 'device_type_name', 'description'],
@@ -197,7 +197,7 @@ const RESOURCE_CONFIG = {
   popTypes: {
     table: 'pop_types',
     pk: 'id',
-    listFields: ['id', 'pop_type_code', 'pop_type_name', 'description', 'sort_order', 'is_active', 'created_at', 'updated_at'],
+    listFields: ['id', 'pop_type_code', 'pop_type_name', 'description', 'sort_order', 'is_active', 'deleted_at', 'deleted_by_user_id', 'created_at', 'updated_at'],
     insertFields: ['pop_type_code', 'pop_type_name', 'description', 'sort_order', 'is_active'],
     updateFields: ['pop_type_code', 'pop_type_name', 'description', 'sort_order', 'is_active'],
     searchColumns: ['pop_type_code', 'pop_type_name', 'description'],
@@ -210,7 +210,7 @@ const RESOURCE_CONFIG = {
   provinces: {
     table: 'provinces',
     pk: 'id',
-    listFields: ['id', 'province_name', 'is_active', 'created_at', 'updated_at'],
+    listFields: ['id', 'province_name', 'is_active', 'deleted_at', 'deleted_by_user_id', 'created_at', 'updated_at'],
     insertFields: ['province_name', 'is_active'],
     updateFields: ['province_name', 'is_active'],
     searchColumns: ['province_name'],
@@ -223,7 +223,7 @@ const RESOURCE_CONFIG = {
   cities: {
     table: 'cities',
     pk: 'id',
-    listFields: ['id', 'city_code', 'city_name', 'province_id', 'is_active', 'created_at', 'updated_at'],
+    listFields: ['id', 'city_code', 'city_name', 'province_id', 'is_active', 'deleted_at', 'deleted_by_user_id', 'created_at', 'updated_at'],
     insertFields: ['city_code', 'city_name', 'province_id', 'is_active'],
     updateFields: ['city_code', 'city_name', 'province_id', 'is_active'],
     searchColumns: ['city_code', 'city_name'],

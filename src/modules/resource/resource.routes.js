@@ -272,6 +272,9 @@ function bindResource(resourceName, config) {
     router.post('/', requireRole(...config.auth.write), controller.create);
     router.patch('/:id', requireRole(...config.auth.write), controller.update);
     router.delete('/:id', requireRole(...config.auth.write), controller.remove);
+    if (config.softDelete) {
+      router.post('/:id/restore', requireRole(...config.auth.write), controller.restore);
+    }
   }
 
   resourceRouter.use(`/${resourceName}`, router);
