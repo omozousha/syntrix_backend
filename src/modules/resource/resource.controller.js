@@ -78,6 +78,13 @@ async function getById(req, res, next) {
       }
     }
 
+    if (req.resourceConfig.softDelete) {
+      const includeDeleted = String(req.query.include_deleted || '').toLowerCase() === 'true';
+      if (item.deleted_at && (!includeDeleted || req.auth.role !== 'admin')) {
+        throw createHttpError(404, `${req.resourceName} not found`);
+      }
+    }
+
     return sendSuccess(res, item, `${req.resourceName} fetched successfully`);
   } catch (error) {
     return next(error);
@@ -184,10 +191,18 @@ async function remove(req, res, next) {
       }
     }
 
-    await deleteResource(req.resourceConfig, req.params.id);
+    if (req.resourceConfig.softDelete) {
+      await updateResource(req.resourceConfig, req.params.id, {
+        deleted_at: new Date().toISOString(),
+        deleted_by_user_id: req.auth.appUser.id,
+      });
+    } else {
+      await deleteResource(req.resourceConfig, req.params.id);
+    }
+
     await createAuditLog({
       actorUserId: req.auth.appUser.id,
-      actionName: `delete:${req.resourceName}`,
+      actionName: `${req.resourceConfig.softDelete ? 'soft_delete' : 'delete'}:${req.resourceName}`,
       entityType: req.resourceName,
       entityId: existing.id,
       beforeData: existing,
@@ -195,7 +210,11 @@ async function remove(req, res, next) {
       ipAddress: req.ip,
       userAgent: req.get('user-agent'),
     });
-    return sendSuccess(res, { id: req.params.id }, `${req.resourceName} deleted successfully`);
+    return sendSuccess(
+      res,
+      { id: req.params.id, mode: req.resourceConfig.softDelete ? 'soft_delete' : 'delete' },
+      `${req.resourceName} ${req.resourceConfig.softDelete ? 'archived' : 'deleted'} successfully`,
+    );
   } catch (error) {
     return next(error);
   }

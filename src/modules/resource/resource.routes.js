@@ -268,9 +268,11 @@ function bindResource(resourceName, config) {
 
   router.get('/', requireRole(...config.auth.read), controller.list);
   router.get('/:id', requireRole(...config.auth.read), controller.getById);
-  router.post('/', requireRole(...config.auth.write), controller.create);
-  router.patch('/:id', requireRole(...config.auth.write), controller.update);
-  router.delete('/:id', requireRole(...config.auth.write), controller.remove);
+  if (!config.readOnly) {
+    router.post('/', requireRole(...config.auth.write), controller.create);
+    router.patch('/:id', requireRole(...config.auth.write), controller.update);
+    router.delete('/:id', requireRole(...config.auth.write), controller.remove);
+  }
 
   resourceRouter.use(`/${resourceName}`, router);
 }

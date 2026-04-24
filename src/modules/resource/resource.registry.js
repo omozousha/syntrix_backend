@@ -9,6 +9,7 @@ const RESOURCE_CONFIG = {
     defaultOrderBy: [{ created_at: 'desc' }],
     auth: { read: ['admin', 'user_region', 'user_all_region'], write: ['admin'] },
     regionScoped: false,
+    softDelete: true,
   },
   pops: {
     table: 'pops',
@@ -140,6 +141,7 @@ const RESOURCE_CONFIG = {
     defaultOrderBy: [{ manufacturer_name: 'asc' }],
     auth: { read: ['admin', 'user_region', 'user_all_region'], write: ['admin'] },
     regionScoped: false,
+    softDelete: true,
   },
   brands: {
     table: 'brands',
@@ -152,6 +154,7 @@ const RESOURCE_CONFIG = {
     defaultOrderBy: [{ brand_name: 'asc' }],
     auth: { read: ['admin', 'user_region', 'user_all_region'], write: ['admin'] },
     regionScoped: false,
+    softDelete: true,
   },
   assetTypes: {
     table: 'asset_types',
@@ -176,6 +179,7 @@ const RESOURCE_CONFIG = {
     defaultOrderBy: [{ model_name: 'asc' }],
     auth: { read: ['admin', 'user_region', 'user_all_region'], write: ['admin'] },
     regionScoped: false,
+    softDelete: true,
   },
   deviceTypes: {
     table: 'device_type_catalog',
@@ -188,6 +192,7 @@ const RESOURCE_CONFIG = {
     defaultOrderBy: [{ sort_order: 'asc' }, { device_type_name: 'asc' }],
     auth: { read: ['admin', 'user_region', 'user_all_region'], write: ['admin'] },
     regionScoped: false,
+    softDelete: true,
   },
   popTypes: {
     table: 'pop_types',
@@ -200,6 +205,7 @@ const RESOURCE_CONFIG = {
     defaultOrderBy: [{ sort_order: 'asc' }, { pop_type_name: 'asc' }],
     auth: { read: ['admin', 'user_region', 'user_all_region'], write: ['admin'] },
     regionScoped: false,
+    softDelete: true,
   },
   provinces: {
     table: 'provinces',
@@ -212,6 +218,7 @@ const RESOURCE_CONFIG = {
     defaultOrderBy: [{ province_name: 'asc' }],
     auth: { read: ['admin', 'user_region', 'user_all_region'], write: ['admin'] },
     regionScoped: false,
+    softDelete: true,
   },
   cities: {
     table: 'cities',
@@ -224,6 +231,20 @@ const RESOURCE_CONFIG = {
     defaultOrderBy: [{ city_name: 'asc' }],
     auth: { read: ['admin', 'user_region', 'user_all_region'], write: ['admin'] },
     regionScoped: false,
+    softDelete: true,
+  },
+  auditLogs: {
+    table: 'audit_logs',
+    pk: 'id',
+    listFields: ['id', 'actor_user_id', 'action_name', 'entity_type', 'entity_id', 'ip_address', 'user_agent', 'before_data', 'after_data', 'created_at'],
+    insertFields: [],
+    updateFields: [],
+    searchColumns: ['action_name', 'entity_type', 'entity_id'],
+    filterKeys: ['action_name', 'entity_type', 'actor_user_id'],
+    defaultOrderBy: [{ created_at: 'desc' }],
+    auth: { read: ['admin'], write: ['admin'] },
+    regionScoped: false,
+    readOnly: true,
   },
   customFields: {
     table: 'custom_field_definitions',

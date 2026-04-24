@@ -31,6 +31,13 @@ function buildWhereClause(config, query, auth) {
     andConditions.push({ id: { _eq: '__forbidden__' } });
   }
 
+  if (config.softDelete) {
+    const includeDeleted = String(query.include_deleted || '').toLowerCase() === 'true';
+    if (!includeDeleted || auth.role !== 'admin') {
+      andConditions.push({ deleted_at: { _is_null: true } });
+    }
+  }
+
   return andConditions.length ? { _and: andConditions } : {};
 }
 
