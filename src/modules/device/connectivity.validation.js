@@ -74,6 +74,14 @@ function validateDevicePortPayload(payload, mode = 'create') {
   if (payload.direction != null && !PORT_DIRECTION.has(payload.direction)) {
     throw createHttpError(400, `direction must be one of: ${Array.from(PORT_DIRECTION).join(', ')}`);
   }
+
+  if (payload.splitter_profile_id != null && payload.splitter_ratio != null && String(payload.splitter_ratio).trim() !== '') {
+    throw createHttpError(400, 'splitter_profile_id and splitter_ratio cannot be used together');
+  }
+
+  if (payload.splitter_role != null && !['input', 'output', 'bidirectional'].includes(String(payload.splitter_role))) {
+    throw createHttpError(400, 'splitter_role must be one of: input, output, bidirectional');
+  }
 }
 
 function validatePortConnectionPayload(payload, mode = 'create') {
@@ -97,6 +105,27 @@ function validatePortConnectionPayload(payload, mode = 'create') {
 
   ensureInteger(payload.fiber_count, 'fiber_count', 0);
   ensureCoreRange(payload.core_start, payload.core_end);
+
+  const hasCoreStart = payload.core_start != null && payload.core_start !== '';
+  const hasCoreEnd = payload.core_end != null && payload.core_end !== '';
+  const hasCoreRange = hasCoreStart && hasCoreEnd;
+  const hasCableDevice = payload.cable_device_id != null && String(payload.cable_device_id).trim() !== '';
+  const hasFiberCount = payload.fiber_count != null && payload.fiber_count !== '';
+
+  if (hasCoreRange && !hasCableDevice) {
+    throw createHttpError(400, 'cable_device_id is required when core_start/core_end are provided');
+  }
+
+  if ((hasCoreRange || hasCableDevice || hasFiberCount) && payload.connection_type && payload.connection_type !== 'fiber') {
+    throw createHttpError(400, 'core-based connection must use connection_type=fiber');
+  }
+
+  if (hasCoreRange && hasFiberCount) {
+    const expectedFiberCount = Number(payload.core_end) - Number(payload.core_start) + 1;
+    if (Number(payload.fiber_count) !== expectedFiberCount) {
+      throw createHttpError(400, 'fiber_count must match (core_end - core_start + 1)');
+    }
+  }
 }
 
 module.exports = {

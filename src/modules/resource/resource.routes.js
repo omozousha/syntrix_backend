@@ -281,11 +281,214 @@ async function loadFiberCoresByConnectionIds(connectionIds) {
         connection_id
         status
         core_no
+        color_name
+        color_hex
       }
     }
   `;
   const data = await executeHasura(query, { ids: connectionIds });
   return data.items || [];
+}
+
+async function loadPortsByDeviceIds(deviceIds) {
+  if (!deviceIds.length) return [];
+  const query = `
+    query LoadPortsByDeviceIds($deviceIds: [uuid!]!) {
+      items: device_ports(
+        where: { device_id: { _in: $deviceIds } }
+        order_by: [{ device_id: asc }, { port_index: asc }]
+      ) {
+        id
+        device_id
+        region_id
+        port_index
+        port_label
+        port_type
+        status
+        core_capacity
+        core_used
+        is_active
+      }
+    }
+  `;
+  const data = await executeHasura(query, { deviceIds });
+  return data.items || [];
+}
+
+async function loadPortsByRegion({ allowedRegionIds = [], requestedRegionId = null }) {
+  const regionFilters = [];
+  if (requestedRegionId) {
+    regionFilters.push({ region_id: { _eq: requestedRegionId } });
+  } else if (allowedRegionIds.length) {
+    regionFilters.push({ region_id: { _in: allowedRegionIds } });
+  }
+  const where = regionFilters.length ? { _and: [...regionFilters] } : {};
+  const query = `
+    query LoadPortsByRegion($where: device_ports_bool_exp!) {
+      items: device_ports(where: $where, order_by: [{ device_id: asc }, { port_index: asc }]) {
+        id
+        device_id
+        region_id
+        port_index
+        port_label
+        port_type
+        status
+        core_capacity
+        core_used
+        is_active
+      }
+    }
+  `;
+  const data = await executeHasura(query, { where });
+  return data.items || [];
+}
+
+async function loadFiberCoresByRegion({ allowedRegionIds = [], requestedRegionId = null }) {
+  const regionFilters = [];
+  if (requestedRegionId) {
+    regionFilters.push({ region_id: { _eq: requestedRegionId } });
+  } else if (allowedRegionIds.length) {
+    regionFilters.push({ region_id: { _in: allowedRegionIds } });
+  }
+  const where = regionFilters.length ? { _and: [...regionFilters] } : {};
+  const query = `
+    query LoadFiberCoresByRegion($where: fiber_cores_bool_exp!) {
+      items: fiber_cores(where: $where) {
+        id
+        region_id
+        cable_device_id
+        core_no
+        status
+        connection_id
+        from_port_id
+        to_port_id
+      }
+    }
+  `;
+  const data = await executeHasura(query, { where });
+  return data.items || [];
+}
+
+async function loadDeviceLinksByRegion({ allowedRegionIds = [], requestedRegionId = null, limit = 2000 }) {
+  const regionFilters = [];
+  if (requestedRegionId) {
+    regionFilters.push({ region_id: { _eq: requestedRegionId } });
+  } else if (allowedRegionIds.length) {
+    regionFilters.push({ region_id: { _in: allowedRegionIds } });
+  }
+  const where = {
+    _and: [
+      {
+        _or: [
+          { status: { _neq: 'inactive' } },
+          { status: { _is_null: true } },
+        ],
+      },
+      ...regionFilters,
+    ],
+  };
+  const query = `
+    query LoadDeviceLinksByRegion($where: device_links_bool_exp!, $limit: Int!) {
+      items: device_links(where: $where, limit: $limit, order_by: [{ created_at: desc }]) {
+        id
+        region_id
+        from_device_id
+        to_device_id
+        link_type
+        route_id
+        cable_device_id
+        core_start
+        core_end
+        fiber_count
+        status
+        notes
+        created_at
+      }
+    }
+  `;
+  const data = await executeHasura(query, { where, limit });
+  return data.items || [];
+}
+
+async function loadDeviceLinkTransitionMapByLinkIds(linkIds) {
+  if (!linkIds.length) return [];
+  const query = `
+    query LoadDeviceLinkTransitionMapByLinkIds($linkIds: [uuid!]!) {
+      items: device_link_transition_map(where: { link_id: { _in: $linkIds } }) {
+        id
+        link_id
+        connection_id
+        migrated_at
+      }
+    }
+  `;
+  const data = await executeHasura(query, { linkIds });
+  return data.items || [];
+}
+
+function pickTransitionPort(portRows, preferredType = 'fiber') {
+  if (!portRows.length) return null;
+  const activeRows = portRows.filter((row) => row.is_active !== false);
+  const rows = activeRows.length ? activeRows : portRows;
+  const preferredRows = rows.filter((row) => row.port_type === preferredType);
+  const base = preferredRows.length ? preferredRows : rows;
+  const idle = base.find((row) => row.status === 'idle');
+  if (idle) return idle;
+  const reserved = base.find((row) => row.status === 'reserved');
+  if (reserved) return reserved;
+  return base[0];
+}
+
+function parseMigratedLinkIdFromNotes(notes) {
+  if (!notes) return null;
+  const match = String(notes).match(/\[migrated_from_device_link:([0-9a-f-]{36})\]/i);
+  return match?.[1] || null;
+}
+
+function normalizeLegacyLinkTypeToConnectionType(linkType) {
+  const value = String(linkType || '').toLowerCase();
+  if (['fiber', 'patch', 'uplink', 'crossconnect', 'other'].includes(value)) return value;
+  if (value === 'ethernet') return 'uplink';
+  return 'other';
+}
+
+function detectCoreOverlapConflicts(connections) {
+  const byCable = new Map();
+  connections.forEach((conn) => {
+    if (!conn.cable_device_id) return;
+    if (conn.core_start == null || conn.core_end == null) return;
+    if (!byCable.has(conn.cable_device_id)) byCable.set(conn.cable_device_id, []);
+    byCable.get(conn.cable_device_id).push(conn);
+  });
+
+  const conflicts = [];
+  byCable.forEach((items, cableDeviceId) => {
+    const sorted = items
+      .slice()
+      .sort((a, b) => Number(a.core_start || 0) - Number(b.core_start || 0));
+    for (let i = 0; i < sorted.length; i += 1) {
+      const current = sorted[i];
+      for (let j = i + 1; j < sorted.length; j += 1) {
+        const next = sorted[j];
+        const currentStart = Number(current.core_start);
+        const currentEnd = Number(current.core_end);
+        const nextStart = Number(next.core_start);
+        const nextEnd = Number(next.core_end);
+        if (nextStart > currentEnd) break;
+        if (Math.max(currentStart, nextStart) <= Math.min(currentEnd, nextEnd)) {
+          conflicts.push({
+            cable_device_id: cableDeviceId,
+            first_connection_id: current.id,
+            second_connection_id: next.id,
+            first_range: `${currentStart}-${currentEnd}`,
+            second_range: `${nextStart}-${nextEnd}`,
+          });
+        }
+      }
+    }
+  });
+
+  return conflicts;
 }
 
 function collectByDirection({ startId, adjacency, nodeMap, maxDepth }) {
@@ -429,46 +632,113 @@ resourceRouter.get('/devices/:id/trace', authenticate, requireRole('admin', 'use
       throw createHttpError(403, 'You do not have access to this device region');
     }
 
-    const maxDepth = Math.min(Math.max(Number(req.query.max_depth) || 6, 1), 12);
+    const requestedRegionId = req.query.region_id ? String(req.query.region_id) : null;
+    const maxDepth = Math.min(Math.max(Number(req.query.max_depth) || 6, 1), 24);
     const allowedRegionIds = req.auth.role === 'user_region' ? req.auth.regions : [];
 
-    const visited = new Set([startDevice.id]);
-    const linksMap = new Map();
-    let frontier = [startDevice.id];
+    const connections = await loadPortConnections({ allowedRegionIds, requestedRegionId });
+    const portIds = Array.from(
+      new Set(
+        connections
+          .flatMap((item) => [item.from_port_id, item.to_port_id])
+          .filter(Boolean),
+      ),
+    );
+    const ports = await loadPortsByIds(portIds);
+    const portMap = new Map(ports.map((port) => [port.id, port]));
 
-    for (let depth = 0; depth < maxDepth; depth += 1) {
-      if (!frontier.length) break;
-      const links = await loadLinksByDeviceIds(frontier, allowedRegionIds);
-      const nextFrontier = [];
-
-      for (const link of links) {
-        linksMap.set(link.id, link);
-
-        if (link.from_device_id && !visited.has(link.from_device_id)) {
-          visited.add(link.from_device_id);
-          nextFrontier.push(link.from_device_id);
-        }
-        if (link.to_device_id && !visited.has(link.to_device_id)) {
-          visited.add(link.to_device_id);
-          nextFrontier.push(link.to_device_id);
-        }
-      }
-
-      frontier = nextFrontier;
-    }
-
-    const nodes = await loadDevicesByIds(Array.from(visited));
-    const nodeMap = new Map(nodes.map((node) => [node.id, node]));
-    const links = Array.from(linksMap.values());
-
+    const graphEdges = [];
+    const adjacency = new Map();
     const incomingAdj = new Map();
     const outgoingAdj = new Map();
-    links.forEach((link) => {
-      if (!incomingAdj.has(link.to_device_id)) incomingAdj.set(link.to_device_id, []);
-      if (!outgoingAdj.has(link.from_device_id)) outgoingAdj.set(link.from_device_id, []);
-      incomingAdj.get(link.to_device_id).push(link.from_device_id);
-      outgoingAdj.get(link.from_device_id).push(link.to_device_id);
-    });
+
+    for (const connection of connections) {
+      const fromPort = portMap.get(connection.from_port_id);
+      const toPort = portMap.get(connection.to_port_id);
+      if (!fromPort || !toPort) continue;
+
+      const fromDeviceId = fromPort.device_id;
+      const toDeviceId = toPort.device_id;
+      if (!fromDeviceId || !toDeviceId) continue;
+
+      const edge = {
+        id: connection.id,
+        connection_id: connection.connection_id,
+        region_id: connection.region_id,
+        from_device_id: fromDeviceId,
+        to_device_id: toDeviceId,
+        from_port_id: fromPort.id,
+        to_port_id: toPort.id,
+        from_port_label: fromPort.port_label,
+        to_port_label: toPort.port_label,
+        connection_type: connection.connection_type,
+        status: connection.status,
+        route_id: connection.route_id,
+        cable_device_id: connection.cable_device_id,
+        core_start: connection.core_start,
+        core_end: connection.core_end,
+        fiber_count: connection.fiber_count,
+      };
+      graphEdges.push(edge);
+
+      if (!adjacency.has(fromDeviceId)) adjacency.set(fromDeviceId, []);
+      if (!adjacency.has(toDeviceId)) adjacency.set(toDeviceId, []);
+      adjacency.get(fromDeviceId).push({ next: toDeviceId, edgeId: edge.id });
+      adjacency.get(toDeviceId).push({ next: fromDeviceId, edgeId: edge.id });
+
+      if (!incomingAdj.has(toDeviceId)) incomingAdj.set(toDeviceId, []);
+      if (!outgoingAdj.has(fromDeviceId)) outgoingAdj.set(fromDeviceId, []);
+      incomingAdj.get(toDeviceId).push(fromDeviceId);
+      outgoingAdj.get(fromDeviceId).push(toDeviceId);
+    }
+
+    const visited = new Set([startDevice.id]);
+    const queue = [{ id: startDevice.id, depth: 0 }];
+    const relevantEdgeIds = new Set();
+
+    while (queue.length) {
+      const current = queue.shift();
+      if (current.depth >= maxDepth) continue;
+      const neighbors = adjacency.get(current.id) || [];
+
+      for (const neighbor of neighbors) {
+        relevantEdgeIds.add(neighbor.edgeId);
+        if (visited.has(neighbor.next)) continue;
+        visited.add(neighbor.next);
+        queue.push({ id: neighbor.next, depth: current.depth + 1 });
+      }
+    }
+
+    const filteredEdges = graphEdges.filter((edge) => relevantEdgeIds.has(edge.id));
+    const deviceIds = Array.from(
+      new Set(filteredEdges.flatMap((edge) => [edge.from_device_id, edge.to_device_id]).filter(Boolean)),
+    );
+    if (!deviceIds.includes(startDevice.id)) {
+      deviceIds.push(startDevice.id);
+    }
+    const nodes = await loadDevicesByIds(deviceIds);
+    const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+
+    const fiberCores = await loadFiberCoresByConnectionIds(filteredEdges.map((edge) => edge.id));
+    const fiberByConnection = fiberCores.reduce((acc, item) => {
+      const key = item.connection_id;
+      if (!key) return acc;
+      if (!acc[key]) {
+        acc[key] = { total: 0, used: 0, statuses: {}, colors: {} };
+      }
+      acc[key].total += 1;
+      if (item.status === 'used') acc[key].used += 1;
+      acc[key].statuses[item.status] = (acc[key].statuses[item.status] || 0) + 1;
+      if (item.color_name) {
+        acc[key].colors[item.color_name] = (acc[key].colors[item.color_name] || 0) + 1;
+      }
+      return acc;
+    }, {});
+
+    const edges = filteredEdges.map((edge) => ({
+      ...edge,
+      fiber_cores: fiberByConnection[edge.id] || { total: 0, used: 0, statuses: {}, colors: {} },
+    }));
 
     const upstreamByType = collectByDirection({
       startId: startDevice.id,
@@ -483,20 +753,25 @@ resourceRouter.get('/devices/:id/trace', authenticate, requireRole('admin', 'use
       maxDepth,
     });
 
-    return sendSuccess(res, {
-      start_device: startDevice,
-      graph: {
-        nodes,
-        links,
+    return sendSuccess(
+      res,
+      {
+        start_device: startDevice,
+        trace_source: 'port_connections',
+        graph: {
+          nodes,
+          links: edges,
+        },
+        summary: {
+          max_depth: maxDepth,
+          node_count: nodes.length,
+          link_count: edges.length,
+          upstream_by_type: upstreamByType,
+          downstream_by_type: downstreamByType,
+        },
       },
-      summary: {
-        max_depth: maxDepth,
-        node_count: nodes.length,
-        link_count: links.length,
-        upstream_by_type: upstreamByType,
-        downstream_by_type: downstreamByType,
-      },
-    }, 'Device trace fetched successfully');
+      'Device trace fetched successfully',
+    );
   } catch (error) {
     return next(error);
   }
@@ -720,6 +995,267 @@ resourceRouter.get('/topology/quality', authenticate, requireRole('admin', 'user
   }
 });
 
+resourceRouter.get('/topology/integrity', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const requestedRegionId = req.query.region_id ? String(req.query.region_id) : null;
+    if (req.auth.role === 'user_region') {
+      if (!req.auth.regions.length) {
+        throw createHttpError(403, 'This regional user does not have any assigned region');
+      }
+      if (requestedRegionId && !req.auth.regions.includes(requestedRegionId)) {
+        throw createHttpError(403, 'You do not have access to this region');
+      }
+    }
+
+    const allowedRegionIds = req.auth.role === 'user_region' ? req.auth.regions : [];
+    const [connections, ports, fiberCores, deviceLinks] = await Promise.all([
+      loadPortConnections({ allowedRegionIds, requestedRegionId }),
+      loadPortsByRegion({ allowedRegionIds, requestedRegionId }),
+      loadFiberCoresByRegion({ allowedRegionIds, requestedRegionId }),
+      loadDeviceLinksByRegion({ allowedRegionIds, requestedRegionId, limit: 5000 }),
+    ]);
+
+    const portIdSet = new Set(ports.map((item) => item.id));
+    const connectionIdSet = new Set(connections.map((item) => item.id));
+
+    const orphanConnections = connections.filter((conn) => !portIdSet.has(conn.from_port_id) || !portIdSet.has(conn.to_port_id));
+    const sameDeviceConnections = connections.filter((conn) => {
+      const fromPort = ports.find((port) => port.id === conn.from_port_id);
+      const toPort = ports.find((port) => port.id === conn.to_port_id);
+      return fromPort && toPort && fromPort.device_id === toPort.device_id;
+    });
+    const overlapConflicts = detectCoreOverlapConflicts(connections);
+    const orphanFiberCores = fiberCores.filter((core) => core.connection_id && !connectionIdSet.has(core.connection_id));
+    const overCapacityPorts = ports.filter((port) => {
+      const capacity = Number(port.core_capacity);
+      const used = Number(port.core_used);
+      if (!Number.isFinite(capacity) || capacity < 0) return false;
+      if (!Number.isFinite(used) || used < 0) return false;
+      return used > capacity;
+    });
+
+    const transitioned = await loadDeviceLinkTransitionMapByLinkIds(deviceLinks.map((item) => item.id));
+    const transitionedLinkIdSet = new Set(transitioned.map((item) => item.link_id));
+    const pendingLegacyLinks = deviceLinks.filter((item) => !transitionedLinkIdSet.has(item.id));
+
+    return sendSuccess(
+      res,
+      {
+        scope: {
+          role: req.auth.role,
+          requested_region_id: requestedRegionId,
+          effective_regions: allowedRegionIds.length ? allowedRegionIds : null,
+        },
+        metrics: {
+          overlap_core_conflicts: overlapConflicts.length,
+          orphan_port_connections: orphanConnections.length,
+          same_device_connections: sameDeviceConnections.length,
+          orphan_fiber_cores: orphanFiberCores.length,
+          over_capacity_ports: overCapacityPorts.length,
+          pending_legacy_device_links: pendingLegacyLinks.length,
+        },
+        samples: {
+          overlap_core_conflicts: overlapConflicts.slice(0, 25),
+          orphan_port_connections: orphanConnections.slice(0, 25).map((item) => ({
+            id: item.id,
+            from_port_id: item.from_port_id,
+            to_port_id: item.to_port_id,
+            cable_device_id: item.cable_device_id,
+            core_start: item.core_start,
+            core_end: item.core_end,
+          })),
+          orphan_fiber_cores: orphanFiberCores.slice(0, 25).map((item) => ({
+            id: item.id,
+            cable_device_id: item.cable_device_id,
+            core_no: item.core_no,
+            connection_id: item.connection_id,
+          })),
+          pending_legacy_device_links: pendingLegacyLinks.slice(0, 25).map((item) => ({
+            id: item.id,
+            from_device_id: item.from_device_id,
+            to_device_id: item.to_device_id,
+            link_type: item.link_type,
+            cable_device_id: item.cable_device_id,
+            core_start: item.core_start,
+            core_end: item.core_end,
+          })),
+        },
+      },
+      'Topology integrity report fetched successfully',
+    );
+  } catch (error) {
+    return next(error);
+  }
+});
+
+resourceRouter.post('/topology/transition/device-links', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const requestedRegionId = req.body?.region_id ? String(req.body.region_id) : null;
+    const apply = String(req.body?.apply || '').toLowerCase() === 'true';
+    const limit = Math.min(Math.max(Number(req.body?.limit) || 200, 1), 1000);
+
+    if (req.auth.role === 'user_region') {
+      if (!req.auth.regions.length) {
+        throw createHttpError(403, 'This regional user does not have any assigned region');
+      }
+      if (requestedRegionId && !req.auth.regions.includes(requestedRegionId)) {
+        throw createHttpError(403, 'You do not have access to this region');
+      }
+    }
+
+    const allowedRegionIds = req.auth.role === 'user_region' ? req.auth.regions : [];
+    const links = await loadDeviceLinksByRegion({ allowedRegionIds, requestedRegionId, limit });
+    if (!links.length) {
+      return sendSuccess(res, { apply, processed: 0, migrated: 0, skipped: 0, items: [] }, 'No legacy device links to process');
+    }
+
+    const existingMap = await loadDeviceLinkTransitionMapByLinkIds(links.map((item) => item.id));
+    const migratedLinkIds = new Set(existingMap.map((item) => item.link_id));
+    const targetLinks = links.filter((item) => !migratedLinkIds.has(item.id));
+    const deviceIds = Array.from(new Set(targetLinks.flatMap((item) => [item.from_device_id, item.to_device_id]).filter(Boolean)));
+    const allPorts = await loadPortsByDeviceIds(deviceIds);
+    const portsByDevice = allPorts.reduce((acc, row) => {
+      if (!acc[row.device_id]) acc[row.device_id] = [];
+      acc[row.device_id].push(row);
+      return acc;
+    }, {});
+
+    const candidates = targetLinks.map((link) => {
+      const fromPorts = portsByDevice[link.from_device_id] || [];
+      const toPorts = portsByDevice[link.to_device_id] || [];
+      const fromPort = pickTransitionPort(fromPorts, link.link_type === 'fiber' ? 'fiber' : 'ethernet');
+      const toPort = pickTransitionPort(toPorts, link.link_type === 'fiber' ? 'fiber' : 'ethernet');
+
+      if (!fromPort || !toPort) {
+        return {
+          link_id: link.id,
+          status: 'skipped',
+          reason: 'missing_port_inventory',
+        };
+      }
+
+      return {
+        link_id: link.id,
+        status: 'ready',
+        payload: {
+          region_id: link.region_id,
+          from_port_id: fromPort.id,
+          to_port_id: toPort.id,
+          connection_type: normalizeLegacyLinkTypeToConnectionType(link.link_type),
+          status: link.status || 'planned',
+          route_id: link.route_id || null,
+          cable_device_id: link.cable_device_id || null,
+          core_start: link.core_start ?? null,
+          core_end: link.core_end ?? null,
+          fiber_count: link.fiber_count ?? null,
+          notes: `${link.notes || ''} [migrated_from_device_link:${link.id}]`.trim(),
+        },
+      };
+    });
+
+    if (!apply) {
+      const ready = candidates.filter((item) => item.status === 'ready').length;
+      return sendSuccess(
+        res,
+        {
+          apply,
+          processed: candidates.length,
+          ready,
+          skipped: candidates.length - ready,
+          items: candidates,
+        },
+        'Legacy device link transition dry-run completed',
+      );
+    }
+
+    const readyCandidates = candidates.filter((item) => item.status === 'ready');
+    if (!readyCandidates.length) {
+      return sendSuccess(
+        res,
+        {
+          apply,
+          processed: candidates.length,
+          migrated: 0,
+          skipped: candidates.length,
+          items: candidates,
+        },
+        'No eligible links were migrated',
+      );
+    }
+
+    const insertConnectionsMutation = `
+      mutation InsertPortConnections($objects: [port_connections_insert_input!]!) {
+        inserted: insert_port_connections(objects: $objects) {
+          returning {
+            id
+            notes
+          }
+        }
+      }
+    `;
+    const insertedConnections = await executeHasura(insertConnectionsMutation, {
+      objects: readyCandidates.map((item) => item.payload),
+    });
+    const rows = insertedConnections.inserted?.returning || [];
+
+    const mappingObjects = rows
+      .map((row) => ({
+        link_id: parseMigratedLinkIdFromNotes(row.notes),
+        connection_id: row.id,
+      }))
+      .filter((item) => item.link_id && item.connection_id)
+      .map((item) => ({
+        link_id: item.link_id,
+        connection_id: item.connection_id,
+        migration_mode: 'auto',
+        migration_notes: 'Auto migrated from legacy device_links',
+        migrated_by_user_id: req.auth.appUser.id,
+      }));
+
+    if (mappingObjects.length) {
+      const mappingMutation = `
+        mutation InsertTransitionMap($objects: [device_link_transition_map_insert_input!]!) {
+          inserted: insert_device_link_transition_map(
+            objects: $objects
+            on_conflict: {
+              constraint: device_link_transition_map_link_id_key
+              update_columns: [connection_id, migration_mode, migration_notes, migrated_by_user_id, migrated_at, updated_at]
+            }
+          ) {
+            affected_rows
+          }
+        }
+      `;
+      await executeHasura(mappingMutation, { objects: mappingObjects });
+    }
+
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'transition:device_links_to_port_connections',
+      entityType: 'topology',
+      entityId: requestedRegionId || null,
+      beforeData: { candidate_count: candidates.length },
+      afterData: { migrated_count: mappingObjects.length },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return sendSuccess(
+      res,
+      {
+        apply,
+        processed: candidates.length,
+        migrated: mappingObjects.length,
+        skipped: candidates.length - readyCandidates.length,
+        items: candidates,
+      },
+      'Legacy device links migrated to port connections',
+    );
+  } catch (error) {
+    return next(error);
+  }
+});
+
 resourceRouter.get('/topology/trace', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
   try {
     const startDeviceId = String(req.query.start_device_id || req.query.from_device_id || '').trim();
@@ -853,17 +1389,20 @@ resourceRouter.get('/topology/trace', authenticate, requireRole('admin', 'user_r
       const key = item.connection_id;
       if (!key) return acc;
       if (!acc[key]) {
-        acc[key] = { total: 0, used: 0, statuses: {} };
+        acc[key] = { total: 0, used: 0, statuses: {}, colors: {} };
       }
       acc[key].total += 1;
       if (item.status === 'used') acc[key].used += 1;
       acc[key].statuses[item.status] = (acc[key].statuses[item.status] || 0) + 1;
+      if (item.color_name) {
+        acc[key].colors[item.color_name] = (acc[key].colors[item.color_name] || 0) + 1;
+      }
       return acc;
     }, {});
 
     const edges = filteredEdges.map((edge) => ({
       ...edge,
-      fiber_cores: fiberByConnection[edge.id] || { total: 0, used: 0, statuses: {} },
+      fiber_cores: fiberByConnection[edge.id] || { total: 0, used: 0, statuses: {}, colors: {} },
     }));
 
     const nodes = Array.from(
