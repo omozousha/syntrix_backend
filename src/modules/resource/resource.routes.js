@@ -11,6 +11,7 @@ const { nhostStorageClient } = require('../../config/nhost');
 const { executeHasura } = require('../../config/hasura');
 const { sendSuccess } = require('../../utils/response');
 const { buildWhereClause, listResources } = require('../../shared/resource.service');
+const { createAuditLog } = require('../../shared/audit.service');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -38,6 +39,56 @@ async function loadDeviceById(deviceId) {
 
   const data = await executeHasura(query, { id: deviceId });
   return data.item;
+}
+
+async function loadDevicePortTemplate(deviceTypeKey, profileName = 'default') {
+  const query = `
+    query LoadDevicePortTemplate($deviceTypeKey: String!, $profileName: String!) {
+      items: device_port_templates(
+        where: {
+          device_type_key: { _eq: $deviceTypeKey }
+          profile_name: { _eq: $profileName }
+          is_active: { _eq: true }
+        }
+        limit: 1
+      ) {
+        id
+        template_id
+        device_type_key
+        profile_name
+        total_ports
+        start_port_index
+        default_port_type
+        default_direction
+        default_speed_profile
+        default_core_capacity
+      }
+    }
+  `;
+  const data = await executeHasura(query, { deviceTypeKey, profileName });
+  return data.items?.[0] || null;
+}
+
+async function loadDevicePortsByDeviceId(deviceId) {
+  const query = `
+    query LoadDevicePortsByDeviceId($deviceId: uuid!) {
+      items: device_ports(
+        where: { device_id: { _eq: $deviceId } }
+        order_by: [{ port_index: asc }]
+      ) {
+        id
+        port_id
+        port_index
+        port_label
+        port_type
+        direction
+        status
+        core_capacity
+      }
+    }
+  `;
+  const data = await executeHasura(query, { deviceId });
+  return data.items || [];
 }
 
 async function loadDevicesByIds(ids) {
@@ -362,6 +413,224 @@ resourceRouter.get('/devices/:id/trace', authenticate, requireRole('admin', 'use
         downstream_by_type: downstreamByType,
       },
     }, 'Device trace fetched successfully');
+  } catch (error) {
+    return next(error);
+  }
+});
+
+resourceRouter.post('/devices/:id/provision-ports', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const device = await loadDeviceById(req.params.id);
+    if (!device) throw createHttpError(404, 'Device not found');
+
+    if (req.auth.role === 'user_region' && !req.auth.regions.includes(device.region_id)) {
+      throw createHttpError(403, 'You do not have access to this device region');
+    }
+
+    const profileName = String(req.body?.profile_name || 'default').trim() || 'default';
+    const dryRun = String(req.body?.dry_run || '').toLowerCase() === 'true';
+
+    const template = await loadDevicePortTemplate(device.device_type_key, profileName);
+    if (!template) {
+      throw createHttpError(404, `No active port template found for ${device.device_type_key} (${profileName})`);
+    }
+
+    const existingPorts = await loadDevicePortsByDeviceId(device.id);
+    const existingIndexes = new Set(existingPorts.map((item) => Number(item.port_index)));
+
+    const totalPorts = Number(template.total_ports) || 0;
+    const startPortIndex = Number(template.start_port_index) || 1;
+
+    const missingIndexes = [];
+    for (let i = 0; i < totalPorts; i += 1) {
+      const portIndex = startPortIndex + i;
+      if (!existingIndexes.has(portIndex)) {
+        missingIndexes.push(portIndex);
+      }
+    }
+
+    if (dryRun) {
+      return sendSuccess(
+        res,
+        {
+          device_id: device.id,
+          template_id: template.id,
+          profile_name: template.profile_name,
+          existing_port_count: existingPorts.length,
+          missing_port_indexes: missingIndexes,
+          create_count: missingIndexes.length,
+        },
+        'Port provisioning dry-run completed',
+      );
+    }
+
+    if (!missingIndexes.length) {
+      return sendSuccess(
+        res,
+        {
+          device_id: device.id,
+          template_id: template.id,
+          profile_name: template.profile_name,
+          existing_port_count: existingPorts.length,
+          created_count: 0,
+        },
+        'All ports already provisioned',
+      );
+    }
+
+    const objects = missingIndexes.map((portIndex) => ({
+      region_id: device.region_id,
+      device_id: device.id,
+      port_index: portIndex,
+      port_label: `${device.device_type_key || 'PORT'}-${String(portIndex).padStart(2, '0')}`,
+      port_type: template.default_port_type || 'fiber',
+      direction: template.default_direction || 'bidirectional',
+      status: 'idle',
+      speed_profile: template.default_speed_profile || null,
+      core_capacity: template.default_core_capacity ?? null,
+      core_used: 0,
+      is_active: true,
+    }));
+
+    const mutation = `
+      mutation ProvisionPorts($objects: [device_ports_insert_input!]!) {
+        inserted: insert_device_ports(objects: $objects) {
+          affected_rows
+          returning {
+            id
+            port_id
+            port_index
+            port_label
+            port_type
+            direction
+            status
+          }
+        }
+      }
+    `;
+    const result = await executeHasura(mutation, { objects });
+    const createdRows = result.inserted?.returning || [];
+
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'provision_ports:devices',
+      entityType: 'devices',
+      entityId: device.id,
+      beforeData: { existing_port_count: existingPorts.length },
+      afterData: {
+        profile_name: template.profile_name,
+        created_count: createdRows.length,
+        created_port_indexes: createdRows.map((row) => row.port_index),
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return sendSuccess(
+      res,
+      {
+        device_id: device.id,
+        template_id: template.id,
+        profile_name: template.profile_name,
+        existing_port_count: existingPorts.length,
+        created_count: createdRows.length,
+        created_ports: createdRows,
+      },
+      'Ports provisioned successfully',
+    );
+  } catch (error) {
+    return next(error);
+  }
+});
+
+resourceRouter.get('/topology/quality', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const requestedRegionId = req.query.region_id ? String(req.query.region_id) : null;
+    let regionWhere = {};
+
+    if (req.auth.role === 'user_region') {
+      if (!req.auth.regions.length) {
+        throw createHttpError(403, 'This regional user does not have any assigned region');
+      }
+
+      if (requestedRegionId && !req.auth.regions.includes(requestedRegionId)) {
+        throw createHttpError(403, 'You do not have access to this region');
+      }
+
+      regionWhere = requestedRegionId
+        ? { region_id: { _eq: requestedRegionId } }
+        : { region_id: { _in: req.auth.regions } };
+    } else if (requestedRegionId) {
+      regionWhere = { region_id: { _eq: requestedRegionId } };
+    }
+
+    const query = `
+      query TopologyQuality(
+        $portWhere: device_ports_bool_exp!
+        $idlePortWhere: device_ports_bool_exp!
+        $connectionWhere: port_connections_bool_exp!
+        $fiberWhere: fiber_cores_bool_exp!
+        $usedFiberWhere: fiber_cores_bool_exp!
+        $orphanFiberWhere: fiber_cores_bool_exp!
+        $inconsistentFiberWhere: fiber_cores_bool_exp!
+      ) {
+        ports: device_ports_aggregate(where: $portWhere) { aggregate { count } }
+        idle_ports: device_ports_aggregate(where: $idlePortWhere) { aggregate { count } }
+        connections: port_connections_aggregate(where: $connectionWhere) { aggregate { count } }
+        fibers: fiber_cores_aggregate(where: $fiberWhere) { aggregate { count } }
+        used_fibers: fiber_cores_aggregate(where: $usedFiberWhere) { aggregate { count } }
+        orphan_fibers: fiber_cores_aggregate(where: $orphanFiberWhere) { aggregate { count } }
+        inconsistent_fibers: fiber_cores_aggregate(where: $inconsistentFiberWhere) { aggregate { count } }
+      }
+    `;
+
+    const andWhere = Object.keys(regionWhere).length ? [regionWhere] : [];
+    const data = await executeHasura(query, {
+      portWhere: andWhere.length ? { _and: andWhere } : {},
+      idlePortWhere: { _and: [...andWhere, { status: { _eq: 'idle' } }] },
+      connectionWhere: andWhere.length ? { _and: andWhere } : {},
+      fiberWhere: andWhere.length ? { _and: andWhere } : {},
+      usedFiberWhere: { _and: [...andWhere, { status: { _eq: 'used' } }] },
+      orphanFiberWhere: {
+        _and: [
+          ...andWhere,
+          { from_port_id: { _is_null: true } },
+          { to_port_id: { _is_null: true } },
+          { connection_id: { _is_null: true } },
+        ],
+      },
+      inconsistentFiberWhere: {
+        _and: [
+          ...andWhere,
+          { connection_id: { _is_null: false } },
+          {
+            _or: [
+              { from_port_id: { _is_null: true } },
+              { to_port_id: { _is_null: true } },
+            ],
+          },
+        ],
+      },
+    });
+
+    const payload = {
+      scope: {
+        role: req.auth.role,
+        requested_region_id: requestedRegionId,
+        effective_region_filter: regionWhere,
+      },
+      metrics: {
+        total_ports: data.ports?.aggregate?.count || 0,
+        idle_ports: data.idle_ports?.aggregate?.count || 0,
+        total_connections: data.connections?.aggregate?.count || 0,
+        total_fiber_cores: data.fibers?.aggregate?.count || 0,
+        used_fiber_cores: data.used_fibers?.aggregate?.count || 0,
+        orphan_fiber_cores: data.orphan_fibers?.aggregate?.count || 0,
+        inconsistent_fiber_cores: data.inconsistent_fibers?.aggregate?.count || 0,
+      },
+    };
+
+    return sendSuccess(res, payload, 'Topology quality fetched successfully');
   } catch (error) {
     return next(error);
   }
