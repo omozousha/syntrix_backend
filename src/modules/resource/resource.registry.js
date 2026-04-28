@@ -437,7 +437,7 @@ const RESOURCE_CONFIG = {
     insertFields: ['entity_type', 'entity_id', 'validation_type', 'status', 'validated_at', 'validator_user_id', 'findings', 'payload', 'evidence_attachment_id', 'tags'],
     updateFields: ['entity_type', 'entity_id', 'validation_type', 'status', 'validated_at', 'validator_user_id', 'findings', 'payload', 'evidence_attachment_id', 'tags'],
     searchColumns: ['validation_id', 'entity_type', 'validation_type', 'status', 'findings'],
-    filterKeys: ['entity_type', 'status', 'validator_user_id'],
+    filterKeys: ['entity_type', 'entity_id', 'validation_type', 'status', 'validator_user_id'],
     defaultOrderBy: [{ validated_at: 'desc_nulls_last' }, { created_at: 'desc' }],
     auth: { read: ['admin', 'user_region', 'user_all_region'], write: ['admin', 'user_region', 'user_all_region'] },
     regionScoped: false,
