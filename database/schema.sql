@@ -315,6 +315,9 @@ create table if not exists public.projects (
   pop_id uuid references public.pops(id) on update cascade on delete set null,
   bast_number text,
   spk_number text,
+  image_attachment_id uuid references public.attachments(id) on update cascade on delete set null,
+  image_attachments jsonb not null default '[]'::jsonb,
+  support_doc jsonb not null default '{}'::jsonb,
   vendor_name text,
   start_date date,
   end_date date,
@@ -322,7 +325,10 @@ create table if not exists public.projects (
   tags text[] not null default '{}',
   custom_fields jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint chk_projects_image_attachments_json check (jsonb_typeof(image_attachments) = 'array'),
+  constraint chk_projects_image_attachments_max_10 check (jsonb_array_length(image_attachments) <= 10),
+  constraint chk_projects_support_doc_json check (jsonb_typeof(support_doc) = 'object')
 );
 
 create or replace function public.set_project_codes()

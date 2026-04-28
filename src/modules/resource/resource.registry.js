@@ -26,9 +26,9 @@ const RESOURCE_CONFIG = {
   projects: {
     table: 'projects',
     pk: 'id',
-    listFields: ['id', 'project_id', 'project_code', 'project_name', 'description', 'status', 'region_id', 'pop_id', 'bast_number', 'spk_number', 'vendor_name', 'start_date', 'end_date', 'budget_value', 'tags', 'custom_fields', 'created_at', 'updated_at'],
-    insertFields: ['project_name', 'description', 'status', 'region_id', 'pop_id', 'bast_number', 'spk_number', 'vendor_name', 'start_date', 'end_date', 'budget_value', 'tags', 'custom_fields'],
-    updateFields: ['project_name', 'description', 'status', 'region_id', 'pop_id', 'bast_number', 'spk_number', 'vendor_name', 'start_date', 'end_date', 'budget_value', 'tags', 'custom_fields'],
+    listFields: ['id', 'project_id', 'project_code', 'project_name', 'description', 'status', 'region_id', 'pop_id', 'bast_number', 'spk_number', 'image_attachment_id', 'image_attachments', 'support_doc', 'vendor_name', 'start_date', 'end_date', 'budget_value', 'tags', 'custom_fields', 'created_at', 'updated_at'],
+    insertFields: ['project_name', 'description', 'status', 'region_id', 'pop_id', 'bast_number', 'spk_number', 'image_attachment_id', 'image_attachments', 'support_doc', 'vendor_name', 'start_date', 'end_date', 'budget_value', 'tags', 'custom_fields'],
+    updateFields: ['project_name', 'description', 'status', 'region_id', 'pop_id', 'bast_number', 'spk_number', 'image_attachment_id', 'image_attachments', 'support_doc', 'vendor_name', 'start_date', 'end_date', 'budget_value', 'tags', 'custom_fields'],
     searchColumns: ['project_name', 'project_code', 'description', 'vendor_name', 'bast_number', 'spk_number'],
     filterKeys: ['region_id', 'pop_id', 'status'],
     defaultOrderBy: [{ start_date: 'desc_nulls_last' }, { created_at: 'desc' }],
