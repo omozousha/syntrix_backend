@@ -636,6 +636,10 @@ create table if not exists public.device_ports (
   core_capacity integer check (core_capacity is null or core_capacity >= 0),
   core_used integer check (core_used is null or core_used >= 0),
   splitter_ratio text,
+  customer_id uuid references public.customers(id) on update cascade on delete set null,
+  ont_device_id uuid references public.devices(id) on update cascade on delete set null,
+  service_number text,
+  occupied_at date,
   is_active boolean not null default true,
   notes text,
   created_at timestamptz not null default now(),
@@ -910,6 +914,8 @@ create index if not exists idx_device_links_region_id on public.device_links(reg
 create index if not exists idx_device_links_from_to on public.device_links(from_device_id, to_device_id);
 create index if not exists idx_device_ports_region_id on public.device_ports(region_id);
 create index if not exists idx_device_ports_device_id on public.device_ports(device_id);
+create index if not exists idx_device_ports_customer_id on public.device_ports(customer_id);
+create index if not exists idx_device_ports_ont_device_id on public.device_ports(ont_device_id);
 create index if not exists idx_port_connections_region_id on public.port_connections(region_id);
 create index if not exists idx_port_connections_from_to on public.port_connections(from_port_id, to_port_id);
 create index if not exists idx_core_management_region_id on public.core_management(region_id);
