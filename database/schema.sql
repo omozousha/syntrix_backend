@@ -313,6 +313,8 @@ create table if not exists public.projects (
   status text not null default 'planning' check (status in ('planning', 'running', 'done', 'hold', 'cancelled')),
   region_id uuid not null references public.regions(id) on update cascade on delete restrict,
   pop_id uuid references public.pops(id) on update cascade on delete set null,
+  bast_number text,
+  spk_number text,
   vendor_name text,
   start_date date,
   end_date date,
