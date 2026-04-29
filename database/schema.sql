@@ -486,6 +486,8 @@ create table if not exists public.devices (
   validation_status text not null default 'unvalidated' check (validation_status in ('unvalidated', 'valid', 'warning', 'invalid')),
   validation_date date,
   last_validation_at timestamptz,
+  deleted_at timestamptz,
+  deleted_by_user_id uuid references public.app_users(id) on update cascade on delete set null,
   monitoring_enabled boolean not null default true,
   notes text,
   tags text[] not null default '{}',
@@ -641,6 +643,8 @@ create table if not exists public.device_ports (
   service_number text,
   occupied_at date,
   is_active boolean not null default true,
+  deleted_at timestamptz,
+  deleted_by_user_id uuid references public.app_users(id) on update cascade on delete set null,
   notes text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -909,6 +913,7 @@ create index if not exists idx_devices_pop_id on public.devices(pop_id);
 create index if not exists idx_devices_project_id on public.devices(project_id);
 create index if not exists idx_devices_customer_id on public.devices(customer_id);
 create index if not exists idx_devices_type_key on public.devices(device_type_key);
+create index if not exists idx_devices_deleted_at on public.devices(deleted_at);
 create index if not exists idx_routes_region_id on public.network_routes(region_id);
 create index if not exists idx_device_links_region_id on public.device_links(region_id);
 create index if not exists idx_device_links_from_to on public.device_links(from_device_id, to_device_id);
@@ -916,6 +921,7 @@ create index if not exists idx_device_ports_region_id on public.device_ports(reg
 create index if not exists idx_device_ports_device_id on public.device_ports(device_id);
 create index if not exists idx_device_ports_customer_id on public.device_ports(customer_id);
 create index if not exists idx_device_ports_ont_device_id on public.device_ports(ont_device_id);
+create index if not exists idx_device_ports_deleted_at on public.device_ports(deleted_at);
 create index if not exists idx_port_connections_region_id on public.port_connections(region_id);
 create index if not exists idx_port_connections_from_to on public.port_connections(from_port_id, to_port_id);
 create index if not exists idx_core_management_region_id on public.core_management(region_id);

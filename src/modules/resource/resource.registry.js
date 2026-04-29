@@ -62,7 +62,7 @@ const RESOURCE_CONFIG = {
   devices: {
     table: 'devices',
     pk: 'id',
-    listFields: ['id', 'device_id', 'device_code', 'device_name', 'asset_group', 'device_type_key', 'category_asset', 'bast_id', 'status', 'longitude', 'latitude', 'address', 'region_id', 'pop_id', 'project_id', 'customer_id', 'manufacturer_id', 'brand_id', 'model_id', 'serial_number', 'management_ip', 'capacity_core', 'used_core', 'total_ports', 'used_ports', 'splitter_ratio', 'image_attachment_id', 'image_attachments', 'monitoring_enabled', 'validation_status', 'validation_date', 'last_seen_at', 'last_validation_at', 'tags', 'specifications', 'custom_fields', 'created_at', 'updated_at'],
+    listFields: ['id', 'device_id', 'device_code', 'device_name', 'asset_group', 'device_type_key', 'category_asset', 'bast_id', 'status', 'longitude', 'latitude', 'address', 'region_id', 'pop_id', 'project_id', 'customer_id', 'manufacturer_id', 'brand_id', 'model_id', 'serial_number', 'management_ip', 'capacity_core', 'used_core', 'total_ports', 'used_ports', 'splitter_ratio', 'image_attachment_id', 'image_attachments', 'monitoring_enabled', 'validation_status', 'validation_date', 'last_seen_at', 'last_validation_at', 'tags', 'specifications', 'custom_fields', 'deleted_at', 'deleted_by_user_id', 'created_at', 'updated_at'],
     insertFields: ['device_name', 'asset_group', 'device_type_key', 'longitude', 'latitude', 'address', 'region_id', 'pop_id', 'project_id', 'customer_id', 'category_asset', 'bast_id', 'status', 'manufacturer_id', 'brand_id', 'model_id', 'serial_number', 'management_ip', 'vlan', 'capacity_core', 'used_core', 'total_ports', 'used_ports', 'splitter_ratio', 'image_attachment_id', 'image_attachments', 'installation_date', 'monitoring_enabled', 'notes', 'tags', 'specifications', 'custom_fields', 'validation_status', 'validation_date'],
     updateFields: ['device_name', 'asset_group', 'device_type_key', 'longitude', 'latitude', 'address', 'region_id', 'pop_id', 'project_id', 'customer_id', 'category_asset', 'bast_id', 'status', 'manufacturer_id', 'brand_id', 'model_id', 'serial_number', 'management_ip', 'vlan', 'capacity_core', 'used_core', 'total_ports', 'used_ports', 'splitter_ratio', 'image_attachment_id', 'image_attachments', 'installation_date', 'monitoring_enabled', 'notes', 'tags', 'specifications', 'custom_fields', 'validation_status', 'validation_date', 'last_seen_at', 'last_validation_at'],
     searchColumns: ['device_name', 'device_id', 'device_code', 'serial_number'],
@@ -70,6 +70,7 @@ const RESOURCE_CONFIG = {
     defaultOrderBy: [{ created_at: 'desc' }],
     auth: { read: ['admin', 'user_region', 'user_all_region'], write: ['admin', 'user_region', 'user_all_region'] },
     regionScoped: true,
+    softDelete: true,
   },
   routes: {
     table: 'network_routes',
@@ -98,7 +99,7 @@ const RESOURCE_CONFIG = {
   devicePorts: {
     table: 'device_ports',
     pk: 'id',
-    listFields: ['id', 'port_id', 'region_id', 'device_id', 'port_index', 'port_label', 'port_type', 'direction', 'status', 'speed_profile', 'core_capacity', 'core_used', 'splitter_ratio', 'splitter_profile_id', 'splitter_role', 'customer_id', 'ont_device_id', 'service_number', 'occupied_at', 'is_active', 'notes', 'created_at', 'updated_at'],
+    listFields: ['id', 'port_id', 'region_id', 'device_id', 'port_index', 'port_label', 'port_type', 'direction', 'status', 'speed_profile', 'core_capacity', 'core_used', 'splitter_ratio', 'splitter_profile_id', 'splitter_role', 'customer_id', 'ont_device_id', 'service_number', 'occupied_at', 'is_active', 'notes', 'deleted_at', 'deleted_by_user_id', 'created_at', 'updated_at'],
     insertFields: ['region_id', 'device_id', 'port_index', 'port_label', 'port_type', 'direction', 'status', 'speed_profile', 'core_capacity', 'core_used', 'splitter_ratio', 'splitter_profile_id', 'splitter_role', 'customer_id', 'ont_device_id', 'service_number', 'occupied_at', 'is_active', 'notes'],
     updateFields: ['region_id', 'device_id', 'port_index', 'port_label', 'port_type', 'direction', 'status', 'speed_profile', 'core_capacity', 'core_used', 'splitter_ratio', 'splitter_profile_id', 'splitter_role', 'customer_id', 'ont_device_id', 'service_number', 'occupied_at', 'is_active', 'notes'],
     searchColumns: ['port_id', 'port_label', 'port_type', 'status', 'service_number', 'notes'],
@@ -106,6 +107,7 @@ const RESOURCE_CONFIG = {
     defaultOrderBy: [{ device_id: 'asc' }, { port_index: 'asc' }],
     auth: { read: ['admin', 'user_region', 'user_all_region'], write: ['admin', 'user_region', 'user_all_region'] },
     regionScoped: true,
+    softDelete: true,
   },
   portConnections: {
     table: 'port_connections',
