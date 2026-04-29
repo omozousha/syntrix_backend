@@ -872,6 +872,10 @@ resourceRouter.post('/devices/:id/core-chain-draft-link', authenticate, requireR
 
     const upstreamPortId = String(req.body?.upstream_port_id || '').trim();
     const odpPortId = String(req.body?.odp_port_id || '').trim();
+    const cableDeviceId = String(req.body?.cable_device_id || '').trim() || null;
+    const coreStartRaw = req.body?.core_start;
+    const coreEndRaw = req.body?.core_end;
+    const fiberCountRaw = req.body?.fiber_count;
     if (!upstreamPortId || !odpPortId) {
       throw createHttpError(400, 'upstream_port_id and odp_port_id are required');
     }
@@ -890,6 +894,47 @@ resourceRouter.post('/devices/:id/core-chain-draft-link', authenticate, requireR
 
     if (upstreamPort.region_id && odpPort.region_id && upstreamPort.region_id !== odpPort.region_id) {
       throw createHttpError(400, 'Port region mismatch');
+    }
+
+    const hasCoreStart = coreStartRaw != null && coreStartRaw !== '';
+    const hasCoreEnd = coreEndRaw != null && coreEndRaw !== '';
+    if (hasCoreStart !== hasCoreEnd) {
+      throw createHttpError(400, 'core_start and core_end must be provided together');
+    }
+
+    let coreStart = null;
+    let coreEnd = null;
+    let fiberCount = null;
+    if (hasCoreStart && hasCoreEnd) {
+      coreStart = Number(coreStartRaw);
+      coreEnd = Number(coreEndRaw);
+      if (!Number.isInteger(coreStart) || coreStart <= 0) throw createHttpError(400, 'core_start must be integer >= 1');
+      if (!Number.isInteger(coreEnd) || coreEnd <= 0) throw createHttpError(400, 'core_end must be integer >= 1');
+      if (coreEnd < coreStart) throw createHttpError(400, 'core_end cannot be smaller than core_start');
+      fiberCount = coreEnd - coreStart + 1;
+    }
+
+    if (fiberCountRaw != null && fiberCountRaw !== '') {
+      const parsed = Number(fiberCountRaw);
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        throw createHttpError(400, 'fiber_count must be integer >= 1');
+      }
+      fiberCount = parsed;
+    }
+
+    if ((hasCoreStart || hasCoreEnd || fiberCount != null) && !cableDeviceId) {
+      throw createHttpError(400, 'cable_device_id is required when core range or fiber_count is provided');
+    }
+
+    if (cableDeviceId) {
+      const cable = await loadDeviceById(cableDeviceId);
+      if (!cable) throw createHttpError(404, 'Cable device not found');
+      if (String(cable.device_type_key || '').toUpperCase() !== 'CABLE') {
+        throw createHttpError(400, 'cable_device_id must reference device_type_key CABLE');
+      }
+      if (cable.region_id && cable.region_id !== odpDevice.region_id) {
+        throw createHttpError(400, 'Cable device region must match ODP region');
+      }
     }
 
     const existing = await loadConnectionByPortPair(upstreamPort.id, odpPort.id);
@@ -925,6 +970,10 @@ resourceRouter.post('/devices/:id/core-chain-draft-link', authenticate, requireR
       to_port_id: odpPort.id,
       connection_type: 'fiber',
       status: 'planned',
+      cable_device_id: cableDeviceId,
+      core_start: coreStart,
+      core_end: coreEnd,
+      fiber_count: fiberCount,
       notes: '[auto-draft] ODP core chain link suggestion',
     };
     const result = await executeHasura(mutation, { object });
