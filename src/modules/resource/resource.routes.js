@@ -31,6 +31,7 @@ async function loadDeviceById(deviceId) {
         device_id
         device_name
         device_type_key
+        total_ports
         region_id
         pop_id
         status
@@ -1029,7 +1030,10 @@ resourceRouter.post('/devices/:id/provision-ports', authenticate, requireRole('a
     const existingPorts = await loadDevicePortsByDeviceId(device.id);
     const existingIndexes = new Set(existingPorts.map((item) => Number(item.port_index)));
 
-    const totalPorts = Number(template.total_ports) || 0;
+    const requestedTotalPorts = Number(device.total_ports);
+    const totalPorts = Number.isInteger(requestedTotalPorts) && requestedTotalPorts > 0
+      ? requestedTotalPorts
+      : (Number(template.total_ports) || 0);
     const startPortIndex = Number(template.start_port_index) || 1;
 
     const missingIndexes = [];
