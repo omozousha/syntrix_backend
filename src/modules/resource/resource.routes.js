@@ -12,6 +12,7 @@ const { executeHasura } = require('../../config/hasura');
 const { sendSuccess } = require('../../utils/response');
 const { buildWhereClause, listResources } = require('../../shared/resource.service');
 const { createAuditLog } = require('../../shared/audit.service');
+const { buildOdpCoreChainSummary } = require('../device/odp-chain.service');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -772,6 +773,24 @@ resourceRouter.get('/devices/:id/trace', authenticate, requireRole('admin', 'use
       },
       'Device trace fetched successfully',
     );
+  } catch (error) {
+    return next(error);
+  }
+});
+
+resourceRouter.get('/devices/:id/core-chain-summary', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const device = await loadDeviceById(req.params.id);
+    if (!device) throw createHttpError(404, 'Device not found');
+
+    if (req.auth.role === 'user_region' && !req.auth.regions.includes(device.region_id)) {
+      throw createHttpError(403, 'You do not have access to this device region');
+    }
+
+    const summary = await buildOdpCoreChainSummary(req.params.id);
+    if (!summary) throw createHttpError(404, 'Device not found');
+
+    return sendSuccess(res, summary, 'ODP core chain summary fetched successfully');
   } catch (error) {
     return next(error);
   }

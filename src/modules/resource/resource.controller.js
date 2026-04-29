@@ -20,6 +20,7 @@ const {
   validateDevicePortPayload,
   validatePortConnectionPayload,
 } = require('../device/connectivity.validation');
+const { buildOdpCoreChainSummary } = require('../device/odp-chain.service');
 
 async function loadDevicePortTemplate(deviceTypeKey, profileName = 'default') {
   const query = `
@@ -346,6 +347,25 @@ async function update(req, res, next) {
     }
 
     const changes = sanitizePayload(req.resourceConfig, req.body);
+
+    if (req.resourceName === 'devices') {
+      const currentType = String(existing.device_type_key || '').toUpperCase();
+      const nextType = String(changes.device_type_key || existing.device_type_key || '').toUpperCase();
+      const requestedValidationStatus = changes.validation_status != null
+        ? String(changes.validation_status).toLowerCase()
+        : null;
+
+      if ((currentType === 'ODP' || nextType === 'ODP') && requestedValidationStatus === 'valid') {
+        const chain = await buildOdpCoreChainSummary(existing.id);
+        if (!chain?.is_complete) {
+          throw createHttpError(
+            400,
+            'ODP validation_status cannot be set to valid before core chain is complete (ODC source, splitter, distribution cable, and core mapping)',
+          );
+        }
+      }
+    }
+
     const item = await updateResource(req.resourceConfig, req.params.id, changes);
     let fiberSyncResult = null;
     let fiberSyncError = null;

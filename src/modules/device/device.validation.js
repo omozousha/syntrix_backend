@@ -3,7 +3,7 @@ const { createHttpError } = require('../../utils/httpError');
 const VALIDATION_STATUS_VALUES = ['unvalidated', 'valid', 'warning', 'invalid'];
 const DEVICE_TYPE_CORE_REQUIRED = new Set(['OTB', 'ODC', 'JC', 'CABLE']);
 const DEVICE_TYPE_PORT_REQUIRED = new Set(['OLT', 'SWITCH', 'ROUTER', 'ONT', 'ODP']);
-const DEVICE_TYPE_CORE_AND_PORT_REQUIRED = new Set(['ODP']);
+const DEVICE_TYPE_CORE_AND_PORT_REQUIRED = new Set();
 
 function ensureValidDate(value, fieldName) {
   if (value == null || value === '') {
