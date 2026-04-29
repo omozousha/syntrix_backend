@@ -11,6 +11,8 @@ async function loadDeviceById(deviceId) {
         device_name
         device_type_key
         region_id
+        pop_id
+        status
         splitter_ratio
       }
     }
@@ -94,6 +96,9 @@ async function loadDevicesByIds(ids) {
         device_id
         device_name
         device_type_key
+        region_id
+        pop_id
+        status
         splitter_ratio
       }
     }
@@ -150,6 +155,50 @@ function uniqueById(items) {
     out.push(item);
   });
   return out;
+}
+
+async function loadUpstreamPortCandidates({ regionId, popId, excludeDeviceId, limit = 40 }) {
+  if (!regionId) return [];
+  const query = `
+    query LoadUpstreamPortCandidates($where: device_ports_bool_exp!, $limit: Int!) {
+      items: device_ports(where: $where, limit: $limit, order_by: [{ updated_at: desc_nulls_last }, { created_at: desc }]) {
+        id
+        port_id
+        device_id
+        port_index
+        port_label
+        status
+        port_type
+      }
+    }
+  `;
+  const where = {
+    deleted_at: { _is_null: true },
+    is_active: { _eq: true },
+    region_id: { _eq: regionId },
+    device_id: { _neq: excludeDeviceId },
+    status: { _in: ['idle', 'reserved', 'planned'] },
+    port_type: { _in: ['fiber', 'pon', 'uplink', 'splitter'] },
+  };
+  const data = await executeHasura(query, { where, limit });
+  const ports = data.items || [];
+  const deviceIds = Array.from(new Set(ports.map((item) => item.device_id).filter(Boolean)));
+  const devices = await loadDevicesByIds(deviceIds);
+  const deviceMap = new Map(devices.map((item) => [item.id, item]));
+
+  const filtered = ports
+    .map((port) => ({ ...port, device: deviceMap.get(port.device_id) || null }))
+    .filter((port) => {
+      const device = port.device;
+      if (!device) return false;
+      if (String(device.status || '').toLowerCase() === 'retired' || String(device.status || '').toLowerCase() === 'inactive') {
+        return false;
+      }
+      if (popId && device.pop_id && device.pop_id !== popId) return false;
+      return true;
+    });
+
+  return filtered;
 }
 
 async function hasOdcPathFromPorts(odpPortIds, maxDepth = 4) {
@@ -271,7 +320,105 @@ async function buildOdpCoreChainSummary(deviceId) {
   };
 }
 
+async function buildOdpCoreChainDraft(deviceId) {
+  const summary = await buildOdpCoreChainSummary(deviceId);
+  if (!summary) return null;
+
+  if (!summary.is_odp) {
+    return {
+      ...summary,
+      draft_ready: false,
+      suggestions: [],
+    };
+  }
+
+  const missing = Object.entries(summary.checks)
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+
+  const suggestions = [];
+  if (missing.includes('has_upstream_link')) {
+    suggestions.push({
+      key: 'connect-upstream-port',
+      title: 'Hubungkan minimal 1 port ODP ke upstream',
+      description: 'Buat port_connection dari port ODP ke port upstream (ODC/OTB/JC) agar rantai mulai terbentuk.',
+      severity: 'high',
+    });
+  }
+  if (missing.includes('has_main_splitter')) {
+    suggestions.push({
+      key: 'set-splitter-context',
+      title: 'Lengkapi konteks splitter',
+      description: 'Isi splitter_ratio di device ODP atau splitter_profile/splitter_ratio di port ODP.',
+      severity: 'high',
+    });
+  }
+  if (missing.includes('has_distribution_cable')) {
+    suggestions.push({
+      key: 'attach-distribution-cable',
+      title: 'Tentukan kabel distribusi pada koneksi',
+      description: 'Set cable_device_id di port_connection ODP untuk menandai kabel distribusi yang dipakai.',
+      severity: 'medium',
+    });
+  }
+  if (missing.includes('has_core_mapping')) {
+    suggestions.push({
+      key: 'map-core-range',
+      title: 'Lengkapi mapping core',
+      description: 'Isi core_start/core_end atau isi fiber_cores per connection untuk trace core akurat.',
+      severity: 'high',
+    });
+  }
+  if (missing.includes('has_odc_source_path')) {
+    suggestions.push({
+      key: 'connect-to-odc-path',
+      title: 'Pastikan path menuju ODC',
+      description: 'Bangun chain berjenjang (ODC -> splitter -> distribusi -> ODP) sampai trace menemukan ODC.',
+      severity: 'high',
+    });
+  }
+
+  const upstreamCandidatesRaw = await loadUpstreamPortCandidates({
+    regionId: summary.device.region_id,
+    popId: summary.device.pop_id || null,
+    excludeDeviceId: summary.device.id,
+    limit: 60,
+  });
+  const prioritized = upstreamCandidatesRaw
+    .map((item) => {
+      const type = String(item?.device?.device_type_key || '').toUpperCase();
+      let weight = 4;
+      if (type === 'ODC') weight = 1;
+      else if (type === 'OTB') weight = 2;
+      else if (type === 'JC') weight = 3;
+      return { ...item, _weight: weight };
+    })
+    .sort((a, b) => a._weight - b._weight)
+    .slice(0, 12)
+    .map((item) => ({
+      port_id: item.id,
+      port_label: item.port_label || item.port_id || `Port ${item.port_index}`,
+      port_index: item.port_index,
+      port_type: item.port_type,
+      status: item.status,
+      device: {
+        id: item.device?.id,
+        device_id: item.device?.device_id,
+        device_name: item.device?.device_name,
+        device_type_key: item.device?.device_type_key,
+      },
+    }));
+
+  return {
+    ...summary,
+    draft_ready: missing.length === 0,
+    missing_checks: missing,
+    suggestions,
+    upstream_port_candidates: prioritized,
+  };
+}
+
 module.exports = {
   buildOdpCoreChainSummary,
+  buildOdpCoreChainDraft,
 };
-
