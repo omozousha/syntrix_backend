@@ -273,6 +273,49 @@ async function loadPortsByIds(portIds) {
   return data.items || [];
 }
 
+async function loadPortById(portId) {
+  const query = `
+    query LoadPortById($id: uuid!) {
+      item: device_ports_by_pk(id: $id) {
+        id
+        region_id
+        device_id
+        port_index
+        port_label
+        port_type
+        status
+        deleted_at
+      }
+    }
+  `;
+  const data = await executeHasura(query, { id: portId });
+  return data.item || null;
+}
+
+async function loadConnectionByPortPair(portA, portB) {
+  const query = `
+    query LoadConnectionByPortPair($portA: uuid!, $portB: uuid!) {
+      items: port_connections(
+        where: {
+          _or: [
+            { _and: [{ from_port_id: { _eq: $portA } }, { to_port_id: { _eq: $portB } }] }
+            { _and: [{ from_port_id: { _eq: $portB } }, { to_port_id: { _eq: $portA } }] }
+          ]
+        }
+        limit: 1
+      ) {
+        id
+        connection_id
+        from_port_id
+        to_port_id
+        status
+      }
+    }
+  `;
+  const data = await executeHasura(query, { portA, portB });
+  return data.items?.[0] || null;
+}
+
 async function loadFiberCoresByConnectionIds(connectionIds) {
   if (!connectionIds.length) return [];
   const query = `
@@ -809,6 +852,109 @@ resourceRouter.get('/devices/:id/core-chain-draft', authenticate, requireRole('a
     if (!draft) throw createHttpError(404, 'Device not found');
 
     return sendSuccess(res, draft, 'ODP core chain draft fetched successfully');
+  } catch (error) {
+    return next(error);
+  }
+});
+
+resourceRouter.post('/devices/:id/core-chain-draft-link', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const odpDevice = await loadDeviceById(req.params.id);
+    if (!odpDevice) throw createHttpError(404, 'Device not found');
+
+    if (req.auth.role === 'user_region' && !req.auth.regions.includes(odpDevice.region_id)) {
+      throw createHttpError(403, 'You do not have access to this device region');
+    }
+
+    if (String(odpDevice.device_type_key || '').toUpperCase() !== 'ODP') {
+      throw createHttpError(400, 'Draft link endpoint only supports ODP device');
+    }
+
+    const upstreamPortId = String(req.body?.upstream_port_id || '').trim();
+    const odpPortId = String(req.body?.odp_port_id || '').trim();
+    if (!upstreamPortId || !odpPortId) {
+      throw createHttpError(400, 'upstream_port_id and odp_port_id are required');
+    }
+
+    const [upstreamPort, odpPort] = await Promise.all([loadPortById(upstreamPortId), loadPortById(odpPortId)]);
+    if (!upstreamPort || !odpPort) throw createHttpError(404, 'Port not found');
+    if (upstreamPort.deleted_at || odpPort.deleted_at) throw createHttpError(400, 'Cannot connect deleted port');
+
+    if (odpPort.device_id !== odpDevice.id) {
+      throw createHttpError(400, 'odp_port_id is not part of the requested ODP device');
+    }
+
+    if (upstreamPort.device_id === odpPort.device_id) {
+      throw createHttpError(400, 'Upstream and ODP port cannot be from same device');
+    }
+
+    if (upstreamPort.region_id && odpPort.region_id && upstreamPort.region_id !== odpPort.region_id) {
+      throw createHttpError(400, 'Port region mismatch');
+    }
+
+    const existing = await loadConnectionByPortPair(upstreamPort.id, odpPort.id);
+    if (existing) {
+      return sendSuccess(
+        res,
+        {
+          created: false,
+          existing_connection: existing,
+        },
+        'Draft link already exists',
+      );
+    }
+
+    const mutation = `
+      mutation InsertDraftPortConnection($object: port_connections_insert_input!) {
+        inserted: insert_port_connections_one(object: $object) {
+          id
+          connection_id
+          region_id
+          from_port_id
+          to_port_id
+          connection_type
+          status
+          notes
+          created_at
+        }
+      }
+    `;
+    const object = {
+      region_id: odpDevice.region_id,
+      from_port_id: upstreamPort.id,
+      to_port_id: odpPort.id,
+      connection_type: 'fiber',
+      status: 'planned',
+      notes: '[auto-draft] ODP core chain link suggestion',
+    };
+    const result = await executeHasura(mutation, { object });
+    const inserted = result.inserted;
+
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'create:core_chain_draft_link',
+      entityType: 'portConnections',
+      entityId: inserted?.id || null,
+      beforeData: null,
+      afterData: {
+        odp_device_id: odpDevice.id,
+        upstream_port_id: upstreamPort.id,
+        odp_port_id: odpPort.id,
+        connection: inserted,
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return sendSuccess(
+      res,
+      {
+        created: true,
+        connection: inserted,
+      },
+      'ODP draft link created successfully',
+      201,
+    );
   } catch (error) {
     return next(error);
   }
