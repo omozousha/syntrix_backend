@@ -640,7 +640,6 @@ create table if not exists public.device_ports (
   splitter_ratio text,
   customer_id uuid references public.customers(id) on update cascade on delete set null,
   ont_device_id uuid references public.devices(id) on update cascade on delete set null,
-  service_number text,
   occupied_at date,
   is_active boolean not null default true,
   deleted_at timestamptz,

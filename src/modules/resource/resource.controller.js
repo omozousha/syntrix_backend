@@ -120,7 +120,6 @@ async function syncDevicePortUsage(deviceId) {
       { status: { _eq: 'used' } },
       { customer_id: { _is_null: false } },
       { ont_device_id: { _is_null: false } },
-      { service_number: { _neq: '' } },
     ],
   };
   const data = await executeHasura(query, { deviceId, usedWhere });
