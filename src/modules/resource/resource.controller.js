@@ -279,6 +279,15 @@ function validatePayloadByResource(resourceName, payload, mode = 'create') {
   }
 }
 
+function validateUsedPortEndpointState(state) {
+  if (String(state.status || '').toLowerCase() !== 'used') return;
+  const hasCustomer = state.customer_id != null && String(state.customer_id).trim() !== '';
+  const hasOnt = state.ont_device_id != null && String(state.ont_device_id).trim() !== '';
+  if (!hasCustomer && !hasOnt) {
+    throw createHttpError(400, 'status=used requires customer_id or ont_device_id');
+  }
+}
+
 async function list(req, res, next) {
   try {
     const config = req.resourceConfig;
@@ -327,6 +336,9 @@ async function getById(req, res, next) {
 async function create(req, res, next) {
   try {
     validatePayloadByResource(req.resourceName, req.body, 'create');
+    if (req.resourceName === 'devicePorts') {
+      validateUsedPortEndpointState(req.body);
+    }
     const object = sanitizePayload(req.resourceConfig, req.body);
 
     if (req.resourceConfig.regionScoped && req.auth.role === 'user_region' && !req.auth.regions.includes(object.region_id)) {
@@ -390,12 +402,13 @@ async function create(req, res, next) {
 
 async function update(req, res, next) {
   try {
-    validatePayloadByResource(req.resourceName, req.body, 'update');
     const existing = await getResourceById(req.resourceConfig, req.params.id);
 
     if (!existing) {
       throw createHttpError(404, `${req.resourceName} not found`);
     }
+
+    validatePayloadByResource(req.resourceName, req.body, 'update');
 
     if (req.resourceConfig.regionScoped && req.auth.role === 'user_region') {
       const candidateRegionId = req.body.region_id || existing.region_id;
@@ -405,6 +418,9 @@ async function update(req, res, next) {
     }
 
     const changes = sanitizePayload(req.resourceConfig, req.body);
+    if (req.resourceName === 'devicePorts') {
+      validateUsedPortEndpointState({ ...existing, ...changes });
+    }
 
     if (req.resourceName === 'devices') {
       const currentType = String(existing.device_type_key || '').toUpperCase();

@@ -82,6 +82,7 @@ function validateDevicePortPayload(payload, mode = 'create') {
   if (payload.splitter_role != null && !['input', 'output', 'bidirectional'].includes(String(payload.splitter_role))) {
     throw createHttpError(400, 'splitter_role must be one of: input, output, bidirectional');
   }
+
 }
 
 function validatePortConnectionPayload(payload, mode = 'create') {
