@@ -55,7 +55,10 @@ async function provisionPortsFromTemplate(device) {
     return { enabled: false, createdCount: 0, reason: 'template_not_found' };
   }
 
-  const totalPorts = Number(template.total_ports) || 0;
+  const requestedTotalPorts = Number(device.total_ports);
+  const totalPorts = Number.isInteger(requestedTotalPorts) && requestedTotalPorts > 0
+    ? requestedTotalPorts
+    : (Number(template.total_ports) || 0);
   const startPortIndex = Number(template.start_port_index) || 1;
   if (totalPorts <= 0) {
     return { enabled: false, createdCount: 0, reason: 'invalid_template_total_ports' };
@@ -67,7 +70,7 @@ async function provisionPortsFromTemplate(device) {
       region_id: device.region_id,
       device_id: device.id,
       port_index: portIndex,
-      port_label: `${device.device_type_key || 'PORT'}-${String(portIndex).padStart(2, '0')}`,
+      port_label: `#${portIndex}`,
       port_type: template.default_port_type || 'fiber',
       direction: template.default_direction || 'bidirectional',
       status: 'idle',
@@ -93,6 +96,59 @@ async function provisionPortsFromTemplate(device) {
     profileName: template.profile_name,
     createdCount: result.inserted?.affected_rows || 0,
   };
+}
+
+async function syncDevicePortUsage(deviceId) {
+  if (!deviceId) return null;
+  const query = `
+    query DevicePortUsage($deviceId: uuid!, $usedWhere: device_ports_bool_exp!) {
+      total_ports: device_ports_aggregate(where: { device_id: { _eq: $deviceId }, deleted_at: { _is_null: true } }) {
+        aggregate { count }
+      }
+      used_ports: device_ports_aggregate(where: $usedWhere) {
+        aggregate { count }
+      }
+      device: devices_by_pk(id: $deviceId) {
+        id
+      }
+    }
+  `;
+  const usedWhere = {
+    device_id: { _eq: deviceId },
+    deleted_at: { _is_null: true },
+    _or: [
+      { status: { _eq: 'used' } },
+      { customer_id: { _is_null: false } },
+      { ont_device_id: { _is_null: false } },
+      { service_number: { _neq: '' } },
+    ],
+  };
+  const data = await executeHasura(query, { deviceId, usedWhere });
+  if (!data.device?.id) return null;
+
+  const totalPorts = Number(data.total_ports?.aggregate?.count || 0);
+  const usedPorts = Number(data.used_ports?.aggregate?.count || 0);
+
+  await executeHasura(
+    `
+      mutation UpdateDevicePortUsage($deviceId: uuid!, $set: devices_set_input!) {
+        updated: update_devices_by_pk(pk_columns: { id: $deviceId }, _set: $set) {
+          id
+          total_ports
+          used_ports
+        }
+      }
+    `,
+    {
+      deviceId,
+      set: {
+        total_ports: totalPorts,
+        used_ports: usedPorts,
+      },
+    },
+  );
+
+  return { total_ports: totalPorts, used_ports: usedPorts };
 }
 
 async function loadFiberCoresByCableDeviceId(cableDeviceId) {
@@ -307,6 +363,9 @@ async function create(req, res, next) {
         );
       }
     }
+    if (req.resourceName === 'devicePorts') {
+      await syncDevicePortUsage(item.device_id);
+    }
 
     await createAuditLog({
       actorUserId: req.auth.appUser.id,
@@ -375,6 +434,9 @@ async function update(req, res, next) {
       } catch (syncError) {
         fiberSyncError = syncError.message || 'fiber core sync failed';
       }
+    }
+    if (req.resourceName === 'devicePorts') {
+      await syncDevicePortUsage(item.device_id);
     }
     await createAuditLog({
       actorUserId: req.auth.appUser.id,
@@ -453,6 +515,9 @@ async function remove(req, res, next) {
     } else {
       await deleteResource(req.resourceConfig, req.params.id);
     }
+    if (req.resourceName === 'devicePorts') {
+      await syncDevicePortUsage(existing.device_id);
+    }
 
     await createAuditLog({
       actorUserId: req.auth.appUser.id,
@@ -494,6 +559,9 @@ async function restore(req, res, next) {
       deleted_at: null,
       deleted_by_user_id: null,
     });
+    if (req.resourceName === 'devicePorts') {
+      await syncDevicePortUsage(item.device_id);
+    }
 
     await createAuditLog({
       actorUserId: req.auth.appUser.id,
@@ -538,6 +606,9 @@ async function purge(req, res, next) {
     }
 
     await deleteResource(req.resourceConfig, req.params.id);
+    if (req.resourceName === 'devicePorts') {
+      await syncDevicePortUsage(existing.device_id);
+    }
 
     await createAuditLog({
       actorUserId: req.auth.appUser.id,

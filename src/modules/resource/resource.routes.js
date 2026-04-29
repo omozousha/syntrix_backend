@@ -1073,7 +1073,7 @@ resourceRouter.post('/devices/:id/provision-ports', authenticate, requireRole('a
       region_id: device.region_id,
       device_id: device.id,
       port_index: portIndex,
-      port_label: `${device.device_type_key || 'PORT'}-${String(portIndex).padStart(2, '0')}`,
+      port_label: `#${portIndex}`,
       port_type: template.default_port_type || 'fiber',
       direction: template.default_direction || 'bidirectional',
       status: 'idle',
