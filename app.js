@@ -7,6 +7,7 @@ const { authRouter } = require('./src/modules/auth/auth.routes');
 const { dashboardRouter } = require('./src/modules/dashboard/dashboard.routes');
 const { resourceRouter } = require('./src/modules/resource/resource.routes');
 const { importRouter } = require('./src/modules/import/import.routes');
+const { validationRouter } = require('./src/modules/validation/validation.routes');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -45,6 +46,7 @@ app.get('/health', (_req, res) => {
 app.use('/api/v1/auth', authRateLimiter, authRouter);
 app.use('/api/v1/dashboard', dashboardRouter);
 app.use('/api/v1/imports', importRouter);
+app.use('/api/v1/validation-requests', validationRouter);
 app.use('/api/v1', resourceRouter);
 
 app.use(notFoundHandler);
