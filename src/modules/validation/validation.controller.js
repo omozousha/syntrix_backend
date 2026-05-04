@@ -1,5 +1,6 @@
 const { sendSuccess } = require('../../utils/response');
 const { createHttpError } = require('../../utils/httpError');
+const { env } = require('../../config/env');
 const { createAuditLog } = require('../../shared/audit.service');
 const {
   STATUS,
@@ -15,6 +16,7 @@ const {
   listRequestsForValidator,
   updateRequestStatus,
   listRequestHistory,
+  listRejectReasonMetrics,
   applyValidationPayloadToAsset,
 } = require('./validation.service');
 
@@ -38,8 +40,23 @@ function isSuperAdmin(role) {
   return role === 'superadmin';
 }
 
+function assertValidationWorkflowEnabled() {
+  if (!env.validationWorkflowEnabled) {
+    throw createHttpError(503, 'Validation approval workflow is disabled by feature flag');
+  }
+}
+
+function assertPilotRegionAllowed(regionId) {
+  const allowed = env.validationWorkflowAllowedRegionIds || [];
+  if (!allowed.length) return;
+  if (!allowed.includes(String(regionId || ''))) {
+    throw createHttpError(403, 'Region is not enabled for validation workflow pilot');
+  }
+}
+
 async function submitValidationRequest(req, res, next) {
   try {
+    assertValidationWorkflowEnabled();
     const { actorUserId, actorRole } = getRequestContext(req);
     if (!isValidator(actorRole)) {
       throw createHttpError(403, 'Only validator can submit validation request');
@@ -63,6 +80,7 @@ async function submitValidationRequest(req, res, next) {
     }
 
     assertHasRegionAccess(req.auth, device.region_id);
+    assertPilotRegionAllowed(device.region_id);
 
     const request = await createRequest({
       entityId,
@@ -106,6 +124,7 @@ async function submitValidationRequest(req, res, next) {
 
 async function listValidationRequests(req, res, next) {
   try {
+    assertValidationWorkflowEnabled();
     const { actorRole, regionIds, actorUserId } = getRequestContext(req);
     if (isValidator(actorRole)) {
       const entityId = String(req.query.entity_id || '').trim();
@@ -144,6 +163,7 @@ async function listValidationRequests(req, res, next) {
 
 async function approveByAdminRegion(req, res, next) {
   try {
+    assertValidationWorkflowEnabled();
     const { actorUserId, actorRole } = getRequestContext(req);
     if (!isAdminRegion(actorRole)) {
       throw createHttpError(403, 'Only adminregion can approve this stage');
@@ -152,6 +172,7 @@ async function approveByAdminRegion(req, res, next) {
     const request = await loadRequestById(req.params.id);
     if (!request) throw createHttpError(404, 'Validation request not found');
     assertHasRegionAccess(req.auth, request.region_id);
+    assertPilotRegionAllowed(request.region_id);
 
     if (request.current_status !== STATUS.ONGOING) {
       throw createHttpError(409, 'Request is not in ongoing_validated status');
@@ -198,6 +219,7 @@ async function approveByAdminRegion(req, res, next) {
 
 async function rejectByAdminRegion(req, res, next) {
   try {
+    assertValidationWorkflowEnabled();
     const { actorUserId, actorRole } = getRequestContext(req);
     if (!isAdminRegion(actorRole)) {
       throw createHttpError(403, 'Only adminregion can reject this stage');
@@ -209,6 +231,7 @@ async function rejectByAdminRegion(req, res, next) {
     const request = await loadRequestById(req.params.id);
     if (!request) throw createHttpError(404, 'Validation request not found');
     assertHasRegionAccess(req.auth, request.region_id);
+    assertPilotRegionAllowed(request.region_id);
 
     if (request.current_status !== STATUS.ONGOING) {
       throw createHttpError(409, 'Request is not in ongoing_validated status');
@@ -258,6 +281,7 @@ async function rejectByAdminRegion(req, res, next) {
 
 async function approveBySuperAdmin(req, res, next) {
   try {
+    assertValidationWorkflowEnabled();
     const { actorUserId, actorRole } = getRequestContext(req);
     if (!isSuperAdmin(actorRole)) {
       throw createHttpError(403, 'Only superadmin can approve this stage');
@@ -265,6 +289,7 @@ async function approveBySuperAdmin(req, res, next) {
 
     const request = await loadRequestById(req.params.id);
     if (!request) throw createHttpError(404, 'Validation request not found');
+    assertPilotRegionAllowed(request.region_id);
 
     if (request.current_status !== STATUS.PENDING_ASYNC) {
       throw createHttpError(409, 'Request is not in pending_async status');
@@ -334,6 +359,7 @@ async function approveBySuperAdmin(req, res, next) {
 
 async function rejectBySuperAdmin(req, res, next) {
   try {
+    assertValidationWorkflowEnabled();
     const { actorUserId, actorRole } = getRequestContext(req);
     if (!isSuperAdmin(actorRole)) {
       throw createHttpError(403, 'Only superadmin can reject this stage');
@@ -344,6 +370,7 @@ async function rejectBySuperAdmin(req, res, next) {
 
     const request = await loadRequestById(req.params.id);
     if (!request) throw createHttpError(404, 'Validation request not found');
+    assertPilotRegionAllowed(request.region_id);
     if (request.current_status !== STATUS.PENDING_ASYNC) {
       throw createHttpError(409, 'Request is not in pending_async status');
     }
@@ -392,6 +419,7 @@ async function rejectBySuperAdmin(req, res, next) {
 
 async function getValidationRequestHistory(req, res, next) {
   try {
+    assertValidationWorkflowEnabled();
     const { actorRole } = getRequestContext(req);
     const request = await loadRequestById(req.params.id);
     if (!request) throw createHttpError(404, 'Validation request not found');
@@ -409,6 +437,25 @@ async function getValidationRequestHistory(req, res, next) {
   }
 }
 
+async function getRejectReasonMetrics(req, res, next) {
+  try {
+    assertValidationWorkflowEnabled();
+    const { actorRole, regionIds } = getRequestContext(req);
+    if (!isAdminRegion(actorRole) && !isSuperAdmin(actorRole)) {
+      throw createHttpError(403, 'Only adminregion/superadmin can access reject reason metrics');
+    }
+    const limit = Number(req.query.limit || 1000);
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 5000)) : 1000;
+    const report = await listRejectReasonMetrics({
+      regionIds: isSuperAdmin(actorRole) ? null : regionIds,
+      limit: safeLimit,
+    });
+    return sendSuccess(res, report, 'Reject reason metrics loaded');
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   submitValidationRequest,
   listValidationRequests,
@@ -417,4 +464,5 @@ module.exports = {
   approveBySuperAdmin,
   rejectBySuperAdmin,
   getValidationRequestHistory,
+  getRejectReasonMetrics,
 };

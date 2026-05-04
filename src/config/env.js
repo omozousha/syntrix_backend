@@ -66,6 +66,8 @@ const env = {
   importAllowedEntitiesUserAllRegion: toCsvList(process.env.IMPORT_ALLOWED_ENTITIES_USER_ALL_REGION, 'devices,pops,projects'),
   importAllowedEntitiesUserRegion: toCsvList(process.env.IMPORT_ALLOWED_ENTITIES_USER_REGION, 'devices,pops'),
   bootstrapAdminSecret: process.env.BOOTSTRAP_ADMIN_SECRET || '',
+  validationWorkflowEnabled: toBoolean(process.env.VALIDATION_WORKFLOW_ENABLED, true),
+  validationWorkflowAllowedRegionIds: toCsvList(process.env.VALIDATION_WORKFLOW_ALLOWED_REGION_IDS, ''),
 };
 
 module.exports = { env };

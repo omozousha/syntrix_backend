@@ -314,6 +314,91 @@ async function listRequestHistory(requestId) {
   return data.items || [];
 }
 
+async function listRejectReasonMetrics({ regionIds = null, limit = 1000 } = {}) {
+  const isRegionScoped = Array.isArray(regionIds) && regionIds.length > 0;
+  const query = isRegionScoped
+    ? `
+      query ListRejectReasonsScoped($regionIds: [uuid!], $limit: Int!) {
+        items: validation_requests(
+          where: {
+            current_status: { _in: ["rejected_by_adminregion", "rejected_by_superadmin"] }
+            region_id: { _in: $regionIds }
+          }
+          order_by: [{ updated_at: desc }]
+          limit: $limit
+        ) {
+          id
+          request_id
+          region_id
+          current_status
+          adminregion_review_note
+          superadmin_review_note
+          updated_at
+        }
+      }
+    `
+    : `
+      query ListRejectReasonsGlobal($limit: Int!) {
+        items: validation_requests(
+          where: {
+            current_status: { _in: ["rejected_by_adminregion", "rejected_by_superadmin"] }
+          }
+          order_by: [{ updated_at: desc }]
+          limit: $limit
+        ) {
+          id
+          request_id
+          region_id
+          current_status
+          adminregion_review_note
+          superadmin_review_note
+          updated_at
+        }
+      }
+    `;
+
+  const variables = isRegionScoped ? { regionIds, limit } : { limit };
+  const data = await executeHasura(query, variables);
+  const rows = data.items || [];
+  const buckets = new Map();
+
+  for (const row of rows) {
+    const note = String(
+      row.current_status === STATUS.REJECTED_ADMINREGION
+        ? row.adminregion_review_note || ''
+        : row.superadmin_review_note || '',
+    )
+      .trim()
+      .toLowerCase();
+    if (!note) continue;
+    const key = note;
+    if (!buckets.has(key)) {
+      buckets.set(key, {
+        reason: note,
+        count: 0,
+        by_status: {
+          rejected_by_adminregion: 0,
+          rejected_by_superadmin: 0,
+        },
+      });
+    }
+    const bucket = buckets.get(key);
+    bucket.count += 1;
+    if (row.current_status === STATUS.REJECTED_ADMINREGION) bucket.by_status.rejected_by_adminregion += 1;
+    if (row.current_status === STATUS.REJECTED_SUPERADMIN) bucket.by_status.rejected_by_superadmin += 1;
+  }
+
+  const top_reasons = Array.from(buckets.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 20);
+
+  return {
+    total_rejected: rows.length,
+    distinct_reason_count: buckets.size,
+    top_reasons,
+  };
+}
+
 function pickObject(source, keys) {
   return keys.reduce((acc, key) => {
     if (source[key] !== undefined) {
@@ -477,5 +562,6 @@ module.exports = {
   listRequestsForValidator,
   updateRequestStatus,
   listRequestHistory,
+  listRejectReasonMetrics,
   applyValidationPayloadToAsset,
 };
