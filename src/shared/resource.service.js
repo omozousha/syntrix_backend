@@ -21,6 +21,18 @@ function buildWhereClause(config, query, auth) {
     });
   }
 
+  if (config.table === 'audit_logs') {
+    const requestId = String(query.request_id || '').trim();
+    if (requestId) {
+      andConditions.push({
+        _or: [
+          { before_data: { _contains: { request_id: requestId } } },
+          { after_data: { _contains: { request_id: requestId } } },
+        ],
+      });
+    }
+  }
+
   if (config.regionScoped && isRegionalRole(normalizedRole)) {
     if (!auth.regions.length) {
       throw createHttpError(403, 'This regional user does not have any assigned region');

@@ -90,7 +90,10 @@ async function submitValidationRequest(req, res, next) {
       entityType: 'validation_requests',
       entityId: request.id,
       beforeData: { status: STATUS.UNVALIDATED },
-      afterData: { status: STATUS.ONGOING },
+      afterData: {
+        request_id: request.request_id,
+        status: STATUS.ONGOING,
+      },
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'] || null,
     });
@@ -170,6 +173,23 @@ async function approveByAdminRegion(req, res, next) {
       afterStatus: STATUS.PENDING_ASYNC,
     });
 
+    await createAuditLog({
+      actorUserId,
+      actionName: 'validation_request_approved_by_adminregion',
+      entityType: 'validation_requests',
+      entityId: request.id,
+      beforeData: {
+        request_id: request.request_id,
+        status: STATUS.ONGOING,
+      },
+      afterData: {
+        request_id: request.request_id,
+        status: STATUS.PENDING_ASYNC,
+      },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] || null,
+    });
+
     return sendSuccess(res, updated, 'Approved by adminregion');
   } catch (error) {
     return next(error);
@@ -210,6 +230,24 @@ async function rejectByAdminRegion(req, res, next) {
       beforeStatus: STATUS.ONGOING,
       afterStatus: STATUS.REJECTED_ADMINREGION,
       note,
+    });
+
+    await createAuditLog({
+      actorUserId,
+      actionName: 'validation_request_rejected_by_adminregion',
+      entityType: 'validation_requests',
+      entityId: request.id,
+      beforeData: {
+        request_id: request.request_id,
+        status: STATUS.ONGOING,
+      },
+      afterData: {
+        request_id: request.request_id,
+        status: STATUS.REJECTED_ADMINREGION,
+        note,
+      },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] || null,
     });
 
     return sendSuccess(res, updated, 'Rejected by adminregion');
@@ -271,6 +309,23 @@ async function approveBySuperAdmin(req, res, next) {
       afterStatus: STATUS.VALIDATED,
     });
 
+    await createAuditLog({
+      actorUserId,
+      actionName: 'validation_request_approved_by_superadmin',
+      entityType: 'validation_requests',
+      entityId: request.id,
+      beforeData: {
+        request_id: request.request_id,
+        status: STATUS.PENDING_ASYNC,
+      },
+      afterData: {
+        request_id: request.request_id,
+        status: STATUS.VALIDATED,
+      },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] || null,
+    });
+
     return sendSuccess(res, updated, 'Approved by superadmin');
   } catch (error) {
     return next(error);
@@ -309,6 +364,24 @@ async function rejectBySuperAdmin(req, res, next) {
       beforeStatus: STATUS.PENDING_ASYNC,
       afterStatus: STATUS.REJECTED_SUPERADMIN,
       note,
+    });
+
+    await createAuditLog({
+      actorUserId,
+      actionName: 'validation_request_rejected_by_superadmin',
+      entityType: 'validation_requests',
+      entityId: request.id,
+      beforeData: {
+        request_id: request.request_id,
+        status: STATUS.PENDING_ASYNC,
+      },
+      afterData: {
+        request_id: request.request_id,
+        status: STATUS.REJECTED_SUPERADMIN,
+        note,
+      },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] || null,
     });
 
     return sendSuccess(res, updated, 'Rejected by superadmin');
