@@ -18,6 +18,7 @@ const ACTION = {
   APPROVED_SUPERADMIN: 'approved_by_superadmin',
   REJECTED_SUPERADMIN: 'rejected_by_superadmin',
   RESUBMIT_ADMINREGION: 'resubmitted_by_adminregion',
+  APPLIED_TO_ASSET: 'applied_to_asset',
 };
 
 function normalizeRole(role) {
@@ -266,6 +267,153 @@ async function listRequestHistory(requestId) {
   return data.items || [];
 }
 
+function pickObject(source, keys) {
+  return keys.reduce((acc, key) => {
+    if (source[key] !== undefined) {
+      acc[key] = source[key];
+    }
+    return acc;
+  }, {});
+}
+
+async function loadDeviceSnapshot(deviceId) {
+  const query = `
+    query LoadDeviceSnapshot($deviceId: uuid!) {
+      device: devices_by_pk(id: $deviceId) {
+        id
+        device_name
+        status
+        validation_status
+        validation_date
+        splitter_ratio
+        total_ports
+        used_ports
+        address
+        longitude
+        latitude
+        updated_at
+      }
+      ports: device_ports(
+        where: {
+          device_id: { _eq: $deviceId }
+          deleted_at: { _is_null: true }
+        }
+        order_by: [{ port_index: asc }]
+      ) {
+        id
+        port_index
+        port_label
+        status
+        customer_id
+        ont_device_id
+        notes
+        updated_at
+      }
+    }
+  `;
+  const data = await executeHasura(query, { deviceId });
+  return {
+    device: data.device || null,
+    ports: data.ports || [],
+  };
+}
+
+async function updateDeviceById(deviceId, changes) {
+  const mutation = `
+    mutation UpdateDeviceById($id: uuid!, $changes: devices_set_input!) {
+      item: update_devices_by_pk(pk_columns: { id: $id }, _set: $changes) {
+        id
+      }
+    }
+  `;
+  const data = await executeHasura(mutation, { id: deviceId, changes });
+  return data.item;
+}
+
+async function updateDevicePortById(portId, changes) {
+  const mutation = `
+    mutation UpdateDevicePortById($id: uuid!, $changes: device_ports_set_input!) {
+      item: update_device_ports_by_pk(pk_columns: { id: $id }, _set: $changes) {
+        id
+      }
+    }
+  `;
+  const data = await executeHasura(mutation, { id: portId, changes });
+  return data.item;
+}
+
+async function applyValidationPayloadToAsset({ request }) {
+  const payload = request.payload_snapshot || {};
+  const payloadDevice = payload.device || {};
+  const payloadPorts = Array.isArray(payload.device_ports) ? payload.device_ports : [];
+
+  const before = await loadDeviceSnapshot(request.entity_id);
+  if (!before.device) {
+    throw createHttpError(404, 'Target device for apply not found');
+  }
+
+  const currentPortMap = new Map(before.ports.map((port) => [String(port.id), port]));
+
+  const deviceChanges = pickObject(payloadDevice, [
+    'device_name',
+    'status',
+    'splitter_ratio',
+    'total_ports',
+    'used_ports',
+    'address',
+    'longitude',
+    'latitude',
+  ]);
+  deviceChanges.validation_status = STATUS.VALIDATED;
+  deviceChanges.validation_date = new Date().toISOString().slice(0, 10);
+
+  const changedPorts = [];
+  try {
+    if (Object.keys(deviceChanges).length > 0) {
+      await updateDeviceById(request.entity_id, deviceChanges);
+    }
+
+    for (const portPatch of payloadPorts) {
+      const portId = String(portPatch.id || '').trim();
+      if (!portId || !currentPortMap.has(portId)) continue;
+      const changes = pickObject(portPatch, ['port_label', 'status', 'customer_id', 'ont_device_id', 'notes']);
+      if (!Object.keys(changes).length) continue;
+      await updateDevicePortById(portId, changes);
+      changedPorts.push(portId);
+    }
+  } catch (error) {
+    // rollback best effort
+    try {
+      const rollbackDevice = pickObject(before.device, [
+        'device_name',
+        'status',
+        'validation_status',
+        'validation_date',
+        'splitter_ratio',
+        'total_ports',
+        'used_ports',
+        'address',
+        'longitude',
+        'latitude',
+      ]);
+      await updateDeviceById(request.entity_id, rollbackDevice);
+
+      for (const portId of changedPorts) {
+        const oldPort = currentPortMap.get(portId);
+        if (!oldPort) continue;
+        const rollbackPort = pickObject(oldPort, ['port_label', 'status', 'customer_id', 'ont_device_id', 'notes']);
+        await updateDevicePortById(portId, rollbackPort);
+      }
+    } catch (_rollbackError) {
+      // swallow rollback error; original error is more important
+    }
+    throw error;
+  }
+
+  const after = await loadDeviceSnapshot(request.entity_id);
+  return { before, after };
+}
+
 module.exports = {
   STATUS,
   ACTION,
@@ -279,5 +427,5 @@ module.exports = {
   listRequestsByQueue,
   updateRequestStatus,
   listRequestHistory,
+  applyValidationPayloadToAsset,
 };
-

@@ -14,6 +14,7 @@ const {
   listRequestsByQueue,
   updateRequestStatus,
   listRequestHistory,
+  applyValidationPayloadToAsset,
 } = require('./validation.service');
 
 function getRequestContext(req) {
@@ -217,6 +218,29 @@ async function approveBySuperAdmin(req, res, next) {
       throw createHttpError(409, 'Request is not in pending_async status');
     }
 
+    const applyResult = await applyValidationPayloadToAsset({ request });
+
+    await insertRequestLog({
+      requestId: request.id,
+      actionType: ACTION.APPLIED_TO_ASSET,
+      actorUserId,
+      actorRole,
+      beforeStatus: STATUS.PENDING_ASYNC,
+      afterStatus: STATUS.PENDING_ASYNC,
+      payloadPatch: request.payload_snapshot || {},
+    });
+
+    await createAuditLog({
+      actorUserId,
+      actionName: 'validation_request_applied_to_asset',
+      entityType: 'validation_requests',
+      entityId: request.id,
+      beforeData: applyResult.before,
+      afterData: applyResult.after,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] || null,
+    });
+
     const updated = await updateRequestStatus({
       requestId: request.id,
       nextStatus: STATUS.VALIDATED,
@@ -307,4 +331,3 @@ module.exports = {
   rejectBySuperAdmin,
   getValidationRequestHistory,
 };
-
