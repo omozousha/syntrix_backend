@@ -153,35 +153,49 @@ async function insertRequestLog({ requestId, actionType, actorUserId, actorRole,
 }
 
 async function listRequestsByQueue({ queue, regionIds }) {
-  const where = queue === 'superadmin'
-    ? 'current_status: { _eq: "pending_async" }'
-    : 'current_status: { _eq: "ongoing_validated" }';
-  const regionFilter = queue === 'superadmin'
-    ? ''
-    : 'region_id: { _in: $regionIds }';
-  const andFilter = regionFilter ? `, ${regionFilter}` : '';
+  const fields = `
+    id
+    request_id
+    entity_type
+    entity_id
+    region_id
+    submitted_by_user_id
+    current_status
+    payload_snapshot
+    evidence_attachments
+    checklist
+    finding_note
+    adminregion_review_note
+    superadmin_review_note
+    created_at
+    updated_at
+  `;
+
+  if (queue === 'superadmin') {
+    const query = `
+      query ListValidationRequestsSuperadmin {
+        items: validation_requests(
+          where: { current_status: { _eq: "pending_async" } }
+          order_by: [{ updated_at: desc }]
+        ) {
+          ${fields}
+        }
+      }
+    `;
+    const data = await executeHasura(query, {});
+    return data.items || [];
+  }
 
   const query = `
-    query ListValidationRequests($regionIds: [uuid!]) {
+    query ListValidationRequestsAdminregion($regionIds: [uuid!]) {
       items: validation_requests(
-        where: { ${where}${andFilter} }
+        where: {
+          current_status: { _eq: "ongoing_validated" }
+          region_id: { _in: $regionIds }
+        }
         order_by: [{ updated_at: desc }]
       ) {
-        id
-        request_id
-        entity_type
-        entity_id
-        region_id
-        submitted_by_user_id
-        current_status
-        payload_snapshot
-        evidence_attachments
-        checklist
-        finding_note
-        adminregion_review_note
-        superadmin_review_note
-        created_at
-        updated_at
+        ${fields}
       }
     }
   `;
@@ -397,7 +411,9 @@ async function applyValidationPayloadToAsset({ request }) {
     'longitude',
     'latitude',
   ]);
-  deviceChanges.validation_status = STATUS.VALIDATED;
+  // `validation_requests.current_status` uses `validated`,
+  // while `devices.validation_status` still uses legacy enum (`valid|warning|invalid|unvalidated`).
+  deviceChanges.validation_status = 'valid';
   deviceChanges.validation_date = new Date().toISOString().slice(0, 10);
 
   const changedPorts = [];
