@@ -189,6 +189,39 @@ async function listRequestsByQueue({ queue, regionIds }) {
   return data.items || [];
 }
 
+async function listRequestsForValidator({ submittedByUserId, entityId, regionIds }) {
+  const query = `
+    query ListValidationRequestsForValidator($submittedByUserId: uuid!, $entityId: uuid!, $regionIds: [uuid!]) {
+      items: validation_requests(
+        where: {
+          submitted_by_user_id: { _eq: $submittedByUserId }
+          entity_id: { _eq: $entityId }
+          region_id: { _in: $regionIds }
+        }
+        order_by: [{ updated_at: desc }]
+      ) {
+        id
+        request_id
+        entity_type
+        entity_id
+        region_id
+        submitted_by_user_id
+        current_status
+        payload_snapshot
+        evidence_attachments
+        checklist
+        finding_note
+        adminregion_review_note
+        superadmin_review_note
+        created_at
+        updated_at
+      }
+    }
+  `;
+  const data = await executeHasura(query, { submittedByUserId, entityId, regionIds });
+  return data.items || [];
+}
+
 async function updateRequestStatus({
   requestId,
   nextStatus,
@@ -425,6 +458,7 @@ module.exports = {
   createRequest,
   insertRequestLog,
   listRequestsByQueue,
+  listRequestsForValidator,
   updateRequestStatus,
   listRequestHistory,
   applyValidationPayloadToAsset,

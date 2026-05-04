@@ -12,6 +12,7 @@ const {
   createRequest,
   insertRequestLog,
   listRequestsByQueue,
+  listRequestsForValidator,
   updateRequestStatus,
   listRequestHistory,
   applyValidationPayloadToAsset,
@@ -102,7 +103,20 @@ async function submitValidationRequest(req, res, next) {
 
 async function listValidationRequests(req, res, next) {
   try {
-    const { actorRole, regionIds } = getRequestContext(req);
+    const { actorRole, regionIds, actorUserId } = getRequestContext(req);
+    if (isValidator(actorRole)) {
+      const entityId = String(req.query.entity_id || '').trim();
+      if (!entityId) {
+        throw createHttpError(400, 'entity_id is required for validator queue');
+      }
+      const items = await listRequestsForValidator({
+        submittedByUserId: actorUserId,
+        entityId,
+        regionIds,
+      });
+      return sendSuccess(res, items, 'Validation requests loaded');
+    }
+
     const queue = String(req.query.queue || '').trim();
     if (!['adminregion', 'superadmin'].includes(queue)) {
       throw createHttpError(400, 'queue must be adminregion or superadmin');
