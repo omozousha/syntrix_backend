@@ -193,7 +193,14 @@ async function main() {
 
     console.log('Validation workflow test PASSED');
   } catch (error) {
-    console.error('Validation workflow test FAILED:', error.message || error);
+    const message = error.message || String(error);
+    if (String(message).includes('401')) {
+      console.error(
+        'Validation workflow test FAILED: login 401. Pastikan akun validator/adminregion/superadmin untuk test sudah verified dan password env VALIDATION_TEST_* benar.',
+      );
+    } else {
+      console.error('Validation workflow test FAILED:', message);
+    }
     process.exitCode = 1;
   } finally {
     if (state.deviceId) {

@@ -11,6 +11,7 @@
     "smoke": "node scripts/smoke-test.js",
     "test:validation-state-machine": "node scripts/test-validation-state-machine.js",
     "test:validation-workflow": "node scripts/test-validation-workflow.js",
+    "test:validation-auth-regression": "node scripts/test-validation-auth-regression.js",
     "check:ci-env": "node scripts/check-ci-env.js",
     "test:pop-flow": "node scripts/test-pop-form-import.js"
   },
