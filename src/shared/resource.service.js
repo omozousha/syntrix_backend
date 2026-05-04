@@ -1,7 +1,9 @@
 const { executeHasura } = require('../config/hasura');
 const { createHttpError } = require('../utils/httpError');
+const { normalizeRoleName, isRegionalRole, isSuperAdminRole } = require('../utils/roles');
 
 function buildWhereClause(config, query, auth) {
+  const normalizedRole = normalizeRoleName(auth.role);
   const andConditions = [];
   const filterKeys = config.filterKeys || [];
 
@@ -19,7 +21,7 @@ function buildWhereClause(config, query, auth) {
     });
   }
 
-  if (config.regionScoped && auth.role === 'user_region') {
+  if (config.regionScoped && isRegionalRole(normalizedRole)) {
     if (!auth.regions.length) {
       throw createHttpError(403, 'This regional user does not have any assigned region');
     }
@@ -27,16 +29,16 @@ function buildWhereClause(config, query, auth) {
     andConditions.push({ region_id: { _in: auth.regions } });
   }
 
-  if (config.table === 'app_users' && auth.role !== 'admin') {
+  if (config.table === 'app_users' && !isSuperAdminRole(normalizedRole)) {
     andConditions.push({ id: { _eq: '__forbidden__' } });
   }
 
   if (config.softDelete) {
     const includeDeleted = String(query.include_deleted || '').toLowerCase() === 'true';
     const archivedOnly = String(query.archived_only || '').toLowerCase() === 'true';
-    if (archivedOnly && auth.role === 'admin') {
+    if (archivedOnly && isSuperAdminRole(normalizedRole)) {
       andConditions.push({ deleted_at: { _is_null: false } });
-    } else if (!includeDeleted || auth.role !== 'admin') {
+    } else if (!includeDeleted || !isSuperAdminRole(normalizedRole)) {
       andConditions.push({ deleted_at: { _is_null: true } });
     }
   }

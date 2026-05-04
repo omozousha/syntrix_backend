@@ -1,6 +1,7 @@
 const { sendSuccess } = require('../../utils/response');
 const { createHttpError } = require('../../utils/httpError');
 const { env } = require('../../config/env');
+const { normalizeRoleName, isSuperAdminRole } = require('../../utils/roles');
 const {
   loginWithPassword,
   signUpUser,
@@ -35,15 +36,16 @@ function validateRegistrationPayload(payload, { allowAdmin = true } = {}) {
     throw createHttpError(400, 'email, password, full_name, and role_name are required');
   }
 
-  if (!['admin', 'user_region', 'user_all_region'].includes(role_name)) {
-    throw createHttpError(400, 'role_name must be admin, user_region, or user_all_region');
+  const normalizedRole = normalizeRoleName(role_name);
+  if (!['superadmin', 'adminregion', 'validator'].includes(normalizedRole)) {
+    throw createHttpError(400, 'role_name must be superadmin/adminregion/validator (legacy: admin/user_all_region/user_region)');
   }
 
-  if (!allowAdmin && role_name === 'admin') {
+  if (!allowAdmin && normalizedRole === 'superadmin') {
     throw createHttpError(403, 'Creating another admin from this endpoint is not allowed');
   }
 
-  if (role_name === 'user_region' && !(default_region_id || region_ids.length)) {
+  if ((normalizedRole === 'adminregion' || normalizedRole === 'validator') && !(default_region_id || region_ids.length)) {
     throw createHttpError(400, 'Regional user must have at least one assigned region');
   }
 }
@@ -60,6 +62,15 @@ async function createSyntrixUser(payload) {
     require_email_verification = true,
     email_redirect_to,
   } = payload;
+  const normalizedRole = normalizeRoleName(role_name);
+  const storedRoleName =
+    normalizedRole === 'superadmin'
+      ? 'admin'
+      : normalizedRole === 'adminregion'
+      ? 'user_all_region'
+      : normalizedRole === 'validator'
+      ? 'user_region'
+      : role_name;
 
   const existingUser = await findAppUserByEmail(email);
 
@@ -90,7 +101,7 @@ async function createSyntrixUser(payload) {
     auth_user_id: authUserId,
     full_name,
     email,
-    role_name,
+    role_name: storedRoleName,
     default_region_id: default_region_id || null,
     is_active: !require_email_verification,
     metadata: {
@@ -228,7 +239,7 @@ async function updateMe(req, res, next) {
       changes.full_name = nextName;
     }
 
-    if (avatar_attachment_id !== undefined) {
+  if (avatar_attachment_id !== undefined) {
       if (avatar_attachment_id === null || avatar_attachment_id === '') {
         const nextMetadata = { ...(req.auth.appUser.metadata || {}) };
         delete nextMetadata.avatar_attachment_id;
@@ -244,7 +255,7 @@ async function updateMe(req, res, next) {
           throw createHttpError(400, 'Avatar attachment must be an image');
         }
         if (
-          req.auth.role !== 'admin'
+          !isSuperAdminRole(req.auth.role)
           && attachment.uploaded_by_user_id
           && attachment.uploaded_by_user_id !== req.auth.appUser.id
         ) {

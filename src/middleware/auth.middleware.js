@@ -1,6 +1,7 @@
 const { nhostAuthClient } = require('../config/nhost');
 const { executeHasura } = require('../config/hasura');
 const { createHttpError } = require('../utils/httpError');
+const { normalizeRoleName } = require('../utils/roles');
 
 function decodeJwtPayload(token) {
   const [, payload] = token.split('.');
@@ -157,6 +158,7 @@ async function authenticate(req, _res, next) {
       userId,
       appUser,
       role: appUser.role_name,
+      normalizedRole: normalizeRoleName(appUser.role_name),
       regions: appUser.user_region_scopes.map((scope) => scope.region_id),
     };
 
@@ -177,7 +179,9 @@ function requireRole(...allowedRoles) {
       return next(createHttpError(401, 'Authentication required'));
     }
 
-    if (!allowedRoles.includes(req.auth.role)) {
+    const allowedNormalizedRoles = new Set(allowedRoles.map((role) => normalizeRoleName(role)));
+    const requesterRole = req.auth.normalizedRole || normalizeRoleName(req.auth.role);
+    if (!allowedNormalizedRoles.has(requesterRole)) {
       return next(createHttpError(403, 'You do not have permission to access this resource'));
     }
 
