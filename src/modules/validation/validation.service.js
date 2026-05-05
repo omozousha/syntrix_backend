@@ -152,7 +152,7 @@ async function insertRequestLog({ requestId, actionType, actorUserId, actorRole,
   });
 }
 
-async function listRequestsByQueue({ queue, regionIds }) {
+async function listRequestsByQueue({ queue, regionIds, regionIdFilter = null }) {
   const fields = `
     id
     request_id
@@ -172,26 +172,38 @@ async function listRequestsByQueue({ queue, regionIds }) {
   `;
 
   if (queue === 'superadmin') {
+    const whereSuperadmin = regionIdFilter
+      ? `where: { current_status: { _eq: "pending_async" }, region_id: { _eq: $regionIdFilter } }`
+      : `where: { current_status: { _eq: "pending_async" } }`;
     const query = `
-      query ListValidationRequestsSuperadmin {
+      query ListValidationRequestsSuperadmin($regionIdFilter: uuid) {
         items: validation_requests(
-          where: { current_status: { _eq: "pending_async" } }
+          ${whereSuperadmin}
           order_by: [{ updated_at: desc }]
         ) {
           ${fields}
         }
       }
     `;
-    const data = await executeHasura(query, {});
+    const data = await executeHasura(query, { regionIdFilter });
     return data.items || [];
   }
 
+  const whereAdminregion = regionIdFilter
+    ? `
+        current_status: { _eq: "ongoing_validated" }
+        region_id: { _in: $regionIds }
+        _and: [{ region_id: { _eq: $regionIdFilter } }]
+      `
+    : `
+        current_status: { _eq: "ongoing_validated" }
+        region_id: { _in: $regionIds }
+      `;
   const query = `
-    query ListValidationRequestsAdminregion($regionIds: [uuid!]) {
+    query ListValidationRequestsAdminregion($regionIds: [uuid!], $regionIdFilter: uuid) {
       items: validation_requests(
         where: {
-          current_status: { _eq: "ongoing_validated" }
-          region_id: { _in: $regionIds }
+          ${whereAdminregion}
         }
         order_by: [{ updated_at: desc }]
       ) {
@@ -199,7 +211,7 @@ async function listRequestsByQueue({ queue, regionIds }) {
       }
     }
   `;
-  const data = await executeHasura(query, { regionIds });
+  const data = await executeHasura(query, { regionIds, regionIdFilter });
   return data.items || [];
 }
 
@@ -399,8 +411,8 @@ async function listRejectReasonMetrics({ regionIds = null, limit = 1000 } = {}) 
   };
 }
 
-async function listNotificationInbox({ queue, regionIds, actorUserId, limit = 10 }) {
-  const rows = await listRequestsByQueue({ queue, regionIds });
+async function listNotificationInbox({ queue, regionIds, actorUserId, limit = 10, urgentAfterHours = 8, regionIdFilter = null }) {
+  const rows = await listRequestsByQueue({ queue, regionIds, regionIdFilter });
   const capped = rows.slice(0, Math.max(1, Math.min(limit, 50)));
   if (!capped.length) {
     return {
@@ -429,10 +441,15 @@ async function listNotificationInbox({ queue, regionIds, actorUserId, limit = 10
   const items = capped.map((row) => {
     const readAt = readMap.get(String(row.id)) || null;
     const unread = !readAt || new Date(row.updated_at || 0).getTime() > new Date(readAt).getTime();
+    const ageMs = Date.now() - new Date(row.updated_at || row.created_at || 0).getTime();
+    const ageMinutes = Number.isFinite(ageMs) && ageMs > 0 ? Math.floor(ageMs / 60000) : 0;
+    const urgent = ageMinutes >= Math.max(1, Number(urgentAfterHours || 8)) * 60;
     return {
       ...row,
       read_at: readAt,
       unread,
+      age_minutes: ageMinutes,
+      urgent,
     };
   });
 
@@ -469,8 +486,8 @@ async function markNotificationAsRead({ requestId, actorUserId }) {
   return data.item;
 }
 
-async function markAllNotificationsAsRead({ queue, regionIds, actorUserId }) {
-  const rows = await listRequestsByQueue({ queue, regionIds });
+async function markAllNotificationsAsRead({ queue, regionIds, actorUserId, regionIdFilter = null }) {
+  const rows = await listRequestsByQueue({ queue, regionIds, regionIdFilter });
   const items = rows.slice(0, 200);
   if (!items.length) return { affected_rows: 0 };
 

@@ -470,11 +470,17 @@ async function listValidationNotifications(req, res, next) {
     const queue = isSuperAdmin(actorRole) ? 'superadmin' : 'adminregion';
     const limit = Number(req.query.limit || 10);
     const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 50)) : 10;
+    const regionIdFilter = String(req.query.region_id || '').trim() || null;
+    if (regionIdFilter && !isSuperAdmin(actorRole) && !regionIds.includes(regionIdFilter)) {
+      throw createHttpError(403, 'Requested region filter is outside your scope');
+    }
     const inbox = await listNotificationInbox({
       queue,
       regionIds,
       actorUserId,
       limit: safeLimit,
+      urgentAfterHours: env.validationNotificationUrgentAfterHours,
+      regionIdFilter,
     });
 
     return sendSuccess(res, inbox, 'Validation notifications loaded');
@@ -516,10 +522,15 @@ async function markAllValidationNotificationsRead(req, res, next) {
     }
 
     const queue = isSuperAdmin(actorRole) ? 'superadmin' : 'adminregion';
+    const regionIdFilter = String(req.body?.region_id || '').trim() || null;
+    if (regionIdFilter && !isSuperAdmin(actorRole) && !regionIds.includes(regionIdFilter)) {
+      throw createHttpError(403, 'Requested region filter is outside your scope');
+    }
     const result = await markAllNotificationsAsRead({
       queue,
       regionIds,
       actorUserId,
+      regionIdFilter,
     });
     return sendSuccess(res, result, 'All notifications marked as read');
   } catch (error) {

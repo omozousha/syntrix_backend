@@ -68,6 +68,7 @@ const env = {
   bootstrapAdminSecret: process.env.BOOTSTRAP_ADMIN_SECRET || '',
   validationWorkflowEnabled: toBoolean(process.env.VALIDATION_WORKFLOW_ENABLED, true),
   validationWorkflowAllowedRegionIds: toCsvList(process.env.VALIDATION_WORKFLOW_ALLOWED_REGION_IDS, ''),
+  validationNotificationUrgentAfterHours: toNumber(process.env.VALIDATION_NOTIFICATION_URGENT_AFTER_HOURS, 8),
 };
 
 module.exports = { env };
