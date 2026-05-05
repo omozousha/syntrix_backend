@@ -172,46 +172,62 @@ async function listRequestsByQueue({ queue, regionIds, regionIdFilter = null }) 
   `;
 
   if (queue === 'superadmin') {
-    const whereSuperadmin = regionIdFilter
-      ? `where: { current_status: { _eq: "pending_async" }, region_id: { _eq: $regionIdFilter } }`
-      : `where: { current_status: { _eq: "pending_async" } }`;
-    const query = `
-      query ListValidationRequestsSuperadmin($regionIdFilter: uuid) {
+    const query = regionIdFilter
+      ? `
+        query ListValidationRequestsSuperadmin($regionIdFilter: uuid!) {
+          items: validation_requests(
+            where: { current_status: { _eq: "pending_async" }, region_id: { _eq: $regionIdFilter } }
+            order_by: [{ updated_at: desc }]
+          ) {
+            ${fields}
+          }
+        }
+      `
+      : `
+        query ListValidationRequestsSuperadmin {
+          items: validation_requests(
+            where: { current_status: { _eq: "pending_async" } }
+            order_by: [{ updated_at: desc }]
+          ) {
+            ${fields}
+          }
+        }
+      `;
+    const variables = regionIdFilter ? { regionIdFilter } : {};
+    const data = await executeHasura(query, variables);
+    return data.items || [];
+  }
+
+  const query = regionIdFilter
+    ? `
+      query ListValidationRequestsAdminregion($regionIds: [uuid!], $regionIdFilter: uuid!) {
         items: validation_requests(
-          ${whereSuperadmin}
+          where: {
+            current_status: { _eq: "ongoing_validated" }
+            region_id: { _in: $regionIds }
+            _and: [{ region_id: { _eq: $regionIdFilter } }]
+          }
+          order_by: [{ updated_at: desc }]
+        ) {
+          ${fields}
+        }
+      }
+    `
+    : `
+      query ListValidationRequestsAdminregion($regionIds: [uuid!]) {
+        items: validation_requests(
+          where: {
+            current_status: { _eq: "ongoing_validated" }
+            region_id: { _in: $regionIds }
+          }
           order_by: [{ updated_at: desc }]
         ) {
           ${fields}
         }
       }
     `;
-    const data = await executeHasura(query, { regionIdFilter });
-    return data.items || [];
-  }
-
-  const whereAdminregion = regionIdFilter
-    ? `
-        current_status: { _eq: "ongoing_validated" }
-        region_id: { _in: $regionIds }
-        _and: [{ region_id: { _eq: $regionIdFilter } }]
-      `
-    : `
-        current_status: { _eq: "ongoing_validated" }
-        region_id: { _in: $regionIds }
-      `;
-  const query = `
-    query ListValidationRequestsAdminregion($regionIds: [uuid!], $regionIdFilter: uuid) {
-      items: validation_requests(
-        where: {
-          ${whereAdminregion}
-        }
-        order_by: [{ updated_at: desc }]
-      ) {
-        ${fields}
-      }
-    }
-  `;
-  const data = await executeHasura(query, { regionIds, regionIdFilter });
+  const variables = regionIdFilter ? { regionIds, regionIdFilter } : { regionIds };
+  const data = await executeHasura(query, variables);
   return data.items || [];
 }
 
