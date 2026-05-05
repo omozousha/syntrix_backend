@@ -517,6 +517,46 @@ async function markAllNotificationsAsRead({ queue, regionIds, actorUserId, regio
   };
 }
 
+async function getNotificationDigest({
+  queue,
+  regionIds,
+  actorUserId,
+  window = 'daily',
+  urgentAfterHours = 8,
+  regionIdFilter = null,
+}) {
+  const windowHours = window === 'weekly' ? 24 * 7 : 24;
+  const since = new Date(Date.now() - windowHours * 60 * 60 * 1000);
+  const inbox = await listNotificationInbox({
+    queue,
+    regionIds,
+    actorUserId,
+    limit: 200,
+    urgentAfterHours,
+    regionIdFilter,
+  });
+  const items = inbox.items || [];
+  const sinceMs = since.getTime();
+  const newInWindow = items.filter((item) => {
+    const createdMs = new Date(item.created_at || 0).getTime();
+    return Number.isFinite(createdMs) && createdMs >= sinceMs;
+  }).length;
+  const updatedInWindow = items.filter((item) => {
+    const updatedMs = new Date(item.updated_at || 0).getTime();
+    return Number.isFinite(updatedMs) && updatedMs >= sinceMs;
+  }).length;
+
+  return {
+    window,
+    since: since.toISOString(),
+    pending_total: items.length,
+    unread_total: inbox.unread_count || 0,
+    urgent_total: items.filter((item) => item.urgent).length,
+    new_in_window: newInWindow,
+    updated_in_window: updatedInWindow,
+  };
+}
+
 function pickObject(source, keys) {
   return keys.reduce((acc, key) => {
     if (source[key] !== undefined) {
@@ -684,5 +724,6 @@ module.exports = {
   listNotificationInbox,
   markNotificationAsRead,
   markAllNotificationsAsRead,
+  getNotificationDigest,
   applyValidationPayloadToAsset,
 };

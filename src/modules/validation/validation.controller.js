@@ -20,6 +20,7 @@ const {
   listNotificationInbox,
   markNotificationAsRead,
   markAllNotificationsAsRead,
+  getNotificationDigest,
   applyValidationPayloadToAsset,
 } = require('./validation.service');
 
@@ -489,6 +490,38 @@ async function listValidationNotifications(req, res, next) {
   }
 }
 
+async function getValidationNotificationDigest(req, res, next) {
+  try {
+    assertValidationWorkflowEnabled();
+    const { actorRole, regionIds, actorUserId } = getRequestContext(req);
+    if (!isAdminRegion(actorRole) && !isSuperAdmin(actorRole)) {
+      throw createHttpError(403, 'Only adminregion/superadmin can access notifications');
+    }
+
+    const queue = isSuperAdmin(actorRole) ? 'superadmin' : 'adminregion';
+    const window = String(req.query.window || 'daily').trim().toLowerCase();
+    if (!['daily', 'weekly'].includes(window)) {
+      throw createHttpError(400, 'window must be daily or weekly');
+    }
+    const regionIdFilter = String(req.query.region_id || '').trim() || null;
+    if (regionIdFilter && !isSuperAdmin(actorRole) && !regionIds.includes(regionIdFilter)) {
+      throw createHttpError(403, 'Requested region filter is outside your scope');
+    }
+
+    const report = await getNotificationDigest({
+      queue,
+      regionIds,
+      actorUserId,
+      window,
+      urgentAfterHours: env.validationNotificationUrgentAfterHours,
+      regionIdFilter,
+    });
+    return sendSuccess(res, report, 'Validation notification digest loaded');
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function markValidationNotificationRead(req, res, next) {
   try {
     assertValidationWorkflowEnabled();
@@ -548,6 +581,7 @@ module.exports = {
   getValidationRequestHistory,
   getRejectReasonMetrics,
   listValidationNotifications,
+  getValidationNotificationDigest,
   markValidationNotificationRead,
   markAllValidationNotificationsRead,
 };
