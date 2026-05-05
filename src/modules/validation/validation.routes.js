@@ -9,6 +9,9 @@ const {
   rejectBySuperAdmin,
   getValidationRequestHistory,
   getRejectReasonMetrics,
+  listValidationNotifications,
+  markValidationNotificationRead,
+  markAllValidationNotificationsRead,
 } = require('./validation.controller');
 
 const validationRouter = express.Router();
@@ -17,6 +20,9 @@ validationRouter.use(authenticate);
 
 validationRouter.post('/', submitValidationRequest);
 validationRouter.get('/', listValidationRequests);
+validationRouter.get('/notifications', listValidationNotifications);
+validationRouter.post('/notifications/read-all', markAllValidationNotificationsRead);
+validationRouter.post('/notifications/:id/read', markValidationNotificationRead);
 validationRouter.get('/metrics/reject-reasons', getRejectReasonMetrics);
 validationRouter.get('/:id/history', getValidationRequestHistory);
 

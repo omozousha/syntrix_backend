@@ -399,6 +399,107 @@ async function listRejectReasonMetrics({ regionIds = null, limit = 1000 } = {}) 
   };
 }
 
+async function listNotificationInbox({ queue, regionIds, actorUserId, limit = 10 }) {
+  const rows = await listRequestsByQueue({ queue, regionIds });
+  const capped = rows.slice(0, Math.max(1, Math.min(limit, 50)));
+  if (!capped.length) {
+    return {
+      unread_count: 0,
+      items: [],
+    };
+  }
+
+  const requestIds = capped.map((row) => row.id);
+  const query = `
+    query LoadValidationRequestReads($actorUserId: uuid!, $requestIds: [uuid!]!) {
+      items: validation_request_reads(
+        where: {
+          user_id: { _eq: $actorUserId }
+          request_id: { _in: $requestIds }
+        }
+      ) {
+        request_id
+        read_at
+      }
+    }
+  `;
+  const data = await executeHasura(query, { actorUserId, requestIds });
+  const readMap = new Map((data.items || []).map((item) => [String(item.request_id), item.read_at]));
+
+  const items = capped.map((row) => {
+    const readAt = readMap.get(String(row.id)) || null;
+    const unread = !readAt || new Date(row.updated_at || 0).getTime() > new Date(readAt).getTime();
+    return {
+      ...row,
+      read_at: readAt,
+      unread,
+    };
+  });
+
+  return {
+    unread_count: items.filter((item) => item.unread).length,
+    items,
+  };
+}
+
+async function markNotificationAsRead({ requestId, actorUserId }) {
+  const mutation = `
+    mutation UpsertValidationRequestRead($object: validation_request_reads_insert_input!) {
+      item: insert_validation_request_reads_one(
+        object: $object
+        on_conflict: {
+          constraint: uq_validation_request_reads_request_user
+          update_columns: [read_at, updated_at]
+        }
+      ) {
+        id
+        request_id
+        user_id
+        read_at
+      }
+    }
+  `;
+  const data = await executeHasura(mutation, {
+    object: {
+      request_id: requestId,
+      user_id: actorUserId,
+      read_at: new Date().toISOString(),
+    },
+  });
+  return data.item;
+}
+
+async function markAllNotificationsAsRead({ queue, regionIds, actorUserId }) {
+  const rows = await listRequestsByQueue({ queue, regionIds });
+  const items = rows.slice(0, 200);
+  if (!items.length) return { affected_rows: 0 };
+
+  const now = new Date().toISOString();
+  const objects = items.map((item) => ({
+    request_id: item.id,
+    user_id: actorUserId,
+    read_at: now,
+  }));
+
+  const mutation = `
+    mutation UpsertValidationRequestReads($objects: [validation_request_reads_insert_input!]!) {
+      items: insert_validation_request_reads(
+        objects: $objects
+        on_conflict: {
+          constraint: uq_validation_request_reads_request_user
+          update_columns: [read_at, updated_at]
+        }
+      ) {
+        affected_rows
+      }
+    }
+  `;
+  const data = await executeHasura(mutation, { objects });
+  return {
+    affected_rows: data.items?.affected_rows || 0,
+  };
+}
+
 function pickObject(source, keys) {
   return keys.reduce((acc, key) => {
     if (source[key] !== undefined) {
@@ -563,5 +664,8 @@ module.exports = {
   updateRequestStatus,
   listRequestHistory,
   listRejectReasonMetrics,
+  listNotificationInbox,
+  markNotificationAsRead,
+  markAllNotificationsAsRead,
   applyValidationPayloadToAsset,
 };

@@ -17,6 +17,9 @@ const {
   updateRequestStatus,
   listRequestHistory,
   listRejectReasonMetrics,
+  listNotificationInbox,
+  markNotificationAsRead,
+  markAllNotificationsAsRead,
   applyValidationPayloadToAsset,
 } = require('./validation.service');
 
@@ -456,6 +459,74 @@ async function getRejectReasonMetrics(req, res, next) {
   }
 }
 
+async function listValidationNotifications(req, res, next) {
+  try {
+    assertValidationWorkflowEnabled();
+    const { actorRole, regionIds, actorUserId } = getRequestContext(req);
+    if (!isAdminRegion(actorRole) && !isSuperAdmin(actorRole)) {
+      throw createHttpError(403, 'Only adminregion/superadmin can access notifications');
+    }
+
+    const queue = isSuperAdmin(actorRole) ? 'superadmin' : 'adminregion';
+    const limit = Number(req.query.limit || 10);
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 50)) : 10;
+    const inbox = await listNotificationInbox({
+      queue,
+      regionIds,
+      actorUserId,
+      limit: safeLimit,
+    });
+
+    return sendSuccess(res, inbox, 'Validation notifications loaded');
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function markValidationNotificationRead(req, res, next) {
+  try {
+    assertValidationWorkflowEnabled();
+    const { actorRole, actorUserId } = getRequestContext(req);
+    if (!isAdminRegion(actorRole) && !isSuperAdmin(actorRole)) {
+      throw createHttpError(403, 'Only adminregion/superadmin can update notifications');
+    }
+
+    const request = await loadRequestById(req.params.id);
+    if (!request) throw createHttpError(404, 'Validation request not found');
+    if (!isSuperAdmin(actorRole)) {
+      assertHasRegionAccess(req.auth, request.region_id);
+    }
+
+    const item = await markNotificationAsRead({
+      requestId: request.id,
+      actorUserId,
+    });
+    return sendSuccess(res, item, 'Notification marked as read');
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function markAllValidationNotificationsRead(req, res, next) {
+  try {
+    assertValidationWorkflowEnabled();
+    const { actorRole, actorUserId, regionIds } = getRequestContext(req);
+    if (!isAdminRegion(actorRole) && !isSuperAdmin(actorRole)) {
+      throw createHttpError(403, 'Only adminregion/superadmin can update notifications');
+    }
+
+    const queue = isSuperAdmin(actorRole) ? 'superadmin' : 'adminregion';
+    const result = await markAllNotificationsAsRead({
+      queue,
+      regionIds,
+      actorUserId,
+    });
+    return sendSuccess(res, result, 'All notifications marked as read');
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   submitValidationRequest,
   listValidationRequests,
@@ -465,4 +536,7 @@ module.exports = {
   rejectBySuperAdmin,
   getValidationRequestHistory,
   getRejectReasonMetrics,
+  listValidationNotifications,
+  markValidationNotificationRead,
+  markAllValidationNotificationsRead,
 };
