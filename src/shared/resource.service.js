@@ -2,6 +2,10 @@ const { executeHasura } = require('../config/hasura');
 const { createHttpError } = require('../utils/httpError');
 const { normalizeRoleName, isRegionalRole, isSuperAdminRole } = require('../utils/roles');
 
+function isUuidLike(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
+}
+
 function buildWhereClause(config, query, auth) {
   const normalizedRole = normalizeRoleName(auth.role);
   const andConditions = [];
@@ -87,6 +91,49 @@ async function listResources(config, options) {
 }
 
 async function getResourceById(config, id) {
+  if (config.table === 'attachments') {
+    const identifier = String(id || '').trim();
+    if (!identifier) return null;
+
+    if (isUuidLike(identifier)) {
+      const queryByPk = `
+        query GetAttachmentByPk($id: uuid!) {
+          item: attachments_by_pk(id: $id) {
+            ${config.listFields.join('\n        ')}
+          }
+        }
+      `;
+      const dataByPk = await executeHasura(queryByPk, { id: identifier });
+      if (dataByPk.item) return dataByPk.item;
+
+      const queryByStorageId = `
+        query GetAttachmentByStorageId($storageId: uuid!) {
+          items: attachments(
+            where: { storage_file_id: { _eq: $storageId } }
+            limit: 1
+          ) {
+            ${config.listFields.join('\n        ')}
+          }
+        }
+      `;
+      const dataByStorage = await executeHasura(queryByStorageId, { storageId: identifier });
+      if (dataByStorage.items?.[0]) return dataByStorage.items[0];
+    }
+
+    const queryByCode = `
+      query GetAttachmentByCode($attachmentCode: String!) {
+        items: attachments(
+          where: { attachment_id: { _eq: $attachmentCode } }
+          limit: 1
+        ) {
+          ${config.listFields.join('\n        ')}
+        }
+      }
+    `;
+    const dataByCode = await executeHasura(queryByCode, { attachmentCode: identifier });
+    return dataByCode.items?.[0] || null;
+  }
+
   const query = `
     query GetResource($id: uuid!) {
       item: ${config.table}_by_pk(id: $id) {
