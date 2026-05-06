@@ -617,10 +617,46 @@ resourceRouter.get('/exports/pops.xlsx', authenticate, requireRole('admin', 'use
   }
 });
 
+function isUuidLike(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
+}
+
 async function loadAttachmentById(id) {
-  const query = `
-    query LoadAttachmentById($id: uuid!) {
-      item: attachments_by_pk(id: $id) {
+  const identifier = String(id || '').trim();
+  if (!identifier) return null;
+
+  if (isUuidLike(identifier)) {
+    const queryByPk = `
+      query LoadAttachmentByPk($id: uuid!) {
+        item: attachments_by_pk(id: $id) {
+          id
+          attachment_id
+          storage_file_id
+          original_name
+          mime_type
+          size_bytes
+          entity_type
+          entity_id
+          uploaded_by_user_id
+          created_at
+        }
+      }
+    `;
+    const dataByPk = await executeHasura(queryByPk, { id: identifier });
+    if (dataByPk.item) return dataByPk.item;
+  }
+
+  const queryByIdentifier = `
+    query LoadAttachmentByIdentifier($identifier: String!) {
+      items: attachments(
+        where: {
+          _or: [
+            { attachment_id: { _eq: $identifier } }
+            { storage_file_id: { _eq: $identifier } }
+          ]
+        }
+        limit: 1
+      ) {
         id
         attachment_id
         storage_file_id
@@ -634,9 +670,8 @@ async function loadAttachmentById(id) {
       }
     }
   `;
-
-  const data = await executeHasura(query, { id });
-  return data.item;
+  const dataByIdentifier = await executeHasura(queryByIdentifier, { identifier });
+  return dataByIdentifier.items?.[0] || null;
 }
 
 function bindResource(resourceName, config) {
