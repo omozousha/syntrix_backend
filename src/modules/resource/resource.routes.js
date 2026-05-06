@@ -635,6 +635,7 @@ async function loadAttachmentById(id) {
           original_name
           mime_type
           size_bytes
+          metadata
           entity_type
           entity_id
           uploaded_by_user_id
@@ -657,6 +658,7 @@ async function loadAttachmentById(id) {
           original_name
           mime_type
           size_bytes
+          metadata
           entity_type
           entity_id
           uploaded_by_user_id
@@ -680,6 +682,7 @@ async function loadAttachmentById(id) {
         original_name
         mime_type
         size_bytes
+        metadata
         entity_type
         entity_id
         uploaded_by_user_id
@@ -689,6 +692,50 @@ async function loadAttachmentById(id) {
   `;
   const dataByCode = await executeHasura(queryByAttachmentCode, { attachmentCode: identifier });
   return dataByCode.items?.[0] || null;
+}
+
+function buildAttachmentStorageCandidates(attachment) {
+  const candidates = [];
+  const seen = new Set();
+  const push = (value) => {
+    const key = String(value || '').trim();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    candidates.push(key);
+  };
+
+  push(attachment?.storage_file_id);
+  push(attachment?.metadata?.upload_response?.id);
+  push(attachment?.metadata?.upload_response?.fileMetadata?.id);
+  push(attachment?.metadata?.storage_file_id);
+  return candidates;
+}
+
+async function fetchAttachmentFromStorage(attachment, token) {
+  const candidates = buildAttachmentStorageCandidates(attachment);
+  if (!candidates.length) {
+    throw createHttpError(400, 'Attachment has no linked storage file');
+  }
+
+  let lastResponse = null;
+  for (const storageId of candidates) {
+    const response = await nhostStorageClient.get(`/files/${storageId}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      responseType: 'arraybuffer',
+      validateStatus: (status) => status < 500,
+    });
+    if (response.status < 400) {
+      return { response, resolvedStorageId: storageId };
+    }
+    lastResponse = response;
+  }
+
+  if (lastResponse?.status === 404) {
+    throw createHttpError(404, 'Storage file not found (attachment exists but file missing in storage)');
+  }
+  throw createHttpError(lastResponse?.status || 502, 'Failed to fetch file from storage', lastResponse?.data);
 }
 
 function bindResource(resourceName, config) {
@@ -1835,28 +1882,11 @@ resourceRouter.get('/attachments/:id/preview', authenticate, requireRole('admin'
       throw createHttpError(404, 'Attachment not found');
     }
 
-    if (!attachment.storage_file_id) {
-      throw createHttpError(400, 'Attachment has no linked storage file');
-    }
-
-    const response = await nhostStorageClient.get(`/files/${attachment.storage_file_id}`, {
-      headers: {
-        Authorization: `Bearer ${req.auth.token}`,
-      },
-      responseType: 'arraybuffer',
-      validateStatus: (status) => status < 500,
-    });
-
-    if (response.status === 404) {
-      throw createHttpError(404, 'Storage file not found');
-    }
-
-    if (response.status >= 400) {
-      throw createHttpError(response.status, 'Failed to fetch file from storage', response.data);
-    }
+    const { response, resolvedStorageId } = await fetchAttachmentFromStorage(attachment, req.auth.token);
 
     res.setHeader('Content-Type', attachment.mime_type || 'application/octet-stream');
     res.setHeader('Content-Length', String(response.data.byteLength));
+    res.setHeader('X-Resolved-Storage-File-Id', resolvedStorageId);
     res.setHeader('Content-Disposition', `inline; filename="${attachment.original_name || 'attachment'}"`);
     return res.status(200).send(Buffer.from(response.data));
   } catch (error) {
@@ -1910,28 +1940,11 @@ resourceRouter.get('/attachments/:id/download', authenticate, requireRole('admin
       throw createHttpError(404, 'Attachment not found');
     }
 
-    if (!attachment.storage_file_id) {
-      throw createHttpError(400, 'Attachment has no linked storage file');
-    }
-
-    const response = await nhostStorageClient.get(`/files/${attachment.storage_file_id}`, {
-      headers: {
-        Authorization: `Bearer ${req.auth.token}`,
-      },
-      responseType: 'arraybuffer',
-      validateStatus: (status) => status < 500,
-    });
-
-    if (response.status === 404) {
-      throw createHttpError(404, 'Storage file not found');
-    }
-
-    if (response.status >= 400) {
-      throw createHttpError(response.status, 'Failed to download file from storage', response.data);
-    }
+    const { response, resolvedStorageId } = await fetchAttachmentFromStorage(attachment, req.auth.token);
 
     res.setHeader('Content-Type', attachment.mime_type || 'application/octet-stream');
     res.setHeader('Content-Length', String(response.data.byteLength));
+    res.setHeader('X-Resolved-Storage-File-Id', resolvedStorageId);
     res.setHeader('Content-Disposition', `attachment; filename="${attachment.original_name || 'attachment'}"`);
     return res.status(200).send(Buffer.from(response.data));
   } catch (error) {
