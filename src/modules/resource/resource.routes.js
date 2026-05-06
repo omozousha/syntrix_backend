@@ -1853,6 +1853,39 @@ resourceRouter.get('/attachments/:id/preview', authenticate, requireRole('admin'
   }
 });
 
+resourceRouter.get('/attachments/resolve/:identifier', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const identifier = String(req.params.identifier || '').trim();
+    if (!identifier) {
+      throw createHttpError(400, 'Attachment identifier is required');
+    }
+    const attachment = await loadAttachmentById(identifier);
+    if (!attachment) {
+      throw createHttpError(404, 'Attachment not found');
+    }
+    return sendSuccess(
+      res,
+      {
+        id: attachment.id,
+        attachment_id: attachment.attachment_id,
+        storage_file_id: attachment.storage_file_id,
+        original_name: attachment.original_name,
+        mime_type: attachment.mime_type,
+        size_bytes: attachment.size_bytes,
+      },
+      'Attachment resolved successfully',
+    );
+  } catch (error) {
+    return next(
+      createHttpError(
+        error.statusCode || 500,
+        error.message || 'Attachment resolve failed',
+        error.details,
+      ),
+    );
+  }
+});
+
 resourceRouter.get('/attachments/:id/download', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
   try {
     const attachment = await loadAttachmentById(req.params.id);
