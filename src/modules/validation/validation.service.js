@@ -348,6 +348,41 @@ async function listRequestsForValidator({ submittedByUserId, entityId, regionIds
   return data.items || [];
 }
 
+async function listRequestsByEntity({ entityId, role, regionIds }) {
+  const whereParts = ['entity_id: { _eq: $entityId }'];
+  if (role !== 'superadmin') {
+    whereParts.push('region_id: { _in: $regionIds }');
+  }
+
+  const query = `
+    query ListValidationRequestsByEntity($entityId: uuid!, $regionIds: [uuid!]) {
+      items: validation_requests(
+        where: { ${whereParts.join('\n')} }
+        order_by: [{ updated_at: desc }]
+      ) {
+        id
+        request_id
+        entity_type
+        entity_id
+        region_id
+        submitted_by_user_id
+        current_status
+        payload_snapshot
+        evidence_attachments
+        checklist
+        finding_note
+        adminregion_review_note
+        superadmin_review_note
+        created_at
+        updated_at
+      }
+    }
+  `;
+  const variables = role === 'superadmin' ? { entityId } : { entityId, regionIds };
+  const data = await executeHasura(query, variables);
+  return data.items || [];
+}
+
 async function updateRequestStatus({
   requestId,
   nextStatus,
@@ -820,6 +855,7 @@ module.exports = {
   insertRequestLog,
   listRequestsByQueue,
   listRequestsForValidator,
+  listRequestsByEntity,
   updateRequestStatus,
   listRequestHistory,
   listRejectReasonMetrics,

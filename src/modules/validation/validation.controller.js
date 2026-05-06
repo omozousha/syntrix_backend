@@ -16,6 +16,7 @@ const {
   insertRequestLog,
   listRequestsByQueue,
   listRequestsForValidator,
+  listRequestsByEntity,
   updateRequestStatus,
   listRequestHistory,
   listRejectReasonMetrics,
@@ -163,14 +164,23 @@ async function listValidationRequests(req, res, next) {
   try {
     assertValidationWorkflowEnabled();
     const { actorRole, regionIds, actorUserId } = getRequestContext(req);
+    const entityId = String(req.query.entity_id || '').trim();
     if (isValidator(actorRole)) {
-      const entityId = String(req.query.entity_id || '').trim();
       if (!entityId) {
         throw createHttpError(400, 'entity_id is required for validator queue');
       }
       const items = await listRequestsForValidator({
         submittedByUserId: actorUserId,
         entityId,
+        regionIds,
+      });
+      return sendSuccess(res, items, 'Validation requests loaded');
+    }
+
+    if (entityId) {
+      const items = await listRequestsByEntity({
+        entityId,
+        role: actorRole,
         regionIds,
       });
       return sendSuccess(res, items, 'Validation requests loaded');
