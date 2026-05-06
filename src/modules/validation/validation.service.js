@@ -86,6 +86,44 @@ async function loadRequestById(requestId) {
   return data.item || null;
 }
 
+async function loadActiveRequestByEntity(entityId) {
+  const query = `
+    query LoadActiveValidationRequestByEntity($entityId: uuid!) {
+      items: validation_requests(
+        where: {
+          entity_type: { _eq: "device" }
+          entity_id: { _eq: $entityId }
+          current_status: { _in: ["ongoing_validated", "pending_async"] }
+        }
+        order_by: [{ updated_at: desc }]
+        limit: 1
+      ) {
+        id
+        request_id
+        entity_type
+        entity_id
+        region_id
+        submitted_by_user_id
+        current_status
+        payload_snapshot
+        evidence_attachments
+        checklist
+        finding_note
+        adminregion_review_note
+        superadmin_review_note
+        approved_by_user_id
+        approved_at
+        rejected_by_user_id
+        rejected_at
+        created_at
+        updated_at
+      }
+    }
+  `;
+  const data = await executeHasura(query, { entityId });
+  return data.items?.[0] || null;
+}
+
 async function createRequest({
   entityId,
   regionId,
@@ -128,6 +166,52 @@ async function createRequest({
     },
   });
   return data.item;
+}
+
+async function resubmitActiveRequest({
+  requestId,
+  submittedByUserId,
+  payloadSnapshot = {},
+  evidenceAttachments = [],
+  checklist = {},
+  findingNote = null,
+}) {
+  const mutation = `
+    mutation ResubmitActiveValidationRequest($id: uuid!, $set: validation_requests_set_input!) {
+      item: update_validation_requests_by_pk(pk_columns: { id: $id }, _set: $set) {
+        id
+        request_id
+        entity_type
+        entity_id
+        region_id
+        submitted_by_user_id
+        current_status
+        payload_snapshot
+        evidence_attachments
+        checklist
+        finding_note
+        adminregion_review_note
+        superadmin_review_note
+        approved_by_user_id
+        approved_at
+        rejected_by_user_id
+        rejected_at
+        created_at
+        updated_at
+      }
+    }
+  `;
+  const data = await executeHasura(mutation, {
+    id: requestId,
+    set: {
+      submitted_by_user_id: submittedByUserId,
+      payload_snapshot: payloadSnapshot,
+      evidence_attachments: evidenceAttachments,
+      checklist,
+      finding_note: findingNote,
+    },
+  });
+  return data.item || null;
 }
 
 async function insertRequestLog({ requestId, actionType, actorUserId, actorRole, beforeStatus, afterStatus, note = null, payloadPatch = {} }) {
@@ -730,7 +814,9 @@ module.exports = {
   assertHasRegionAccess,
   loadDeviceById,
   loadRequestById,
+  loadActiveRequestByEntity,
   createRequest,
+  resubmitActiveRequest,
   insertRequestLog,
   listRequestsByQueue,
   listRequestsForValidator,

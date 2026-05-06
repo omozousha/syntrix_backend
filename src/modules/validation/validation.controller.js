@@ -10,7 +10,9 @@ const {
   assertHasRegionAccess,
   loadDeviceById,
   loadRequestById,
+  loadActiveRequestByEntity,
   createRequest,
+  resubmitActiveRequest,
   insertRequestLog,
   listRequestsByQueue,
   listRequestsForValidator,
@@ -86,32 +88,63 @@ async function submitValidationRequest(req, res, next) {
     assertHasRegionAccess(req.auth, device.region_id);
     assertPilotRegionAllowed(device.region_id);
 
-    const request = await createRequest({
-      entityId,
-      regionId: device.region_id,
-      submittedByUserId: actorUserId,
-      payloadSnapshot,
-      evidenceAttachments,
-      checklist,
-      findingNote,
-    });
+    const activeRequest = await loadActiveRequestByEntity(entityId);
+    if (activeRequest && activeRequest.current_status === STATUS.PENDING_ASYNC) {
+      throw createHttpError(
+        409,
+        'Validation request sedang menunggu review superadmin. Tunggu keputusan sebelum submit ulang.',
+      );
+    }
+
+    let request;
+    let auditActionName = 'validation_request_submitted';
+    let actionType = ACTION.SUBMITTED;
+    let beforeStatus = STATUS.UNVALIDATED;
+    let responseCode = 201;
+    let message = 'Validation request submitted';
+
+    if (activeRequest && activeRequest.current_status === STATUS.ONGOING) {
+      request = await resubmitActiveRequest({
+        requestId: activeRequest.id,
+        submittedByUserId: actorUserId,
+        payloadSnapshot,
+        evidenceAttachments,
+        checklist,
+        findingNote,
+      });
+      auditActionName = 'validation_request_resubmitted_by_validator';
+      actionType = ACTION.RESUBMIT_VALIDATOR;
+      beforeStatus = STATUS.ONGOING;
+      responseCode = 200;
+      message = 'Validation request resubmitted';
+    } else {
+      request = await createRequest({
+        entityId,
+        regionId: device.region_id,
+        submittedByUserId: actorUserId,
+        payloadSnapshot,
+        evidenceAttachments,
+        checklist,
+        findingNote,
+      });
+    }
 
     await insertRequestLog({
       requestId: request.id,
-      actionType: ACTION.SUBMITTED,
+      actionType,
       actorUserId,
       actorRole,
-      beforeStatus: STATUS.UNVALIDATED,
+      beforeStatus,
       afterStatus: STATUS.ONGOING,
       payloadPatch: payloadSnapshot,
     });
 
     await createAuditLog({
       actorUserId,
-      actionName: 'validation_request_submitted',
+      actionName: auditActionName,
       entityType: 'validation_requests',
       entityId: request.id,
-      beforeData: { status: STATUS.UNVALIDATED },
+      beforeData: { status: beforeStatus },
       afterData: {
         request_id: request.request_id,
         status: STATUS.ONGOING,
@@ -120,7 +153,7 @@ async function submitValidationRequest(req, res, next) {
       userAgent: req.headers['user-agent'] || null,
     });
 
-    return sendSuccess(res, request, 'Validation request submitted', 201);
+    return sendSuccess(res, request, message, responseCode);
   } catch (error) {
     return next(error);
   }
