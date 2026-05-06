@@ -717,15 +717,24 @@ async function fetchAttachmentFromStorage(attachment, token) {
     throw createHttpError(400, 'Attachment has no linked storage file');
   }
 
-  let lastResponse = null;
-  for (const storageId of candidates) {
-    const response = await nhostStorageClient.get(`/files/${storageId}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+  async function requestFile(storageId, useAdminSecret = false) {
+    const headers = useAdminSecret
+      ? { 'x-hasura-admin-secret': env.hasuraAdminSecret }
+      : { Authorization: `Bearer ${token}` };
+    return nhostStorageClient.get(`/files/${storageId}`, {
+      headers,
       responseType: 'arraybuffer',
       validateStatus: (status) => status < 500,
     });
+  }
+
+  let lastResponse = null;
+  for (const storageId of candidates) {
+    let response = await requestFile(storageId, false);
+    if ([401, 403, 404].includes(response.status)) {
+      // Fallback for cross-user/private files: backend already authorized access by attachment record.
+      response = await requestFile(storageId, true);
+    }
     if (response.status < 400) {
       return { response, resolvedStorageId: storageId };
     }
