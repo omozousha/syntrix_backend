@@ -644,17 +644,34 @@ async function loadAttachmentById(id) {
     `;
     const dataByPk = await executeHasura(queryByPk, { id: identifier });
     if (dataByPk.item) return dataByPk.item;
+
+    const queryByStorageId = `
+      query LoadAttachmentByStorageId($storageId: uuid!) {
+        items: attachments(
+          where: { storage_file_id: { _eq: $storageId } }
+          limit: 1
+        ) {
+          id
+          attachment_id
+          storage_file_id
+          original_name
+          mime_type
+          size_bytes
+          entity_type
+          entity_id
+          uploaded_by_user_id
+          created_at
+        }
+      }
+    `;
+    const dataByStorageId = await executeHasura(queryByStorageId, { storageId: identifier });
+    if (dataByStorageId.items?.[0]) return dataByStorageId.items[0];
   }
 
-  const queryByIdentifier = `
-    query LoadAttachmentByIdentifier($identifier: String!) {
+  const queryByAttachmentCode = `
+    query LoadAttachmentByCode($attachmentCode: String!) {
       items: attachments(
-        where: {
-          _or: [
-            { attachment_id: { _eq: $identifier } }
-            { storage_file_id: { _eq: $identifier } }
-          ]
-        }
+        where: { attachment_id: { _eq: $attachmentCode } }
         limit: 1
       ) {
         id
@@ -670,8 +687,8 @@ async function loadAttachmentById(id) {
       }
     }
   `;
-  const dataByIdentifier = await executeHasura(queryByIdentifier, { identifier });
-  return dataByIdentifier.items?.[0] || null;
+  const dataByCode = await executeHasura(queryByAttachmentCode, { attachmentCode: identifier });
+  return dataByCode.items?.[0] || null;
 }
 
 function bindResource(resourceName, config) {
