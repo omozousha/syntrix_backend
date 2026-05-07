@@ -68,7 +68,7 @@ const RESOURCE_CONFIG = {
     searchColumns: ['device_name', 'device_id', 'device_code', 'serial_number'],
     filterKeys: ['region_id', 'pop_id', 'project_id', 'customer_id', 'status', 'asset_group', 'device_type_key', 'validation_status', 'validation_date'],
     defaultOrderBy: [{ created_at: 'desc' }],
-    auth: { read: ['admin', 'user_region', 'user_all_region'], write: ['admin', 'user_region', 'user_all_region'] },
+    auth: { read: ['admin', 'user_region', 'user_all_region'], write: ['admin', 'user_all_region'] },
     regionScoped: true,
     softDelete: true,
   },

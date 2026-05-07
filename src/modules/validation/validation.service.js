@@ -128,6 +128,7 @@ async function createRequest({
   entityId,
   regionId,
   submittedByUserId,
+  currentStatus = STATUS.ONGOING,
   payloadSnapshot = {},
   evidenceAttachments = [],
   checklist = {},
@@ -158,7 +159,7 @@ async function createRequest({
       entity_id: entityId,
       region_id: regionId,
       submitted_by_user_id: submittedByUserId,
-      current_status: STATUS.ONGOING,
+      current_status: currentStatus,
       payload_snapshot: payloadSnapshot,
       evidence_attachments: evidenceAttachments,
       checklist,
@@ -710,6 +711,8 @@ async function loadDeviceSnapshot(deviceId) {
         status
         validation_status
         validation_date
+        deleted_at
+        deleted_by_user_id
         splitter_ratio
         total_ports
         used_ports
@@ -793,6 +796,8 @@ async function applyValidationPayloadToAsset({ request }) {
   // while `devices.validation_status` still uses legacy enum (`valid|warning|invalid|unvalidated`).
   deviceChanges.validation_status = 'valid';
   deviceChanges.validation_date = new Date().toISOString().slice(0, 10);
+  deviceChanges.deleted_at = null;
+  deviceChanges.deleted_by_user_id = null;
 
   const changedPorts = [];
   try {
@@ -816,6 +821,8 @@ async function applyValidationPayloadToAsset({ request }) {
         'status',
         'validation_status',
         'validation_date',
+        'deleted_at',
+        'deleted_by_user_id',
         'splitter_ratio',
         'total_ports',
         'used_ports',

@@ -21,6 +21,12 @@ const {
   validatePortConnectionPayload,
 } = require('../device/connectivity.validation');
 const { buildOdpCoreChainSummary } = require('../device/odp-chain.service');
+const {
+  STATUS: VALIDATION_STATUS,
+  ACTION: VALIDATION_ACTION,
+  createRequest: createValidationRequest,
+  insertRequestLog: insertValidationRequestLog,
+} = require('../validation/validation.service');
 
 async function loadDevicePortTemplate(deviceTypeKey, profileName = 'default') {
   const query = `
@@ -288,6 +294,28 @@ function validateUsedPortEndpointState(state) {
   }
 }
 
+function shouldHoldDeviceForSuperadminApproval(req, object) {
+  return req.resourceName === 'devices' && req.auth.role === 'user_all_region' && object.region_id;
+}
+
+function buildAdminRegionCreateRequestPayload(device) {
+  return {
+    source: 'adminregion-create-device',
+    device: {
+      id: device.id,
+      device_name: device.device_name || null,
+      status: device.status || null,
+      splitter_ratio: device.splitter_ratio || null,
+      total_ports: device.total_ports ?? null,
+      used_ports: device.used_ports ?? null,
+      address: device.address || null,
+      longitude: device.longitude ?? null,
+      latitude: device.latitude ?? null,
+    },
+    device_ports: [],
+  };
+}
+
 async function list(req, res, next) {
   try {
     const config = req.resourceConfig;
@@ -353,7 +381,7 @@ async function create(req, res, next) {
       object.created_by_user_id = req.auth.appUser.id;
     }
 
-    const item = await createResource(req.resourceConfig, object);
+    let item = await createResource(req.resourceConfig, object);
 
     let provisioningResult = null;
     let fiberSyncResult = null;
@@ -378,6 +406,60 @@ async function create(req, res, next) {
       await syncDevicePortUsage(item.device_id);
     }
 
+    let approvalRequest = null;
+    if (shouldHoldDeviceForSuperadminApproval(req, object)) {
+      try {
+        item = await updateResource(req.resourceConfig, item.id, {
+          deleted_at: new Date().toISOString(),
+          deleted_by_user_id: req.auth.appUser.id,
+        });
+        approvalRequest = await createValidationRequest({
+          entityId: item.id,
+          regionId: item.region_id,
+          submittedByUserId: req.auth.appUser.id,
+          currentStatus: VALIDATION_STATUS.PENDING_ASYNC,
+          payloadSnapshot: buildAdminRegionCreateRequestPayload(item),
+          checklist: {},
+          findingNote: 'Create device request by adminregion.',
+        });
+        await insertValidationRequestLog({
+          requestId: approvalRequest.id,
+          actionType: VALIDATION_ACTION.RESUBMIT_ADMINREGION,
+          actorUserId: req.auth.appUser.id,
+          actorRole: 'adminregion',
+          beforeStatus: VALIDATION_STATUS.UNVALIDATED,
+          afterStatus: VALIDATION_STATUS.PENDING_ASYNC,
+          note: 'Create device request submitted to superadmin.',
+          payloadPatch: buildAdminRegionCreateRequestPayload(item),
+        });
+        await createAuditLog({
+          actorUserId: req.auth.appUser.id,
+          actionName: 'validation_request_submitted_by_adminregion',
+          entityType: 'validation_requests',
+          entityId: approvalRequest.id,
+          beforeData: { status: VALIDATION_STATUS.UNVALIDATED },
+          afterData: {
+            request_id: approvalRequest.request_id,
+            status: VALIDATION_STATUS.PENDING_ASYNC,
+            source: 'adminregion-create-device',
+            device_id: item.id,
+          },
+          ipAddress: req.ip,
+          userAgent: req.get('user-agent'),
+        });
+      } catch (approvalError) {
+        try {
+          await deleteResource(req.resourceConfig, item.id);
+        } catch {
+          // Best effort rollback; keep approval error for caller.
+        }
+        throw createHttpError(
+          500,
+          `Device creation rolled back because approval request failed: ${approvalError.message || 'unknown error'}`,
+        );
+      }
+    }
+
     await createAuditLog({
       actorUserId: req.auth.appUser.id,
       actionName: `create:${req.resourceName}`,
@@ -389,12 +471,20 @@ async function create(req, res, next) {
           ...item,
           auto_provision: provisioningResult || { enabled: false, createdCount: 0 },
           fiber_core_sync: fiberSyncResult || { enabled: false },
+          ...(approvalRequest ? { approval_request_id: approvalRequest.request_id || approvalRequest.id } : {}),
         }
         : item,
       ipAddress: req.ip,
       userAgent: req.get('user-agent'),
     });
-    return sendSuccess(res, item, `${req.resourceName} created successfully`, 201);
+    return sendSuccess(
+      res,
+      approvalRequest ? { ...item, approval_request: approvalRequest } : item,
+      approvalRequest
+        ? `${req.resourceName} created and sent to superadmin approval`
+        : `${req.resourceName} created successfully`,
+      201,
+    );
   } catch (error) {
     return next(error);
   }
