@@ -358,6 +358,106 @@ function buildAdminRegionCreateResourcePayload(resourceName, entityId, object) {
   };
 }
 
+function getCreateRequestNaturalKey(resourceName, object) {
+  if (resourceName === 'devices') {
+    const deviceName = String(object.device_name || '').trim();
+    if (!deviceName) return null;
+    return {
+      field: 'device_name',
+      value: deviceName,
+      extra: object.device_type_key ? { device_type_key: object.device_type_key } : {},
+    };
+  }
+
+  if (resourceName === 'pops') {
+    const popCode = String(object.pop_code || '').trim();
+    if (!popCode) return null;
+    return { field: 'pop_code', value: popCode };
+  }
+
+  if (resourceName === 'routes') {
+    const routeName = String(object.route_name || '').trim();
+    if (!routeName) return null;
+    return { field: 'route_name', value: routeName };
+  }
+
+  if (resourceName === 'projects') {
+    const projectName = String(object.project_name || '').trim();
+    if (!projectName) return null;
+    return { field: 'project_name', value: projectName };
+  }
+
+  return null;
+}
+
+function buildCreateRequestDuplicateMatcher(resourceName, object) {
+  const naturalKey = getCreateRequestNaturalKey(resourceName, object);
+  if (!naturalKey) return null;
+
+  if (resourceName === 'devices') {
+    return {
+      source: 'adminregion-create-device',
+      device: {
+        region_id: object.region_id,
+        [naturalKey.field]: naturalKey.value,
+        ...naturalKey.extra,
+      },
+    };
+  }
+
+  return {
+    source: 'adminregion-create-resource',
+    operation: 'create',
+    resource_name: resourceName,
+    resource_payload: {
+      region_id: object.region_id,
+      [naturalKey.field]: naturalKey.value,
+    },
+  };
+}
+
+async function findActiveCreateApprovalRequest(req, object) {
+  const entityType = REQUEST_ENTITY_TYPE_BY_RESOURCE[req.resourceName];
+  const payloadMatcher = buildCreateRequestDuplicateMatcher(req.resourceName, object);
+  if (!entityType || !payloadMatcher || !object.region_id) return null;
+
+  const query = `
+    query FindActiveCreateApprovalRequest($entityType: String!, $regionId: uuid!, $payloadMatcher: jsonb!) {
+      items: validation_requests(
+        where: {
+          entity_type: { _eq: $entityType }
+          region_id: { _eq: $regionId }
+          current_status: { _eq: "pending_async" }
+          payload_snapshot: { _contains: $payloadMatcher }
+        }
+        order_by: { created_at: desc }
+        limit: 1
+      ) {
+        id
+        request_id
+        entity_type
+        entity_id
+        region_id
+        submitted_by_user_id
+        current_status
+        payload_snapshot
+        evidence_attachments
+        checklist
+        finding_note
+        created_at
+        updated_at
+      }
+    }
+  `;
+
+  const data = await executeHasura(query, {
+    entityType,
+    regionId: object.region_id,
+    payloadMatcher,
+  });
+  return data.items?.[0] || null;
+}
+
 function buildAdminRegionChangeResourcePayload(resourceName, operation, existing, changes = {}) {
   const entityType = REQUEST_ENTITY_TYPE_BY_RESOURCE[resourceName] || 'resource';
   const resourceLabel = REQUEST_LABEL_BY_RESOURCE[resourceName] || resourceName;
@@ -490,6 +590,16 @@ async function create(req, res, next) {
     }
 
     if (shouldHoldCreateForSuperadminApproval(req, object) && req.resourceName !== 'devices') {
+      const existingApprovalRequest = await findActiveCreateApprovalRequest(req, object);
+      if (existingApprovalRequest) {
+        return sendSuccess(
+          res,
+          { ...object, approval_request: existingApprovalRequest },
+          `${req.resourceName} create request is already waiting for superadmin approval`,
+          200,
+        );
+      }
+
       const pendingEntityId = randomUUID();
       const payloadSnapshot = buildAdminRegionCreateResourcePayload(req.resourceName, pendingEntityId, object);
       const approvalRequest = await submitAdminRegionAssetRequest({
@@ -506,6 +616,18 @@ async function create(req, res, next) {
         `${req.resourceName} create request sent to superadmin approval`,
         201,
       );
+    }
+
+    if (shouldHoldDeviceForSuperadminApproval(req, object)) {
+      const existingApprovalRequest = await findActiveCreateApprovalRequest(req, object);
+      if (existingApprovalRequest) {
+        return sendSuccess(
+          res,
+          { ...object, approval_request: existingApprovalRequest },
+          `${req.resourceName} create request is already waiting for superadmin approval`,
+          200,
+        );
+      }
     }
 
     let item = await createResource(req.resourceConfig, object);
