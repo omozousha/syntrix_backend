@@ -1,3 +1,4 @@
+const { randomUUID } = require('crypto');
 const { getPagination } = require('../../utils/pagination');
 const { sendSuccess } = require('../../utils/response');
 const { createHttpError } = require('../../utils/httpError');
@@ -27,6 +28,20 @@ const {
   createRequest: createValidationRequest,
   insertRequestLog: insertValidationRequestLog,
 } = require('../validation/validation.service');
+
+const ADMINREGION_CREATE_APPROVAL_RESOURCES = new Set(['devices', 'pops', 'routes', 'projects']);
+const REQUEST_ENTITY_TYPE_BY_RESOURCE = {
+  devices: 'device',
+  pops: 'pop',
+  routes: 'route',
+  projects: 'project',
+};
+const REQUEST_LABEL_BY_RESOURCE = {
+  devices: 'Device',
+  pops: 'POP',
+  routes: 'Route',
+  projects: 'Project',
+};
 
 async function loadDevicePortTemplate(deviceTypeKey, profileName = 'default') {
   const query = `
@@ -298,13 +313,25 @@ function shouldHoldDeviceForSuperadminApproval(req, object) {
   return req.resourceName === 'devices' && req.auth.role === 'user_all_region' && object.region_id;
 }
 
+function shouldHoldCreateForSuperadminApproval(req, object) {
+  return ADMINREGION_CREATE_APPROVAL_RESOURCES.has(req.resourceName) && req.auth.role === 'user_all_region' && object.region_id;
+}
+
 function buildAdminRegionCreateRequestPayload(device) {
   return {
     source: 'adminregion-create-device',
     device: {
       id: device.id,
+      region_id: device.region_id || null,
+      pop_id: device.pop_id || null,
+      project_id: device.project_id || null,
+      device_type_key: device.device_type_key || null,
       device_name: device.device_name || null,
       status: device.status || null,
+      manufacturer_id: device.manufacturer_id || null,
+      brand_id: device.brand_id || null,
+      model_id: device.model_id || null,
+      serial_number: device.serial_number || null,
       splitter_ratio: device.splitter_ratio || null,
       total_ports: device.total_ports ?? null,
       used_ports: device.used_ports ?? null,
@@ -314,6 +341,83 @@ function buildAdminRegionCreateRequestPayload(device) {
     },
     device_ports: [],
   };
+}
+
+function buildAdminRegionCreateResourcePayload(resourceName, entityId, object) {
+  const resourceLabel = REQUEST_LABEL_BY_RESOURCE[resourceName] || resourceName;
+  return {
+    source: 'adminregion-create-resource',
+    operation: 'create',
+    resource_name: resourceName,
+    resource_label: resourceLabel,
+    [REQUEST_ENTITY_TYPE_BY_RESOURCE[resourceName] || 'resource']: {
+      id: entityId,
+      ...object,
+    },
+    resource_payload: object,
+  };
+}
+
+function buildAdminRegionChangeResourcePayload(resourceName, operation, existing, changes = {}) {
+  const entityType = REQUEST_ENTITY_TYPE_BY_RESOURCE[resourceName] || 'resource';
+  const resourceLabel = REQUEST_LABEL_BY_RESOURCE[resourceName] || resourceName;
+  const payload = operation === 'update' ? { ...existing, ...changes } : existing;
+  return {
+    source: operation === 'update' ? 'adminregion-update-resource' : 'adminregion-archive-resource',
+    operation,
+    resource_name: resourceName,
+    resource_label: resourceLabel,
+    [entityType]: payload,
+    before: existing,
+    resource_payload: changes,
+  };
+}
+
+async function submitAdminRegionAssetRequest({ req, entityId, regionId, operation, payloadSnapshot }) {
+  const entityType = REQUEST_ENTITY_TYPE_BY_RESOURCE[req.resourceName];
+  const resourceLabel = REQUEST_LABEL_BY_RESOURCE[req.resourceName] || req.resourceName;
+  const approvalRequest = await createValidationRequest({
+    entityType,
+    entityId,
+    regionId,
+    submittedByUserId: req.auth.appUser.id,
+    currentStatus: VALIDATION_STATUS.PENDING_ASYNC,
+    payloadSnapshot,
+    checklist: {},
+    findingNote: `${operation} ${resourceLabel} request by adminregion.`,
+  });
+
+  await insertValidationRequestLog({
+    requestId: approvalRequest.id,
+    actionType: VALIDATION_ACTION.RESUBMIT_ADMINREGION,
+    actorUserId: req.auth.appUser.id,
+    actorRole: 'adminregion',
+    beforeStatus: VALIDATION_STATUS.UNVALIDATED,
+    afterStatus: VALIDATION_STATUS.PENDING_ASYNC,
+    note: `${operation} ${resourceLabel} request submitted to superadmin.`,
+    payloadPatch: payloadSnapshot,
+  });
+
+  await createAuditLog({
+    actorUserId: req.auth.appUser.id,
+    actionName: `asset_${operation}_request_submitted_by_adminregion`,
+    entityType: 'validation_requests',
+    entityId: approvalRequest.id,
+    beforeData: { status: VALIDATION_STATUS.UNVALIDATED },
+    afterData: {
+      request_id: approvalRequest.request_id,
+      status: VALIDATION_STATUS.PENDING_ASYNC,
+      source: payloadSnapshot.source,
+      operation,
+      resource_name: req.resourceName,
+      entity_type: entityType,
+      entity_id: entityId,
+    },
+    ipAddress: req.ip,
+    userAgent: req.get('user-agent'),
+  });
+
+  return approvalRequest;
 }
 
 async function list(req, res, next) {
@@ -369,7 +473,11 @@ async function create(req, res, next) {
     }
     const object = sanitizePayload(req.resourceConfig, req.body);
 
-    if (req.resourceConfig.regionScoped && req.auth.role === 'user_region' && !req.auth.regions.includes(object.region_id)) {
+    if (
+      req.resourceConfig.regionScoped &&
+      ['user_region', 'user_all_region'].includes(req.auth.role) &&
+      !req.auth.regions.includes(object.region_id)
+    ) {
       throw createHttpError(403, 'Regional user can only create records inside assigned regions');
     }
 
@@ -379,6 +487,25 @@ async function create(req, res, next) {
 
     if (req.resourceName === 'imports' && !object.created_by_user_id) {
       object.created_by_user_id = req.auth.appUser.id;
+    }
+
+    if (shouldHoldCreateForSuperadminApproval(req, object) && req.resourceName !== 'devices') {
+      const pendingEntityId = randomUUID();
+      const payloadSnapshot = buildAdminRegionCreateResourcePayload(req.resourceName, pendingEntityId, object);
+      const approvalRequest = await submitAdminRegionAssetRequest({
+        req,
+        entityId: pendingEntityId,
+        regionId: object.region_id,
+        operation: 'create',
+        payloadSnapshot,
+      });
+
+      return sendSuccess(
+        res,
+        { id: pendingEntityId, ...object, approval_request: approvalRequest },
+        `${req.resourceName} create request sent to superadmin approval`,
+        201,
+      );
     }
 
     let item = await createResource(req.resourceConfig, object);
@@ -500,7 +627,7 @@ async function update(req, res, next) {
 
     validatePayloadByResource(req.resourceName, req.body, 'update');
 
-    if (req.resourceConfig.regionScoped && req.auth.role === 'user_region') {
+    if (req.resourceConfig.regionScoped && ['user_region', 'user_all_region'].includes(req.auth.role)) {
       const candidateRegionId = req.body.region_id || existing.region_id;
       if (!req.auth.regions.includes(candidateRegionId)) {
         throw createHttpError(403, 'Regional user can only modify records inside assigned regions');
@@ -528,6 +655,23 @@ async function update(req, res, next) {
           );
         }
       }
+    }
+
+    if (shouldHoldCreateForSuperadminApproval(req, { region_id: existing.region_id })) {
+      const payloadSnapshot = buildAdminRegionChangeResourcePayload(req.resourceName, 'update', existing, changes);
+      const approvalRequest = await submitAdminRegionAssetRequest({
+        req,
+        entityId: existing.id,
+        regionId: existing.region_id,
+        operation: 'update',
+        payloadSnapshot,
+      });
+
+      return sendSuccess(
+        res,
+        { id: existing.id, approval_request: approvalRequest },
+        `${req.resourceName} update request sent to superadmin approval`,
+      );
     }
 
     const item = await updateResource(req.resourceConfig, req.params.id, changes);
@@ -588,7 +732,11 @@ async function remove(req, res, next) {
       throw createHttpError(404, `${req.resourceName} not found`);
     }
 
-    if (req.resourceConfig.regionScoped && req.auth.role === 'user_region' && !req.auth.regions.includes(existing.region_id)) {
+    if (
+      req.resourceConfig.regionScoped &&
+      ['user_region', 'user_all_region'].includes(req.auth.role) &&
+      !req.auth.regions.includes(existing.region_id)
+    ) {
       throw createHttpError(403, 'Regional user can only delete records inside assigned regions');
     }
 
@@ -610,6 +758,24 @@ async function remove(req, res, next) {
           );
         }
       }
+    }
+
+    if (shouldHoldCreateForSuperadminApproval(req, { region_id: existing.region_id })) {
+      const operation = req.resourceConfig.softDelete ? 'archive' : 'delete';
+      const payloadSnapshot = buildAdminRegionChangeResourcePayload(req.resourceName, operation, existing, {});
+      const approvalRequest = await submitAdminRegionAssetRequest({
+        req,
+        entityId: existing.id,
+        regionId: existing.region_id,
+        operation,
+        payloadSnapshot,
+      });
+
+      return sendSuccess(
+        res,
+        { id: existing.id, mode: operation, approval_request: approvalRequest },
+        `${req.resourceName} ${operation} request sent to superadmin approval`,
+      );
     }
 
     if (req.resourceConfig.softDelete) {

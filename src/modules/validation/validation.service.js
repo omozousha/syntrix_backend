@@ -1,5 +1,12 @@
 const { executeHasura } = require('../../config/hasura');
 const { createHttpError } = require('../../utils/httpError');
+const {
+  createResource,
+  deleteResource,
+  getResourceById,
+  updateResource,
+} = require('../../shared/resource.service');
+const { RESOURCE_CONFIG } = require('../resource/resource.registry');
 
 const STATUS = {
   UNVALIDATED: 'unvalidated',
@@ -125,6 +132,7 @@ async function loadActiveRequestByEntity(entityId) {
 }
 
 async function createRequest({
+  entityType = 'device',
   entityId,
   regionId,
   submittedByUserId,
@@ -155,7 +163,7 @@ async function createRequest({
   `;
   const data = await executeHasura(mutation, {
     object: {
-      entity_type: 'device',
+      entity_type: entityType,
       entity_id: entityId,
       region_id: regionId,
       submitted_by_user_id: submittedByUserId,
@@ -770,8 +778,16 @@ async function updateDevicePortById(portId, changes) {
   return data.item;
 }
 
-async function applyValidationPayloadToAsset({ request }) {
+async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
   const payload = request.payload_snapshot || {};
+  if (
+    payload.source === 'adminregion-create-resource' ||
+    payload.source === 'adminregion-update-resource' ||
+    payload.source === 'adminregion-archive-resource'
+  ) {
+    return applyResourceChangeRequest({ request, actorUserId });
+  }
+
   const payloadDevice = payload.device || {};
   const payloadPorts = Array.isArray(payload.device_ports) ? payload.device_ports : [];
 
@@ -846,6 +862,51 @@ async function applyValidationPayloadToAsset({ request }) {
 
   const after = await loadDeviceSnapshot(request.entity_id);
   return { before, after };
+}
+
+async function applyResourceChangeRequest({ request, actorUserId = null }) {
+  const payload = request.payload_snapshot || {};
+  const resourceName = String(payload.resource_name || '').trim();
+  const resourcePayload = payload.resource_payload || {};
+  const config = RESOURCE_CONFIG[resourceName];
+
+  if (!config) {
+    throw createHttpError(400, `Unsupported request resource: ${resourceName || '-'}`);
+  }
+
+  if (payload.operation === 'create') {
+    const object = {
+      ...resourcePayload,
+      id: request.entity_id,
+      region_id: request.region_id,
+    };
+    const item = await createResource(config, object);
+    return { before: null, after: item };
+  }
+
+  const before = await getResourceById(config, request.entity_id);
+  if (!before) {
+    throw createHttpError(404, `Target ${resourceName} for apply not found`);
+  }
+
+  if (payload.operation === 'update') {
+    const item = await updateResource(config, request.entity_id, resourcePayload);
+    return { before, after: item };
+  }
+
+  if (payload.operation === 'archive' || payload.operation === 'delete') {
+    if (config.softDelete) {
+      const item = await updateResource(config, request.entity_id, {
+        deleted_at: new Date().toISOString(),
+        deleted_by_user_id: actorUserId,
+      });
+      return { before, after: item };
+    }
+    await deleteResource(config, request.entity_id);
+    return { before, after: null };
+  }
+
+  throw createHttpError(400, `Unsupported request operation: ${payload.operation || '-'}`);
 }
 
 module.exports = {

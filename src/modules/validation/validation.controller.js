@@ -342,7 +342,7 @@ async function approveBySuperAdmin(req, res, next) {
       throw createHttpError(409, 'Request is not in pending_async status');
     }
 
-    const applyResult = await applyValidationPayloadToAsset({ request });
+    const applyResult = await applyValidationPayloadToAsset({ request, actorUserId });
 
     await insertRequestLog({
       requestId: request.id,
