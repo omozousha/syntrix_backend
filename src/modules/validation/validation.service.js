@@ -836,6 +836,10 @@ async function updateDevicePortById(portId, changes) {
 
 async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
   const payload = request.payload_snapshot || {};
+  if (payload.source === 'adminregion-create-device') {
+    return applyAdminRegionCreateDeviceRequest({ request });
+  }
+
   if (
     payload.source === 'adminregion-create-resource' ||
     payload.source === 'adminregion-update-resource' ||
@@ -910,6 +914,58 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
         const rollbackPort = pickObject(oldPort, ['port_label', 'status', 'customer_id', 'ont_device_id', 'notes']);
         await updateDevicePortById(portId, rollbackPort);
       }
+    } catch (_rollbackError) {
+      // swallow rollback error; original error is more important
+    }
+    throw error;
+  }
+
+  const after = await loadDeviceSnapshot(request.entity_id);
+  return { before, after };
+}
+
+async function applyAdminRegionCreateDeviceRequest({ request }) {
+  const payload = request.payload_snapshot || {};
+  const payloadDevice = payload.device || {};
+  const before = await loadDeviceSnapshot(request.entity_id);
+  if (!before.device) {
+    throw createHttpError(404, 'Target device for apply not found');
+  }
+
+  const deviceChanges = pickObject(payloadDevice, [
+    'device_name',
+    'status',
+    'splitter_ratio',
+    'total_ports',
+    'used_ports',
+    'address',
+    'longitude',
+    'latitude',
+    'validation_status',
+    'validation_date',
+  ]);
+  deviceChanges.deleted_at = null;
+  deviceChanges.deleted_by_user_id = null;
+
+  try {
+    await updateDeviceById(request.entity_id, deviceChanges);
+  } catch (error) {
+    try {
+      const rollbackDevice = pickObject(before.device, [
+        'device_name',
+        'status',
+        'validation_status',
+        'validation_date',
+        'deleted_at',
+        'deleted_by_user_id',
+        'splitter_ratio',
+        'total_ports',
+        'used_ports',
+        'address',
+        'longitude',
+        'latitude',
+      ]);
+      await updateDeviceById(request.entity_id, rollbackDevice);
     } catch (_rollbackError) {
       // swallow rollback error; original error is more important
     }

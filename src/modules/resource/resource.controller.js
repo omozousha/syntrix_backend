@@ -335,6 +335,8 @@ function buildAdminRegionCreateRequestPayload(device) {
       splitter_ratio: device.splitter_ratio || null,
       total_ports: device.total_ports ?? null,
       used_ports: device.used_ports ?? null,
+      validation_status: device.validation_status || null,
+      validation_date: device.validation_date || null,
       address: device.address || null,
       longitude: device.longitude ?? null,
       latitude: device.latitude ?? null,
