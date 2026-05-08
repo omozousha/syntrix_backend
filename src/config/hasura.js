@@ -26,6 +26,15 @@ const hasuraMetadataClient = axios.create({
   },
 });
 
+const hasuraQueryClient = axios.create({
+  baseURL: buildHasuraSiblingEndpoint('/v2/query'),
+  timeout: 30000,
+  headers: {
+    'Content-Type': 'application/json',
+    'x-hasura-admin-secret': env.hasuraAdminSecret,
+  },
+});
+
 async function executeHasura(query, variables = {}) {
   const { data } = await hasuraClient.post('', { query, variables });
 
@@ -43,6 +52,17 @@ async function executeHasura(query, variables = {}) {
 
 async function executeHasuraMetadata(type, args = {}) {
   const { data } = await hasuraMetadataClient.post('', { type, args });
+  return data;
+}
+
+async function executeHasuraSql(sql) {
+  const { data } = await hasuraQueryClient.post('', {
+    type: 'run_sql',
+    args: {
+      source: 'default',
+      sql,
+    },
+  });
   return data;
 }
 
@@ -70,4 +90,4 @@ async function ensureHasuraTableTracked(tableName, schema = 'public') {
   trackedTables.add(cacheKey);
 }
 
-module.exports = { hasuraClient, executeHasura, executeHasuraMetadata, ensureHasuraTableTracked };
+module.exports = { hasuraClient, executeHasura, executeHasuraMetadata, executeHasuraSql, ensureHasuraTableTracked };
