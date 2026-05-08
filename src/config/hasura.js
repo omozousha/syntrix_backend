@@ -10,6 +10,22 @@ const hasuraClient = axios.create({
   },
 });
 
+function buildHasuraSiblingEndpoint(pathname) {
+  const url = new URL(env.hasuraUrl);
+  url.pathname = pathname;
+  url.search = '';
+  return url.toString();
+}
+
+const hasuraMetadataClient = axios.create({
+  baseURL: buildHasuraSiblingEndpoint('/v1/metadata'),
+  timeout: 30000,
+  headers: {
+    'Content-Type': 'application/json',
+    'x-hasura-admin-secret': env.hasuraAdminSecret,
+  },
+});
+
 async function executeHasura(query, variables = {}) {
   const { data } = await hasuraClient.post('', { query, variables });
 
@@ -25,4 +41,33 @@ async function executeHasura(query, variables = {}) {
   return data.data;
 }
 
-module.exports = { hasuraClient, executeHasura };
+async function executeHasuraMetadata(type, args = {}) {
+  const { data } = await hasuraMetadataClient.post('', { type, args });
+  return data;
+}
+
+const trackedTables = new Set();
+
+async function ensureHasuraTableTracked(tableName, schema = 'public') {
+  const cacheKey = `${schema}.${tableName}`;
+  if (trackedTables.has(cacheKey)) return;
+
+  try {
+    await executeHasuraMetadata('pg_track_table', {
+      source: 'default',
+      table: {
+        schema,
+        name: tableName,
+      },
+    });
+  } catch (error) {
+    const message = String(error.response?.data?.error || error.response?.data?.message || error.message || '').toLowerCase();
+    if (!message.includes('already') && !message.includes('exists') && !message.includes('tracked')) {
+      throw error;
+    }
+  }
+
+  trackedTables.add(cacheKey);
+}
+
+module.exports = { hasuraClient, executeHasura, executeHasuraMetadata, ensureHasuraTableTracked };

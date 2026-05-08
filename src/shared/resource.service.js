@@ -1,4 +1,4 @@
-const { executeHasura } = require('../config/hasura');
+const { ensureHasuraTableTracked, executeHasura } = require('../config/hasura');
 const { createHttpError } = require('../utils/httpError');
 const { normalizeRoleName, isRegionalRole, isSuperAdminRole } = require('../utils/roles');
 
@@ -72,6 +72,31 @@ function sanitizePayload(config, payload) {
   }, {});
 }
 
+function isUntrackedTableError(error, tableName) {
+  const haystack = [
+    error?.message,
+    ...(error?.details || []).map((detail) => detail?.message),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return haystack.includes(`field '${tableName}' not found`) || haystack.includes(`field "${tableName}" not found`);
+}
+
+async function executeResourceHasura(config, query, variables = {}) {
+  try {
+    return await executeHasura(query, variables);
+  } catch (error) {
+    if (!config.autoTrack || !isUntrackedTableError(error, config.table)) {
+      throw error;
+    }
+
+    await ensureHasuraTableTracked(config.table);
+    return executeHasura(query, variables);
+  }
+}
+
 async function listResources(config, options) {
   const query = `
     query ListResource($where: ${config.table}_bool_exp!, $limit: Int!, $offset: Int!, $orderBy: [${config.table}_order_by!]) {
@@ -86,7 +111,7 @@ async function listResources(config, options) {
     }
   `;
 
-  const data = await executeHasura(query, options);
+  const data = await executeResourceHasura(config, query, options);
   return data;
 }
 
@@ -103,7 +128,7 @@ async function getResourceById(config, id) {
           }
         }
       `;
-      const dataByPk = await executeHasura(queryByPk, { id: identifier });
+      const dataByPk = await executeResourceHasura(config, queryByPk, { id: identifier });
       if (dataByPk.item) return dataByPk.item;
 
       const queryByStorageId = `
@@ -116,7 +141,7 @@ async function getResourceById(config, id) {
           }
         }
       `;
-      const dataByStorage = await executeHasura(queryByStorageId, { storageId: identifier });
+      const dataByStorage = await executeResourceHasura(config, queryByStorageId, { storageId: identifier });
       if (dataByStorage.items?.[0]) return dataByStorage.items[0];
     }
 
@@ -130,7 +155,7 @@ async function getResourceById(config, id) {
         }
       }
     `;
-    const dataByCode = await executeHasura(queryByCode, { attachmentCode: identifier });
+    const dataByCode = await executeResourceHasura(config, queryByCode, { attachmentCode: identifier });
     return dataByCode.items?.[0] || null;
   }
 
@@ -142,7 +167,7 @@ async function getResourceById(config, id) {
     }
   `;
 
-  const data = await executeHasura(query, { id });
+  const data = await executeResourceHasura(config, query, { id });
   return data.item;
 }
 
@@ -155,7 +180,7 @@ async function createResource(config, object) {
     }
   `;
 
-  const data = await executeHasura(query, { object });
+  const data = await executeResourceHasura(config, query, { object });
   return data.item;
 }
 
@@ -168,7 +193,7 @@ async function updateResource(config, id, changes) {
     }
   `;
 
-  const data = await executeHasura(query, { id, changes });
+  const data = await executeResourceHasura(config, query, { id, changes });
   return data.item;
 }
 
@@ -181,7 +206,7 @@ async function deleteResource(config, id) {
     }
   `;
 
-  const data = await executeHasura(query, { id });
+  const data = await executeResourceHasura(config, query, { id });
   return data.item;
 }
 

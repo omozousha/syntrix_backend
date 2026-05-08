@@ -281,6 +281,7 @@ const RESOURCE_CONFIG = {
     auth: { read: ['admin', 'user_region', 'user_all_region'], write: ['admin'] },
     regionScoped: false,
     softDelete: true,
+    autoTrack: true,
   },
   provinces: {
     table: 'provinces',
