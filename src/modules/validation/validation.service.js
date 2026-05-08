@@ -324,6 +324,62 @@ async function listRequestsByQueue({ queue, regionIds, regionIdFilter = null }) 
   return data.items || [];
 }
 
+async function listRequestsForNotificationInbox({ queue, regionIds, regionIdFilter = null }) {
+  if (queue === 'superadmin') {
+    return listRequestsByQueue({ queue, regionIds, regionIdFilter });
+  }
+
+  const fields = `
+    id
+    request_id
+    entity_type
+    entity_id
+    region_id
+    submitted_by_user_id
+    current_status
+    payload_snapshot
+    evidence_attachments
+    checklist
+    finding_note
+    adminregion_review_note
+    superadmin_review_note
+    created_at
+    updated_at
+  `;
+
+  const query = regionIdFilter
+    ? `
+      query ListValidationNotificationsAdminregion($regionIds: [uuid!], $regionIdFilter: uuid!) {
+        items: validation_requests(
+          where: {
+            current_status: { _in: ["ongoing_validated", "validated", "rejected_by_superadmin"] }
+            region_id: { _in: $regionIds }
+            _and: [{ region_id: { _eq: $regionIdFilter } }]
+          }
+          order_by: [{ updated_at: desc }]
+        ) {
+          ${fields}
+        }
+      }
+    `
+    : `
+      query ListValidationNotificationsAdminregion($regionIds: [uuid!]) {
+        items: validation_requests(
+          where: {
+            current_status: { _in: ["ongoing_validated", "validated", "rejected_by_superadmin"] }
+            region_id: { _in: $regionIds }
+          }
+          order_by: [{ updated_at: desc }]
+        ) {
+          ${fields}
+        }
+      }
+    `;
+  const variables = regionIdFilter ? { regionIds, regionIdFilter } : { regionIds };
+  const data = await executeHasura(query, variables);
+  return data.items || [];
+}
+
 async function listRequestsForValidator({ submittedByUserId, entityId, regionIds }) {
   const query = `
     query ListValidationRequestsForValidator($submittedByUserId: uuid!, $entityId: uuid!, $regionIds: [uuid!]) {
@@ -556,7 +612,7 @@ async function listRejectReasonMetrics({ regionIds = null, limit = 1000 } = {}) 
 }
 
 async function listNotificationInbox({ queue, regionIds, actorUserId, limit = 10, urgentAfterHours = 8, regionIdFilter = null }) {
-  const rows = await listRequestsByQueue({ queue, regionIds, regionIdFilter });
+  const rows = await listRequestsForNotificationInbox({ queue, regionIds, regionIdFilter });
   const capped = rows.slice(0, Math.max(1, Math.min(limit, 50)));
   if (!capped.length) {
     return {
@@ -631,7 +687,7 @@ async function markNotificationAsRead({ requestId, actorUserId }) {
 }
 
 async function markAllNotificationsAsRead({ queue, regionIds, actorUserId, regionIdFilter = null }) {
-  const rows = await listRequestsByQueue({ queue, regionIds, regionIdFilter });
+  const rows = await listRequestsForNotificationInbox({ queue, regionIds, regionIdFilter });
   const items = rows.slice(0, 200);
   if (!items.length) return { affected_rows: 0 };
 
