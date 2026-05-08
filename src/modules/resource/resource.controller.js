@@ -766,11 +766,15 @@ async function update(req, res, next) {
     if (req.resourceName === 'devices') {
       const currentType = String(existing.device_type_key || '').toUpperCase();
       const nextType = String(changes.device_type_key || existing.device_type_key || '').toUpperCase();
+      const currentValidationStatus = String(existing.validation_status || '').toLowerCase();
       const requestedValidationStatus = changes.validation_status != null
         ? String(changes.validation_status).toLowerCase()
         : null;
+      const effectiveValidationStatus = requestedValidationStatus || currentValidationStatus;
+      const isValidationStatusChangingToValid = requestedValidationStatus === 'valid' && currentValidationStatus !== 'valid';
+      const isChangingIntoValidatedOdp = currentType !== 'ODP' && nextType === 'ODP' && effectiveValidationStatus === 'valid';
 
-      if ((currentType === 'ODP' || nextType === 'ODP') && requestedValidationStatus === 'valid') {
+      if (nextType === 'ODP' && (isValidationStatusChangingToValid || isChangingIntoValidatedOdp)) {
         const chain = await buildOdpCoreChainSummary(existing.id);
         if (!chain?.is_complete) {
           throw createHttpError(
