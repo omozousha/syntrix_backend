@@ -766,6 +766,27 @@ function pickObject(source, keys) {
   }, {});
 }
 
+function normalizeResourcePayloadForApply(resourceName, payload) {
+  if (resourceName !== 'projects') {
+    return payload;
+  }
+
+  const statusMap = {
+    active: 'running',
+    completed: 'done',
+    on_hold: 'hold',
+  };
+  const status = payload.status ? String(payload.status).toLowerCase() : '';
+  if (!statusMap[status]) {
+    return payload;
+  }
+
+  return {
+    ...payload,
+    status: statusMap[status],
+  };
+}
+
 async function loadDeviceSnapshot(deviceId) {
   const query = `
     query LoadDeviceSnapshot($deviceId: uuid!) {
@@ -979,7 +1000,7 @@ async function applyAdminRegionCreateDeviceRequest({ request }) {
 async function applyResourceChangeRequest({ request, actorUserId = null }) {
   const payload = request.payload_snapshot || {};
   const resourceName = String(payload.resource_name || '').trim();
-  const resourcePayload = payload.resource_payload || {};
+  const resourcePayload = normalizeResourcePayloadForApply(resourceName, payload.resource_payload || {});
   const config = RESOURCE_CONFIG[resourceName];
 
   if (!config) {
