@@ -17,11 +17,17 @@ function buildWhereClause(config, query, auth) {
     }
   }
 
-  if (query.q && config.searchColumns?.length) {
+  if (query.q && (config.searchColumns?.length || config.pk)) {
+    const keyword = query.q.trim();
+    const searchConditions = (config.searchColumns || []).map((column) => ({
+      [column]: { _ilike: `%${keyword}%` },
+    }));
+    if (config.pk && isUuidLike(keyword)) {
+      searchConditions.push({ [config.pk]: { _eq: keyword } });
+    }
+
     andConditions.push({
-      _or: config.searchColumns.map((column) => ({
-        [column]: { _ilike: `%${query.q.trim()}%` },
-      })),
+      _or: searchConditions,
     });
   }
 
