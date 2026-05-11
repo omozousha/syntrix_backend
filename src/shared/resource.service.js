@@ -145,6 +145,37 @@ function mapSqlRows(result) {
   }, {}));
 }
 
+async function enrichOptionalFieldsWithSql(config, data) {
+  const optionalFields = config.optionalListFields || [];
+  if (!optionalFields.length || !data) return data;
+
+  const sourceItems = data.items || (data.item ? [data.item] : []);
+  const ids = Array.from(new Set(sourceItems.map((item) => item?.id).filter(Boolean)));
+  if (!ids.length) return data;
+
+  try {
+    const rows = mapSqlRows(await executeHasuraSql(`
+      select id::text, ${optionalFields.join(', ')}
+      from public.${config.table}
+      where id in (${ids.map((id) => `${sqlLiteral(id)}::uuid`).join(', ')});
+    `));
+    const rowsById = new Map(rows.map((row) => [row.id, row]));
+    const mergeItem = (item) => (item?.id && rowsById.has(item.id) ? { ...item, ...rowsById.get(item.id) } : item);
+
+    if (data.items) {
+      return { ...data, items: data.items.map(mergeItem) };
+    }
+
+    if (data.item) {
+      return { ...data, item: mergeItem(data.item) };
+    }
+  } catch (error) {
+    return data;
+  }
+
+  return data;
+}
+
 function normalizeRouteTypeRow(row) {
   if (!row) return null;
   return {
@@ -330,7 +361,8 @@ async function listResources(config, options) {
     return data;
   } catch (error) {
     if (isOptionalFieldError(error, config)) {
-      return executeResourceHasura(config, buildQuery(false), options);
+      const data = await executeResourceHasura(config, buildQuery(false), options);
+      return enrichOptionalFieldsWithSql(config, data);
     }
 
     const fallback = await executeRouteTypeFallback(config, 'list', options);
@@ -397,7 +429,8 @@ async function getResourceById(config, id) {
   } catch (error) {
     if (isOptionalFieldError(error, config)) {
       const data = await executeResourceHasura(config, buildQuery(false), { id });
-      return data.item;
+      const enriched = await enrichOptionalFieldsWithSql(config, data);
+      return enriched.item;
     }
 
     const fallback = await executeRouteTypeFallback(config, 'get', { id });
@@ -421,7 +454,8 @@ async function createResource(config, object) {
   } catch (error) {
     if (isOptionalFieldError(error, config)) {
       const data = await executeResourceHasura(config, buildQuery(false), { object });
-      return data.item;
+      const enriched = await enrichOptionalFieldsWithSql(config, data);
+      return enriched.item;
     }
 
     const fallback = await executeRouteTypeFallback(config, 'create', { object });
@@ -445,7 +479,8 @@ async function updateResource(config, id, changes) {
   } catch (error) {
     if (isOptionalFieldError(error, config)) {
       const data = await executeResourceHasura(config, buildQuery(false), { id, changes });
-      return data.item;
+      const enriched = await enrichOptionalFieldsWithSql(config, data);
+      return enriched.item;
     }
 
     const fallback = await executeRouteTypeFallback(config, 'update', { id, changes });
