@@ -991,7 +991,7 @@ function normalizeManagedUserPayload(auth, body, existingUser) {
 async function syncUserRegionScopes(userId, regionId) {
   const deleteMutation = `
     mutation DeleteUserRegionScopes($userId: uuid!) {
-      delete_user_region_scopes(where: { user_id: { _eq: $userId } }) {
+      delete_user_region_scopes(where: { app_user_id: { _eq: $userId } }) {
         affected_rows
       }
     }
@@ -1004,14 +1004,14 @@ async function syncUserRegionScopes(userId, regionId) {
     mutation InsertUserRegionScope($object: user_region_scopes_insert_input!) {
       inserted: insert_user_region_scopes_one(object: $object) {
         id
-        user_id
+        app_user_id
         region_id
       }
     }
   `;
   const data = await executeHasura(insertMutation, {
     object: {
-      user_id: userId,
+      app_user_id: userId,
       region_id: regionId,
     },
   });
