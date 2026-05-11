@@ -153,6 +153,37 @@ async function enrichOptionalFieldsWithSql(config, data) {
   const ids = Array.from(new Set(sourceItems.map((item) => item?.id).filter(Boolean)));
   if (!ids.length) return data;
 
+  if (config.table === 'regions' && optionalFields.includes('inventory_region_code')) {
+    try {
+      const rows = mapSqlRows(await executeHasuraSql(`
+        select
+          r.id::text,
+          coalesce(
+            irc.region_code,
+            case
+              when regexp_replace(lower(coalesce(r.region_name, '')), '[^a-z0-9]+', '', 'g') = 'banten' then '01'
+              when regexp_replace(lower(coalesce(r.region_name, '')), '[^a-z0-9]+', '', 'g') in ('jabo', 'jabodebek', 'jabodetabek') then '02'
+              when regexp_replace(lower(coalesce(r.region_name, '')), '[^a-z0-9]+', '', 'g') in ('jabar', 'jawabarat') then '03'
+              when regexp_replace(lower(coalesce(r.region_name, '')), '[^a-z0-9]+', '', 'g') in ('jateng', 'jawatengah') then '04'
+              when regexp_replace(lower(coalesce(r.region_name, '')), '[^a-z0-9]+', '', 'g') in ('jatim', 'jawatimur', 'jatimkal', 'jawatimurkalimantan', 'jatimkalimantan') then '05'
+              when regexp_replace(lower(coalesce(r.region_name, '')), '[^a-z0-9]+', '', 'g') = 'sulawesi' then '06'
+              when regexp_replace(lower(coalesce(r.region_name, '')), '[^a-z0-9]+', '', 'g') = 'bali' then '07'
+            end
+          ) as inventory_region_code
+        from public.regions r
+        left join public.inventory_region_codes irc on irc.region_id = r.id
+        where r.id in (${ids.map((id) => `${sqlLiteral(id)}::uuid`).join(', ')});
+      `));
+      const rowsById = new Map(rows.map((row) => [row.id, row]));
+      const mergeItem = (item) => (item?.id && rowsById.has(item.id) ? { ...item, ...rowsById.get(item.id) } : item);
+
+      if (data.items) return { ...data, items: data.items.map(mergeItem) };
+      if (data.item) return { ...data, item: mergeItem(data.item) };
+    } catch (error) {
+      return data;
+    }
+  }
+
   try {
     const rows = mapSqlRows(await executeHasuraSql(`
       select id::text, ${optionalFields.join(', ')}
