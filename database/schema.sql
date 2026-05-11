@@ -56,12 +56,28 @@ $$;
 create or replace function public.normalize_device_inventory_type_code(input_type text)
 returns text
 language plpgsql
-immutable
+stable
 as $$
 declare
   normalized_type text;
+  mapped_code text;
 begin
   normalized_type := public.normalize_inventory_label(input_type);
+
+  select dt.inventory_type_code
+  into mapped_code
+  from public.device_type_catalog dt
+  where dt.inventory_type_code is not null
+    and (
+      public.normalize_inventory_label(dt.device_type_key) = normalized_type
+      or public.normalize_inventory_label(dt.device_type_name) = normalized_type
+    )
+  order by dt.sort_order asc, dt.device_type_name asc
+  limit 1;
+
+  if mapped_code is not null then
+    return mapped_code;
+  end if;
 
   return case
     when normalized_type = 'olt' then '001'
@@ -79,6 +95,45 @@ begin
     when normalized_type in ('jc', 'jointclosure', 'joint', 'jclosure') then '013'
     else '000'
   end;
+end;
+$$;
+
+create or replace function public.next_available_device_inventory_type_code()
+returns text
+language plpgsql
+volatile
+as $$
+declare
+  number_candidate integer;
+  code_candidate text;
+begin
+  for number_candidate in 1..999 loop
+    code_candidate := lpad(number_candidate::text, 3, '0');
+    if not exists (
+      select 1
+      from public.device_type_catalog dt
+      where dt.inventory_type_code = code_candidate
+    ) then
+      return code_candidate;
+    end if;
+  end loop;
+
+  raise exception 'No available 3-digit device inventory type code remains';
+end;
+$$;
+
+create or replace function public.set_device_type_inventory_code()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.inventory_type_code is null or trim(new.inventory_type_code) = '' then
+    new.inventory_type_code := public.next_available_device_inventory_type_code();
+  else
+    new.inventory_type_code := lpad(regexp_replace(new.inventory_type_code, '[^0-9]', '', 'g'), 3, '0');
+  end if;
+
+  return new;
 end;
 $$;
 
@@ -139,6 +194,7 @@ for each row execute function public.set_current_timestamp_updated_at();
 create table if not exists public.regions (
   id uuid primary key default gen_random_uuid(),
   region_id text unique,
+  inventory_region_code text unique check (inventory_region_code is null or inventory_region_code ~ '^[0-9]{2}$'),
   region_name text not null unique,
   region_color text not null default '#1D4ED8',
   description text,
@@ -165,6 +221,47 @@ create trigger trg_regions_set_codes
 before insert on public.regions
 for each row execute function public.set_region_codes();
 
+create or replace function public.next_available_inventory_region_code()
+returns text
+language plpgsql
+volatile
+as $$
+declare
+  number_candidate integer;
+  code_candidate text;
+begin
+  for number_candidate in 1..99 loop
+    code_candidate := lpad(number_candidate::text, 2, '0');
+    if not exists (select 1 from public.regions r where r.inventory_region_code = code_candidate)
+       and not exists (select 1 from public.inventory_region_codes irc where irc.region_code = code_candidate) then
+      return code_candidate;
+    end if;
+  end loop;
+
+  raise exception 'No available 2-digit inventory region code remains';
+end;
+$$;
+
+create or replace function public.set_region_inventory_code()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.inventory_region_code is null or trim(new.inventory_region_code) = '' then
+    new.inventory_region_code := public.next_available_inventory_region_code();
+  else
+    new.inventory_region_code := lpad(regexp_replace(new.inventory_region_code, '[^0-9]', '', 'g'), 2, '0');
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_regions_set_inventory_code on public.regions;
+create trigger trg_regions_set_inventory_code
+before insert or update of inventory_region_code on public.regions
+for each row execute function public.set_region_inventory_code();
+
 drop trigger if exists trg_regions_updated_at on public.regions;
 create trigger trg_regions_updated_at
 before update on public.regions
@@ -183,6 +280,30 @@ create trigger trg_inventory_region_codes_updated_at
 before update on public.inventory_region_codes
 for each row execute function public.set_current_timestamp_updated_at();
 
+create or replace function public.sync_inventory_region_code()
+returns trigger
+language plpgsql
+as $$
+begin
+  insert into public.inventory_region_codes (region_id, region_code, region_name_snapshot)
+  values (new.id, new.inventory_region_code, new.region_name)
+  on conflict (region_id) do update
+  set
+    region_code = excluded.region_code,
+    region_name_snapshot = excluded.region_name_snapshot,
+    updated_at = now();
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_regions_sync_inventory_code on public.regions;
+create trigger trg_regions_sync_inventory_code
+after insert or update of inventory_region_code, region_name on public.regions
+for each row
+when (new.inventory_region_code is not null)
+execute function public.sync_inventory_region_code();
+
 create or replace function public.get_inventory_region_code(input_region_id uuid)
 returns text
 language plpgsql
@@ -192,6 +313,16 @@ declare
   mapped_code text;
   normalized_name text;
 begin
+  select r.inventory_region_code
+  into mapped_code
+  from public.regions r
+  where r.id = input_region_id
+    and r.inventory_region_code is not null;
+
+  if mapped_code is not null then
+    return mapped_code;
+  end if;
+
   select irc.region_code
   into mapped_code
   from public.inventory_region_codes irc
