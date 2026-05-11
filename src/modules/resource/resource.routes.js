@@ -7,7 +7,7 @@ const { authenticate, requireRole } = require('../../middleware/auth.middleware'
 const { getResourceConfig, RESOURCE_CONFIG } = require('./resource.registry');
 const controller = require('./resource.controller');
 const { createHttpError } = require('../../utils/httpError');
-const { nhostStorageClient } = require('../../config/nhost');
+const { nhostAuthClient, nhostStorageClient } = require('../../config/nhost');
 const { executeHasura } = require('../../config/hasura');
 const { sendSuccess } = require('../../utils/response');
 const { buildWhereClause, listResources } = require('../../shared/resource.service');
@@ -1122,7 +1122,71 @@ async function deleteManagedUser(req, res, next) {
   }
 }
 
+async function markVerificationEmailSent(userId, metadata = {}) {
+  const sentAt = new Date().toISOString();
+  const mutation = `
+    mutation MarkVerificationEmailSent($id: uuid!, $metadata: jsonb!) {
+      item: update_app_users_by_pk(
+        pk_columns: { id: $id }
+        _set: { metadata: $metadata }
+      ) {
+        id
+        metadata
+      }
+    }
+  `;
+  const data = await executeHasura(mutation, {
+    id: userId,
+    metadata: {
+      ...(metadata || {}),
+      pending_email_verification: true,
+      verification_email_sent_at: sentAt,
+    },
+  });
+  return { item: data.item || null, sentAt };
+}
+
+async function resendManagedUserVerification(req, res, next) {
+  try {
+    const existingUser = await loadManagedUserById(req.params.id);
+    if (!existingUser) throw createHttpError(404, 'User not found');
+    assertCanManageUser(req.auth, existingUser);
+
+    const verificationMap = await loadAuthVerificationMap([existingUser.auth_user_id]);
+    if (verificationMap.get(existingUser.auth_user_id)) {
+      throw createHttpError(400, 'Email is already verified');
+    }
+
+    const payload = {
+      email: existingUser.email,
+      options: {},
+    };
+    if (env.nhostEmailRedirectTo) {
+      payload.options.redirectTo = env.nhostEmailRedirectTo;
+    }
+
+    await nhostAuthClient.post('/user/email/send-verification-email', payload);
+    const { sentAt } = await markVerificationEmailSent(existingUser.id, existingUser.metadata);
+
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'account:verification_email_resend',
+      entityType: 'app_user',
+      entityId: existingUser.id,
+      beforeData: { email: existingUser.email, verification_status: 'unverified' },
+      afterData: { email: existingUser.email, verification_email_sent_at: sentAt },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return sendSuccess(res, { id: existingUser.id, email: existingUser.email }, 'Verification email sent successfully');
+  } catch (error) {
+    return next(createHttpError(error.response?.status || error.statusCode || 400, error.response?.data?.message || error.message));
+  }
+}
+
 resourceRouter.get('/users', authenticate, requireRole('admin', 'user_all_region'), listManagedUsers);
+resourceRouter.post('/users/:id/resend-verification', authenticate, requireRole('admin', 'user_all_region'), resendManagedUserVerification);
 resourceRouter.patch('/users/:id', authenticate, requireRole('admin', 'user_all_region'), updateManagedUser);
 resourceRouter.delete('/users/:id', authenticate, requireRole('admin', 'user_all_region'), deleteManagedUser);
 
