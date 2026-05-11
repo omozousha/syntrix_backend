@@ -45,6 +45,63 @@ begin
 end;
 $$;
 
+create or replace function public.normalize_inventory_label(input text)
+returns text
+language sql
+immutable
+as $$
+  select regexp_replace(lower(coalesce(input, '')), '[^a-z0-9]+', '', 'g');
+$$;
+
+create or replace function public.normalize_device_inventory_type_code(input_type text)
+returns text
+language plpgsql
+immutable
+as $$
+declare
+  normalized_type text;
+begin
+  normalized_type := public.normalize_inventory_label(input_type);
+
+  return case
+    when normalized_type = 'olt' then '001'
+    when normalized_type = 'otb' then '002'
+    when normalized_type = 'rack' then '003'
+    when normalized_type in ('switch', 'swt') then '004'
+    when normalized_type in ('kabelbb', 'cablebb', 'backbonecable', 'backbone') then '005'
+    when normalized_type in ('kabelaksesfeeder', 'kabelakses', 'kabelfeeder', 'accessfeeder', 'accesscable', 'feedercable', 'feeder') then '006'
+    when normalized_type in ('kabeldw', 'cabledw', 'dropwire', 'dw') then '007'
+    when normalized_type = 'ont' then '008'
+    when normalized_type = 'odc' then '009'
+    when normalized_type = 'odp' then '010'
+    when normalized_type = 'hh' then '011'
+    when normalized_type = 'mh' then '012'
+    when normalized_type in ('jc', 'jointclosure', 'joint', 'jclosure') then '013'
+    else '000'
+  end;
+end;
+$$;
+
+create or replace function public.format_device_inventory_id(
+  recap_year integer,
+  region_code text,
+  device_type_code text,
+  sequence_number integer
+)
+returns text
+language sql
+immutable
+as $$
+  select 'INV-'
+    || lpad(recap_year::text, 4, '0')
+    || '/'
+    || lpad(region_code, 2, '0')
+    || '/'
+    || lpad(device_type_code, 3, '0')
+    || '/'
+    || lpad(sequence_number::text, 4, '0');
+$$;
+
 create sequence if not exists public.region_hid_seq start 1;
 create sequence if not exists public.pop_hid_seq start 1;
 create sequence if not exists public.project_hid_seq start 1;
@@ -63,6 +120,21 @@ create sequence if not exists public.attachment_hid_seq start 1;
 create sequence if not exists public.import_job_hid_seq start 1;
 create sequence if not exists public.validation_hid_seq start 1;
 create sequence if not exists public.user_hid_seq start 1;
+
+create table if not exists public.device_inventory_counters (
+  recap_year integer not null,
+  region_code text not null check (region_code ~ '^[0-9]{2}$'),
+  device_type_code text not null check (device_type_code ~ '^[0-9]{3}$'),
+  last_number integer not null default 0 check (last_number >= 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (recap_year, region_code, device_type_code)
+);
+
+drop trigger if exists trg_device_inventory_counters_updated_at on public.device_inventory_counters;
+create trigger trg_device_inventory_counters_updated_at
+before update on public.device_inventory_counters
+for each row execute function public.set_current_timestamp_updated_at();
 
 create table if not exists public.regions (
   id uuid primary key default gen_random_uuid(),
@@ -97,6 +169,83 @@ drop trigger if exists trg_regions_updated_at on public.regions;
 create trigger trg_regions_updated_at
 before update on public.regions
 for each row execute function public.set_current_timestamp_updated_at();
+
+create table if not exists public.inventory_region_codes (
+  region_id uuid primary key references public.regions(id) on update cascade on delete cascade,
+  region_code text not null unique check (region_code ~ '^[0-9]{2}$'),
+  region_name_snapshot text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+drop trigger if exists trg_inventory_region_codes_updated_at on public.inventory_region_codes;
+create trigger trg_inventory_region_codes_updated_at
+before update on public.inventory_region_codes
+for each row execute function public.set_current_timestamp_updated_at();
+
+create or replace function public.get_inventory_region_code(input_region_id uuid)
+returns text
+language plpgsql
+stable
+as $$
+declare
+  mapped_code text;
+  normalized_name text;
+begin
+  select irc.region_code
+  into mapped_code
+  from public.inventory_region_codes irc
+  where irc.region_id = input_region_id;
+
+  if mapped_code is not null then
+    return mapped_code;
+  end if;
+
+  select public.normalize_inventory_label(r.region_name)
+  into normalized_name
+  from public.regions r
+  where r.id = input_region_id;
+
+  return case
+    when normalized_name = 'banten' then '01'
+    when normalized_name in ('jabo', 'jabodetabek') then '02'
+    when normalized_name in ('jabar', 'jawabarat') then '03'
+    when normalized_name in ('jateng', 'jawatengah') then '04'
+    when normalized_name in ('jatimkal', 'jawatimurkalimantan', 'jatimkalimantan') then '05'
+    when normalized_name = 'sulawesi' then '06'
+    else '00'
+  end;
+end;
+$$;
+
+create or replace function public.next_device_inventory_id(
+  input_region_id uuid,
+  input_device_type text,
+  input_recap_year integer default extract(year from now())::integer
+)
+returns text
+language plpgsql
+volatile
+as $$
+declare
+  next_region_code text;
+  next_type_code text;
+  next_number integer;
+begin
+  next_region_code := public.get_inventory_region_code(input_region_id);
+  next_type_code := public.normalize_device_inventory_type_code(input_device_type);
+
+  insert into public.device_inventory_counters (recap_year, region_code, device_type_code, last_number)
+  values (input_recap_year, next_region_code, next_type_code, 1)
+  on conflict (recap_year, region_code, device_type_code)
+  do update set
+    last_number = public.device_inventory_counters.last_number + 1,
+    updated_at = now()
+  returning last_number into next_number;
+
+  return public.format_device_inventory_id(input_recap_year, next_region_code, next_type_code, next_number);
+end;
+$$;
 
 create table if not exists public.manufacturers (
   id uuid primary key default gen_random_uuid(),
@@ -506,40 +655,17 @@ returns trigger
 language plpgsql
 as $$
 declare
-  prefix text;
-  candidate_device_id text;
-  candidate_device_code text;
+  next_inventory_id text;
+  recap_year integer;
 begin
-  prefix := upper(regexp_replace(coalesce(new.device_type_key, 'DEV'), '[^A-Za-z0-9]', '', 'g'));
-  if prefix = '' then
-    prefix := 'DEV';
-  end if;
-  if prefix in ('JOINTCLOSURE', 'JOINT', 'JCLOSURE') then
-    prefix := 'JC';
-  elsif prefix = 'SWITCH' then
-    prefix := 'SWT';
-  elsif prefix = 'ROUTER' then
-    prefix := 'RTR';
-  elsif prefix = 'CABLE' then
-    prefix := 'CBL';
-  elsif length(prefix) > 4 then
-    prefix := left(prefix, 4);
+  if new.device_id is null or new.device_id !~ '^INV-[0-9]{4}/[0-9]{2}/[0-9]{3}/[0-9]{4}$' then
+    recap_year := coalesce(extract(year from new.installation_date)::integer, extract(year from now())::integer);
+    next_inventory_id := public.next_device_inventory_id(new.region_id, new.device_type_key, recap_year);
+    new.device_id := next_inventory_id;
   end if;
 
-  if new.device_id is null then
-    loop
-      candidate_device_id := public.generate_inventory_code(prefix, 7);
-      exit when not exists (select 1 from public.devices d where d.device_id = candidate_device_id);
-    end loop;
-    new.device_id := candidate_device_id;
-  end if;
-
-  if new.device_code is null then
-    loop
-      candidate_device_code := public.generate_inventory_code(prefix, 7);
-      exit when not exists (select 1 from public.devices d where d.device_code = candidate_device_code);
-    end loop;
-    new.device_code := candidate_device_code;
+  if new.device_code is null or new.device_code !~ '^INV-[0-9]{4}/[0-9]{2}/[0-9]{3}/[0-9]{4}$' then
+    new.device_code := new.device_id;
   end if;
 
   return new;
