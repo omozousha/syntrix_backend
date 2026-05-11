@@ -90,6 +90,37 @@ function isUntrackedTableError(error, tableName) {
   return haystack.includes(`field '${tableName}' not found`) || haystack.includes(`field "${tableName}" not found`);
 }
 
+function buildSelectionFields(config, includeOptional = true) {
+  const fields = includeOptional
+    ? config.listFields.concat(config.optionalListFields || [])
+    : config.listFields;
+
+  return Array.from(new Set(fields)).join('\n        ');
+}
+
+function isOptionalFieldError(error, config) {
+  const optionalFields = config.optionalListFields || [];
+  if (!optionalFields.length) return false;
+
+  const haystack = [
+    error?.message,
+    ...(error?.details || []).map((detail) => detail?.message),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return optionalFields.some((field) => {
+    const normalizedField = String(field).toLowerCase();
+    return (
+      haystack.includes(`field '${normalizedField}' not found`)
+      || haystack.includes(`field "${normalizedField}" not found`)
+      || haystack.includes(`cannot query field "${normalizedField}"`)
+      || haystack.includes(`cannot query field '${normalizedField}'`)
+    );
+  });
+}
+
 function sqlLiteral(value) {
   if (value == null || value === '') return 'null';
   return `'${String(value).replace(/'/g, "''")}'`;
@@ -281,10 +312,10 @@ async function executeRouteTypeFallback(config, operation, payload) {
 }
 
 async function listResources(config, options) {
-  const query = `
+  const buildQuery = (includeOptional = true) => `
     query ListResource($where: ${config.table}_bool_exp!, $limit: Int!, $offset: Int!, $orderBy: [${config.table}_order_by!]) {
       items: ${config.table}(where: $where, limit: $limit, offset: $offset, order_by: $orderBy) {
-        ${config.listFields.join('\n        ')}
+        ${buildSelectionFields(config, includeOptional)}
       }
       aggregate: ${config.table}_aggregate(where: $where) {
         aggregate {
@@ -295,9 +326,13 @@ async function listResources(config, options) {
   `;
 
   try {
-    const data = await executeResourceHasura(config, query, options);
+    const data = await executeResourceHasura(config, buildQuery(true), options);
     return data;
   } catch (error) {
+    if (isOptionalFieldError(error, config)) {
+      return executeResourceHasura(config, buildQuery(false), options);
+    }
+
     const fallback = await executeRouteTypeFallback(config, 'list', options);
     if (fallback !== undefined) return fallback;
     throw error;
@@ -348,18 +383,23 @@ async function getResourceById(config, id) {
     return dataByCode.items?.[0] || null;
   }
 
-  const query = `
+  const buildQuery = (includeOptional = true) => `
     query GetResource($id: uuid!) {
       item: ${config.table}_by_pk(id: $id) {
-        ${config.listFields.join('\n        ')}
+        ${buildSelectionFields(config, includeOptional)}
       }
     }
   `;
 
   try {
-    const data = await executeResourceHasura(config, query, { id });
+    const data = await executeResourceHasura(config, buildQuery(true), { id });
     return data.item;
   } catch (error) {
+    if (isOptionalFieldError(error, config)) {
+      const data = await executeResourceHasura(config, buildQuery(false), { id });
+      return data.item;
+    }
+
     const fallback = await executeRouteTypeFallback(config, 'get', { id });
     if (fallback !== undefined) return fallback;
     throw error;
@@ -367,18 +407,23 @@ async function getResourceById(config, id) {
 }
 
 async function createResource(config, object) {
-  const query = `
+  const buildQuery = (includeOptional = true) => `
     mutation CreateResource($object: ${config.table}_insert_input!) {
       item: insert_${config.table}_one(object: $object) {
-        ${config.listFields.join('\n        ')}
+        ${buildSelectionFields(config, includeOptional)}
       }
     }
   `;
 
   try {
-    const data = await executeResourceHasura(config, query, { object });
+    const data = await executeResourceHasura(config, buildQuery(true), { object });
     return data.item;
   } catch (error) {
+    if (isOptionalFieldError(error, config)) {
+      const data = await executeResourceHasura(config, buildQuery(false), { object });
+      return data.item;
+    }
+
     const fallback = await executeRouteTypeFallback(config, 'create', { object });
     if (fallback !== undefined) return fallback;
     throw error;
@@ -386,18 +431,23 @@ async function createResource(config, object) {
 }
 
 async function updateResource(config, id, changes) {
-  const query = `
+  const buildQuery = (includeOptional = true) => `
     mutation UpdateResource($id: uuid!, $changes: ${config.table}_set_input!) {
       item: update_${config.table}_by_pk(pk_columns: { id: $id }, _set: $changes) {
-        ${config.listFields.join('\n        ')}
+        ${buildSelectionFields(config, includeOptional)}
       }
     }
   `;
 
   try {
-    const data = await executeResourceHasura(config, query, { id, changes });
+    const data = await executeResourceHasura(config, buildQuery(true), { id, changes });
     return data.item;
   } catch (error) {
+    if (isOptionalFieldError(error, config)) {
+      const data = await executeResourceHasura(config, buildQuery(false), { id, changes });
+      return data.item;
+    }
+
     const fallback = await executeRouteTypeFallback(config, 'update', { id, changes });
     if (fallback !== undefined) return fallback;
     throw error;
