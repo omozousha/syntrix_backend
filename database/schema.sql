@@ -69,7 +69,7 @@ begin
     when normalized_type = 'rack' then '003'
     when normalized_type in ('switch', 'swt') then '004'
     when normalized_type in ('kabelbb', 'cablebb', 'backbonecable', 'backbone') then '005'
-    when normalized_type in ('kabelaksesfeeder', 'kabelakses', 'kabelfeeder', 'accessfeeder', 'accesscable', 'feedercable', 'feeder') then '006'
+    when normalized_type in ('cable', 'kabelaksesfeeder', 'kabelakses', 'kabelfeeder', 'accessfeeder', 'accesscable', 'feedercable', 'feeder') then '006'
     when normalized_type in ('kabeldw', 'cabledw', 'dropwire', 'dw') then '007'
     when normalized_type = 'ont' then '008'
     when normalized_type = 'odc' then '009'

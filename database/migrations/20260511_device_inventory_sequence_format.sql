@@ -38,6 +38,68 @@ as $$
   select regexp_replace(lower(coalesce(input, '')), '[^a-z0-9]+', '', 'g');
 $$;
 
+alter table if exists public.device_type_catalog
+  add column if not exists inventory_type_code text;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'device_type_catalog_inventory_type_code_check'
+      and conrelid = 'public.device_type_catalog'::regclass
+  ) then
+    alter table public.device_type_catalog
+      add constraint device_type_catalog_inventory_type_code_check
+      check (inventory_type_code is null or inventory_type_code ~ '^[0-9]{3}$');
+  end if;
+end $$;
+
+update public.device_type_catalog
+set inventory_type_code = case
+  when public.normalize_inventory_label(device_type_key) = 'olt' then '001'
+  when public.normalize_inventory_label(device_type_key) = 'otb' then '002'
+  when public.normalize_inventory_label(device_type_key) = 'rack' then '003'
+  when public.normalize_inventory_label(device_type_key) in ('switch', 'swt') then '004'
+  when public.normalize_inventory_label(device_type_key) in ('kabelbb', 'cablebb', 'backbonecable', 'backbone') then '005'
+  when public.normalize_inventory_label(device_type_key) in ('cable', 'kabelaksesfeeder', 'kabelakses', 'kabelfeeder', 'accessfeeder', 'accesscable', 'feedercable', 'feeder') then '006'
+  when public.normalize_inventory_label(device_type_key) in ('kabeldw', 'cabledw', 'dropwire', 'dw') then '007'
+  when public.normalize_inventory_label(device_type_key) = 'ont' then '008'
+  when public.normalize_inventory_label(device_type_key) = 'odc' then '009'
+  when public.normalize_inventory_label(device_type_key) = 'odp' then '010'
+  when public.normalize_inventory_label(device_type_key) = 'hh' then '011'
+  when public.normalize_inventory_label(device_type_key) = 'mh' then '012'
+  when public.normalize_inventory_label(device_type_key) in ('jc', 'jointclosure', 'joint', 'jclosure') then '013'
+  else inventory_type_code
+end
+where inventory_type_code is null;
+
+insert into public.device_type_catalog
+  (device_type_key, device_type_name, asset_group, inventory_type_code, description, sort_order, is_active)
+values
+  ('OLT', 'OLT', 'active', '001', 'Optical Line Terminal', 10, true),
+  ('OTB', 'OTB', 'passive', '002', 'Optical Termination Box', 20, true),
+  ('RACK', 'Rack', 'passive', '003', 'Rack perangkat', 30, true),
+  ('SWITCH', 'Switch', 'active', '004', 'Network switch asset', 40, true),
+  ('KABEL_BB', 'Kabel BB', 'passive', '005', 'Kabel backbone', 50, true),
+  ('KABEL_AKSES_FEEDER', 'Kabel Akses/Feeder', 'passive', '006', 'Kabel akses atau feeder', 60, true),
+  ('KABEL_DW', 'Kabel DW', 'passive', '007', 'Kabel drop wire', 70, true),
+  ('ONT', 'ONT', 'active', '008', 'Optical Network Terminal', 80, true),
+  ('ODC', 'ODC', 'passive', '009', 'Optical Distribution Cabinet', 90, true),
+  ('ODP', 'ODP', 'passive', '010', 'Optical Distribution Point', 100, true),
+  ('HH', 'HH', 'passive', '011', 'Handhole', 110, true),
+  ('MH', 'MH', 'passive', '012', 'Manhole', 120, true),
+  ('JC', 'JC', 'passive', '013', 'Joint Closure', 130, true)
+on conflict (device_type_key) do update
+set
+  device_type_name = excluded.device_type_name,
+  asset_group = excluded.asset_group,
+  inventory_type_code = excluded.inventory_type_code,
+  description = coalesce(public.device_type_catalog.description, excluded.description),
+  sort_order = excluded.sort_order,
+  is_active = true,
+  updated_at = now();
+
 insert into public.inventory_region_codes (region_id, region_code, region_name_snapshot)
 select r.id,
   case
@@ -107,12 +169,28 @@ $$;
 create or replace function public.normalize_device_inventory_type_code(input_type text)
 returns text
 language plpgsql
-immutable
+stable
 as $$
 declare
   normalized_type text;
+  mapped_code text;
 begin
   normalized_type := public.normalize_inventory_label(input_type);
+
+  select dt.inventory_type_code
+  into mapped_code
+  from public.device_type_catalog dt
+  where dt.inventory_type_code is not null
+    and (
+      public.normalize_inventory_label(dt.device_type_key) = normalized_type
+      or public.normalize_inventory_label(dt.device_type_name) = normalized_type
+    )
+  order by dt.sort_order asc, dt.device_type_name asc
+  limit 1;
+
+  if mapped_code is not null then
+    return mapped_code;
+  end if;
 
   return case
     when normalized_type = 'olt' then '001'
@@ -120,7 +198,7 @@ begin
     when normalized_type = 'rack' then '003'
     when normalized_type in ('switch', 'swt') then '004'
     when normalized_type in ('kabelbb', 'cablebb', 'backbonecable', 'backbone') then '005'
-    when normalized_type in ('kabelaksesfeeder', 'kabelakses', 'kabelfeeder', 'accessfeeder', 'accesscable', 'feedercable', 'feeder') then '006'
+    when normalized_type in ('cable', 'kabelaksesfeeder', 'kabelakses', 'kabelfeeder', 'accessfeeder', 'accesscable', 'feedercable', 'feeder') then '006'
     when normalized_type in ('kabeldw', 'cabledw', 'dropwire', 'dw') then '007'
     when normalized_type = 'ont' then '008'
     when normalized_type = 'odc' then '009'
