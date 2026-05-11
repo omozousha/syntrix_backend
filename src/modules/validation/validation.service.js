@@ -792,6 +792,7 @@ async function loadDeviceSnapshot(deviceId) {
     query LoadDeviceSnapshot($deviceId: uuid!) {
       device: devices_by_pk(id: $deviceId) {
         id
+        region_id
         device_name
         status
         validation_status
@@ -855,6 +856,30 @@ async function updateDevicePortById(portId, changes) {
   return data.item;
 }
 
+async function createDevicePort(object) {
+  const mutation = `
+    mutation CreateDevicePort($object: device_ports_insert_input!) {
+      item: insert_device_ports_one(object: $object) {
+        id
+      }
+    }
+  `;
+  const data = await executeHasura(mutation, { object });
+  return data.item;
+}
+
+async function deleteDevicePortById(portId) {
+  const mutation = `
+    mutation DeleteDevicePortById($id: uuid!) {
+      item: delete_device_ports_by_pk(id: $id) {
+        id
+      }
+    }
+  `;
+  const data = await executeHasura(mutation, { id: portId });
+  return data.item;
+}
+
 async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
   const payload = request.payload_snapshot || {};
   if (payload.source === 'adminregion-create-device') {
@@ -878,6 +903,7 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
   }
 
   const currentPortMap = new Map(before.ports.map((port) => [String(port.id), port]));
+  const currentPortByIndex = new Map(before.ports.map((port) => [Number(port.port_index), port]));
 
   const deviceChanges = pickObject(payloadDevice, [
     'device_name',
@@ -897,16 +923,38 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
   deviceChanges.deleted_by_user_id = null;
 
   const changedPorts = [];
+  const createdPorts = [];
   try {
     if (Object.keys(deviceChanges).length > 0) {
       await updateDeviceById(request.entity_id, deviceChanges);
     }
 
     for (const portPatch of payloadPorts) {
-      const portId = String(portPatch.id || '').trim();
-      if (!portId || !currentPortMap.has(portId)) continue;
+      const requestedPortIndex = Number(portPatch.port_index);
+      const existingByIndex = Number.isInteger(requestedPortIndex) ? currentPortByIndex.get(requestedPortIndex) : null;
+      const portId = String(portPatch.id || existingByIndex?.id || '').trim();
       const changes = pickObject(portPatch, ['port_label', 'status', 'customer_id', 'ont_device_id', 'notes']);
       if (!Object.keys(changes).length) continue;
+
+      if (!portId || !currentPortMap.has(portId)) {
+        if (!Number.isInteger(requestedPortIndex) || requestedPortIndex <= 0) continue;
+        const created = await createDevicePort({
+          region_id: before.device.region_id,
+          device_id: request.entity_id,
+          port_index: requestedPortIndex,
+          port_label: portPatch.port_label || `#${requestedPortIndex}`,
+          port_type: portPatch.port_type || 'fiber',
+          direction: portPatch.direction || 'bidirectional',
+          status: changes.status || 'idle',
+          customer_id: changes.customer_id || null,
+          ont_device_id: changes.ont_device_id || null,
+          notes: changes.notes || null,
+          is_active: true,
+        });
+        if (created?.id) createdPorts.push(created.id);
+        continue;
+      }
+
       await updateDevicePortById(portId, changes);
       changedPorts.push(portId);
     }
@@ -934,6 +982,10 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
         if (!oldPort) continue;
         const rollbackPort = pickObject(oldPort, ['port_label', 'status', 'customer_id', 'ont_device_id', 'notes']);
         await updateDevicePortById(portId, rollbackPort);
+      }
+
+      for (const portId of createdPorts) {
+        await deleteDevicePortById(portId);
       }
     } catch (_rollbackError) {
       // swallow rollback error; original error is more important
