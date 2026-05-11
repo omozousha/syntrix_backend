@@ -13,6 +13,8 @@ const { sendSuccess } = require('../../utils/response');
 const { buildWhereClause, listResources } = require('../../shared/resource.service');
 const { createAuditLog } = require('../../shared/audit.service');
 const { buildOdpCoreChainSummary, buildOdpCoreChainDraft } = require('../device/odp-chain.service');
+const { getPagination } = require('../../utils/pagination');
+const { normalizeRoleName, isSuperAdminRole } = require('../../utils/roles');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -746,6 +748,383 @@ async function fetchAttachmentFromStorage(attachment, token) {
   }
   throw createHttpError(lastResponse?.status || 502, 'Failed to fetch file from storage', lastResponse?.data);
 }
+
+function getAccountManagerScope(auth) {
+  const role = normalizeRoleName(auth?.role);
+  if (isSuperAdminRole(role)) {
+    return { role, allowedRegions: [], isSuperAdmin: true };
+  }
+
+  if (role !== 'adminregion') {
+    throw createHttpError(403, 'You do not have permission to manage accounts');
+  }
+
+  const allowedRegions = Array.from(new Set(auth?.regions || []));
+  if (!allowedRegions.length) {
+    throw createHttpError(403, 'This adminregion user does not have any assigned region');
+  }
+
+  return { role, allowedRegions, isSuperAdmin: false };
+}
+
+function buildManagedUsersWhere(req) {
+  const scope = getAccountManagerScope(req.auth);
+  const filters = [];
+
+  if (!scope.isSuperAdmin) {
+    filters.push({ role_name: { _eq: 'user_region' } });
+    filters.push({ default_region_id: { _in: scope.allowedRegions } });
+  }
+
+  const role = String(req.query.role_name || '').trim();
+  if (role && role !== '__all__') {
+    if (!scope.isSuperAdmin && role !== 'user_region') {
+      throw createHttpError(403, 'Adminregion can only view validator accounts');
+    }
+    filters.push({ role_name: { _eq: role } });
+  }
+
+  const regionId = String(req.query.default_region_id || req.query.region_id || '').trim();
+  if (regionId && regionId !== '__all__') {
+    if (regionId === '__none__') {
+      if (!scope.isSuperAdmin) {
+        throw createHttpError(403, 'Adminregion can only view accounts with assigned region');
+      }
+      filters.push({ default_region_id: { _is_null: true } });
+    } else {
+      if (!scope.isSuperAdmin && !scope.allowedRegions.includes(regionId)) {
+        throw createHttpError(403, 'You do not have access to this region');
+      }
+      filters.push({ default_region_id: { _eq: regionId } });
+    }
+  }
+
+  const isActive = String(req.query.is_active || '').trim();
+  if (isActive === 'true' || isActive === 'false') {
+    filters.push({ is_active: { _eq: isActive === 'true' } });
+  }
+
+  const keyword = String(req.query.q || req.query.search || '').trim();
+  if (keyword) {
+    filters.push({
+      _or: [
+        { full_name: { _ilike: `%${keyword}%` } },
+        { email: { _ilike: `%${keyword}%` } },
+        { user_code: { _ilike: `%${keyword}%` } },
+      ],
+    });
+  }
+
+  return filters.length ? { _and: filters } : {};
+}
+
+async function loadAuthVerificationMap(authUserIds) {
+  const ids = Array.from(new Set((authUserIds || []).filter(Boolean)));
+  if (!ids.length) return new Map();
+
+  const query = `
+    query LoadAuthVerification($ids: [uuid!]!) {
+      users(where: { id: { _in: $ids } }) {
+        id
+        emailVerified
+      }
+    }
+  `;
+  const data = await executeHasura(query, { ids });
+  return new Map((data.users || []).map((item) => [item.id, Boolean(item.emailVerified)]));
+}
+
+function enrichUsersWithVerification(users, verificationMap) {
+  return (users || []).map((user) => {
+    const emailVerified = verificationMap.get(user.auth_user_id) || false;
+    return {
+      ...user,
+      email_verified: emailVerified,
+      verification_status: emailVerified
+        ? 'verified'
+        : user.metadata?.pending_email_verification
+        ? 'pending'
+        : 'unverified',
+    };
+  });
+}
+
+async function listManagedUsers(req, res, next) {
+  try {
+    const { page, limit, offset } = getPagination(req.query);
+    const where = buildManagedUsersWhere(req);
+
+    const query = `
+      query ListManagedUsers($where: app_users_bool_exp!, $limit: Int!, $offset: Int!) {
+        items: app_users(
+          where: $where
+          order_by: [{ created_at: desc }]
+          limit: $limit
+          offset: $offset
+        ) {
+          id
+          user_code
+          auth_user_id
+          full_name
+          email
+          role_name
+          avatar_attachment_id
+          is_active
+          default_region_id
+          metadata
+          created_at
+          updated_at
+        }
+        aggregate: app_users_aggregate(where: $where) {
+          aggregate {
+            count
+          }
+        }
+      }
+    `;
+    const data = await executeHasura(query, { where, limit, offset });
+    const verificationMap = await loadAuthVerificationMap((data.items || []).map((item) => item.auth_user_id));
+    return sendSuccess(
+      res,
+      enrichUsersWithVerification(data.items || [], verificationMap),
+      'Users fetched successfully',
+      200,
+      { page, limit, total: data.aggregate?.aggregate?.count || 0 },
+    );
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function loadManagedUserById(userId) {
+  const query = `
+    query LoadManagedUserById($id: uuid!) {
+      item: app_users_by_pk(id: $id) {
+        id
+        user_code
+        auth_user_id
+        full_name
+        email
+        role_name
+        avatar_attachment_id
+        is_active
+        default_region_id
+        metadata
+        created_at
+        updated_at
+      }
+    }
+  `;
+  const data = await executeHasura(query, { id: userId });
+  return data.item || null;
+}
+
+function assertCanManageUser(auth, user) {
+  const scope = getAccountManagerScope(auth);
+  if (scope.isSuperAdmin) {
+    if (user.role_name === 'admin') {
+      throw createHttpError(403, 'Superadmin accounts cannot be edited from Account Management');
+    }
+    return scope;
+  }
+
+  if (user.role_name !== 'user_region') {
+    throw createHttpError(403, 'Adminregion can only manage validator accounts');
+  }
+  if (!user.default_region_id || !scope.allowedRegions.includes(user.default_region_id)) {
+    throw createHttpError(403, 'You do not have access to this user region');
+  }
+  return scope;
+}
+
+function normalizeManagedUserPayload(auth, body, existingUser) {
+  const scope = assertCanManageUser(auth, existingUser);
+  const changes = {};
+
+  if (body.full_name !== undefined) {
+    const name = String(body.full_name || '').trim();
+    if (!name) throw createHttpError(400, 'full_name cannot be empty');
+    changes.full_name = name;
+  }
+
+  const requestedRole = body.role_name !== undefined ? String(body.role_name) : existingUser.role_name;
+  if (!scope.isSuperAdmin && requestedRole !== 'user_region') {
+    throw createHttpError(403, 'Adminregion can only assign validator role');
+  }
+  if (body.role_name !== undefined) {
+    const normalizedRole = normalizeRoleName(requestedRole);
+    changes.role_name =
+      normalizedRole === 'adminregion'
+        ? 'user_all_region'
+        : normalizedRole === 'validator'
+        ? 'user_region'
+        : normalizedRole === 'superadmin'
+        ? 'admin'
+        : requestedRole;
+    if (!['admin', 'user_all_region', 'user_region'].includes(changes.role_name)) {
+      throw createHttpError(400, 'role_name must be admin/user_all_region/user_region');
+    }
+  }
+
+  if (body.default_region_id !== undefined) {
+    const nextRegionId = body.default_region_id || null;
+    if (!scope.isSuperAdmin && (!nextRegionId || !scope.allowedRegions.includes(nextRegionId))) {
+      throw createHttpError(403, 'Adminregion can only assign users to assigned regions');
+    }
+    changes.default_region_id = nextRegionId;
+  }
+
+  if (!scope.isSuperAdmin) {
+    const nextRegionId = changes.default_region_id !== undefined ? changes.default_region_id : existingUser.default_region_id;
+    if (!nextRegionId || !scope.allowedRegions.includes(nextRegionId)) {
+      throw createHttpError(403, 'Validator account must stay inside assigned adminregion scope');
+    }
+  }
+
+  if (body.is_active !== undefined) {
+    changes.is_active = Boolean(body.is_active);
+  }
+
+  return { changes, scope };
+}
+
+async function syncUserRegionScopes(userId, regionId) {
+  const deleteMutation = `
+    mutation DeleteUserRegionScopes($userId: uuid!) {
+      delete_user_region_scopes(where: { user_id: { _eq: $userId } }) {
+        affected_rows
+      }
+    }
+  `;
+  await executeHasura(deleteMutation, { userId });
+
+  if (!regionId) return [];
+
+  const insertMutation = `
+    mutation InsertUserRegionScope($object: user_region_scopes_insert_input!) {
+      inserted: insert_user_region_scopes_one(object: $object) {
+        id
+        user_id
+        region_id
+      }
+    }
+  `;
+  const data = await executeHasura(insertMutation, {
+    object: {
+      user_id: userId,
+      region_id: regionId,
+    },
+  });
+  return data.inserted ? [data.inserted] : [];
+}
+
+async function updateManagedUser(req, res, next) {
+  try {
+    const existingUser = await loadManagedUserById(req.params.id);
+    if (!existingUser) throw createHttpError(404, 'User not found');
+
+    const { changes } = normalizeManagedUserPayload(req.auth, req.body || {}, existingUser);
+    if (!Object.keys(changes).length) {
+      const verificationMap = await loadAuthVerificationMap([existingUser.auth_user_id]);
+      return sendSuccess(res, enrichUsersWithVerification([existingUser], verificationMap)[0], 'No user changes submitted');
+    }
+
+    const mutation = `
+      mutation UpdateManagedUser($id: uuid!, $changes: app_users_set_input!) {
+        item: update_app_users_by_pk(pk_columns: { id: $id }, _set: $changes) {
+          id
+          user_code
+          auth_user_id
+          full_name
+          email
+          role_name
+          avatar_attachment_id
+          is_active
+          default_region_id
+          metadata
+          created_at
+          updated_at
+        }
+      }
+    `;
+    const data = await executeHasura(mutation, { id: existingUser.id, changes });
+    const updatedUser = data.item;
+
+    if (changes.default_region_id !== undefined || changes.role_name !== undefined) {
+      const nextRegionId =
+        updatedUser.role_name === 'user_region' || updatedUser.role_name === 'user_all_region'
+          ? updatedUser.default_region_id
+          : null;
+      await syncUserRegionScopes(updatedUser.id, nextRegionId);
+    }
+
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'account:user_update',
+      entityType: 'app_user',
+      entityId: existingUser.id,
+      beforeData: existingUser,
+      afterData: updatedUser,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    const verificationMap = await loadAuthVerificationMap([updatedUser.auth_user_id]);
+    return sendSuccess(res, enrichUsersWithVerification([updatedUser], verificationMap)[0], 'User updated successfully');
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function deleteManagedUser(req, res, next) {
+  try {
+    const existingUser = await loadManagedUserById(req.params.id);
+    if (!existingUser) throw createHttpError(404, 'User not found');
+    assertCanManageUser(req.auth, existingUser);
+
+    if (existingUser.id === req.auth.appUser?.id) {
+      throw createHttpError(400, 'You cannot delete your own account');
+    }
+
+    await syncUserRegionScopes(existingUser.id, null);
+
+    const mutation = `
+      mutation DeleteManagedUser($id: uuid!) {
+        item: delete_app_users_by_pk(id: $id) {
+          id
+          user_code
+          auth_user_id
+          full_name
+          email
+          role_name
+          default_region_id
+          is_active
+          metadata
+        }
+      }
+    `;
+    const data = await executeHasura(mutation, { id: existingUser.id });
+
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'account:user_delete',
+      entityType: 'app_user',
+      entityId: existingUser.id,
+      beforeData: existingUser,
+      afterData: null,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return sendSuccess(res, data.item, 'User deleted successfully');
+  } catch (error) {
+    return next(error);
+  }
+}
+
+resourceRouter.get('/users', authenticate, requireRole('admin', 'user_all_region'), listManagedUsers);
+resourceRouter.patch('/users/:id', authenticate, requireRole('admin', 'user_all_region'), updateManagedUser);
+resourceRouter.delete('/users/:id', authenticate, requireRole('admin', 'user_all_region'), deleteManagedUser);
 
 function bindResource(resourceName, config) {
   const router = express.Router();

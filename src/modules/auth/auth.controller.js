@@ -22,6 +22,40 @@ const {
   cleanupOrphanAvatarAttachments,
 } = require('./auth.service');
 
+function assertCanRegisterUser(auth, payload) {
+  const requesterRole = normalizeRoleName(auth?.role);
+  const targetRole = normalizeRoleName(payload.role_name);
+  const regionIds = Array.from(new Set([
+    ...(payload.region_ids || []),
+    ...(payload.default_region_id ? [payload.default_region_id] : []),
+  ].filter(Boolean)));
+
+  if (isSuperAdminRole(requesterRole)) {
+    if (targetRole === 'superadmin') {
+      throw createHttpError(403, 'Superadmin account creation is restricted from Account Management');
+    }
+    return;
+  }
+
+  if (requesterRole !== 'adminregion') {
+    throw createHttpError(403, 'You do not have permission to create users');
+  }
+
+  if (targetRole !== 'validator') {
+    throw createHttpError(403, 'Adminregion can only create validator accounts');
+  }
+
+  const allowedRegions = new Set(auth.regions || []);
+  if (!regionIds.length) {
+    throw createHttpError(400, 'Validator account must have an assigned region');
+  }
+
+  const outsideScope = regionIds.some((regionId) => !allowedRegions.has(regionId));
+  if (outsideScope) {
+    throw createHttpError(403, 'Adminregion can only create validator accounts inside assigned regions');
+  }
+}
+
 function validateRegistrationPayload(payload, { allowAdmin = true } = {}) {
   const {
     email,
@@ -159,6 +193,7 @@ async function login(req, res, next) {
 async function register(req, res, next) {
   try {
     validateRegistrationPayload(req.body);
+    assertCanRegisterUser(req.auth, req.body);
     const result = await createSyntrixUser({
       ...req.body,
       require_email_verification: true,
