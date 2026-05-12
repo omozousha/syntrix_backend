@@ -906,7 +906,6 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
   const currentPortByIndex = new Map(before.ports.map((port) => [Number(port.port_index), port]));
 
   const deviceChanges = pickObject(payloadDevice, [
-    'device_name',
     'status',
     'splitter_ratio',
     'total_ports',
@@ -962,7 +961,6 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
     // rollback best effort
     try {
       const rollbackDevice = pickObject(before.device, [
-        'device_name',
         'status',
         'validation_status',
         'validation_date',

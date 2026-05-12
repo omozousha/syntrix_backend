@@ -637,6 +637,11 @@ async function create(req, res, next) {
     let provisioningResult = null;
     let fiberSyncResult = null;
     if (req.resourceName === 'devices') {
+      if (!item.device_name && item.device_id) {
+        item = await updateResource(req.resourceConfig, item.id, {
+          device_name: item.device_id,
+        });
+      }
       try {
         provisioningResult = await provisionPortsFromTemplate(item);
         fiberSyncResult = await syncFiberCoresForCableDevice(item);
