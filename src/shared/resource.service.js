@@ -350,6 +350,183 @@ async function deleteRouteTypeWithSql(id) {
   return mapSqlRows(data)[0] || null;
 }
 
+function getMasterOptionSqlMeta(config) {
+  if (config.table === 'odp_types') {
+    return {
+      table: 'odp_types',
+      codeColumn: 'odp_type_code',
+      nameColumn: 'odp_type_name',
+    };
+  }
+  if (config.table === 'installation_types') {
+    return {
+      table: 'installation_types',
+      codeColumn: 'installation_type_code',
+      nameColumn: 'installation_type_name',
+    };
+  }
+  return null;
+}
+
+function normalizeMasterOptionRow(row, meta) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    [meta.codeColumn]: row[meta.codeColumn],
+    [meta.nameColumn]: row[meta.nameColumn],
+    description: row.description,
+    sort_order: Number(row.sort_order || 0),
+    is_active: row.is_active === true || row.is_active === 't',
+    deleted_at: row.deleted_at,
+    deleted_by_user_id: row.deleted_by_user_id,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function buildMasterOptionSelectFields(meta) {
+  return `
+    id::text,
+    ${meta.codeColumn},
+    ${meta.nameColumn},
+    description,
+    sort_order::text,
+    is_active::text,
+    deleted_at::text,
+    deleted_by_user_id::text,
+    created_at::text,
+    updated_at::text
+  `;
+}
+
+function buildMasterOptionWhere(options = {}, meta) {
+  const filters = [];
+  const where = options.where?._and || [];
+  const includeDeleted = where.some((condition) => condition.deleted_at?._is_null === false);
+  if (!includeDeleted) filters.push('deleted_at is null');
+
+  for (const condition of where) {
+    if (condition.is_active?._eq != null) {
+      filters.push(`is_active = ${sqlBoolean(condition.is_active._eq)}`);
+    }
+    if (condition._or) {
+      const search = condition._or
+        .map((item) => Object.values(item)[0]?._ilike)
+        .find(Boolean);
+      if (search) {
+        const q = String(search).replace(/^%|%$/g, '');
+        filters.push(`(${meta.codeColumn} ilike ${sqlLiteral(`%${q}%`)} or ${meta.nameColumn} ilike ${sqlLiteral(`%${q}%`)} or description ilike ${sqlLiteral(`%${q}%`)})`);
+      }
+    }
+  }
+
+  return filters.length ? `where ${filters.join(' and ')}` : '';
+}
+
+async function listMasterOptionsWithSql(config, options = {}) {
+  const meta = getMasterOptionSqlMeta(config);
+  if (!meta) return undefined;
+
+  const limit = Math.min(Number(options.limit) || 20, 500);
+  const offset = Math.max(Number(options.offset) || 0, 0);
+  const whereSql = buildMasterOptionWhere(options, meta);
+  const selectFields = buildMasterOptionSelectFields(meta);
+  const data = await executeHasuraSql(`
+    select ${selectFields}
+    from public.${meta.table}
+    ${whereSql}
+    order by sort_order asc, ${meta.nameColumn} asc
+    limit ${limit}
+    offset ${offset};
+  `);
+  const countData = await executeHasuraSql(`
+    select count(*)::text as count
+    from public.${meta.table}
+    ${whereSql};
+  `);
+
+  return {
+    items: mapSqlRows(data).map((row) => normalizeMasterOptionRow(row, meta)),
+    aggregate: {
+      aggregate: {
+        count: Number(mapSqlRows(countData)[0]?.count || 0),
+      },
+    },
+  };
+}
+
+async function getMasterOptionByIdWithSql(config, id) {
+  const meta = getMasterOptionSqlMeta(config);
+  if (!meta) return undefined;
+
+  const data = await executeHasuraSql(`
+    select ${buildMasterOptionSelectFields(meta)}
+    from public.${meta.table}
+    where id = ${sqlLiteral(id)}::uuid
+    limit 1;
+  `);
+  return normalizeMasterOptionRow(mapSqlRows(data)[0], meta);
+}
+
+async function createMasterOptionWithSql(config, object) {
+  const meta = getMasterOptionSqlMeta(config);
+  if (!meta) return undefined;
+
+  const data = await executeHasuraSql(`
+    insert into public.${meta.table} (
+      ${meta.codeColumn},
+      ${meta.nameColumn},
+      description,
+      sort_order,
+      is_active
+    )
+    values (
+      ${sqlLiteral(object[meta.codeColumn])},
+      ${sqlLiteral(object[meta.nameColumn])},
+      ${sqlLiteral(object.description)},
+      ${sqlInteger(object.sort_order)},
+      ${sqlBoolean(object.is_active ?? true)}
+    )
+    returning ${buildMasterOptionSelectFields(meta)};
+  `);
+  return normalizeMasterOptionRow(mapSqlRows(data)[0], meta);
+}
+
+async function updateMasterOptionWithSql(config, id, changes) {
+  const meta = getMasterOptionSqlMeta(config);
+  if (!meta) return undefined;
+
+  const sets = [];
+  if (Object.prototype.hasOwnProperty.call(changes, meta.codeColumn)) sets.push(`${meta.codeColumn} = ${sqlLiteral(changes[meta.codeColumn])}`);
+  if (Object.prototype.hasOwnProperty.call(changes, meta.nameColumn)) sets.push(`${meta.nameColumn} = ${sqlLiteral(changes[meta.nameColumn])}`);
+  if (Object.prototype.hasOwnProperty.call(changes, 'description')) sets.push(`description = ${sqlLiteral(changes.description)}`);
+  if (Object.prototype.hasOwnProperty.call(changes, 'sort_order')) sets.push(`sort_order = ${sqlInteger(changes.sort_order)}`);
+  if (Object.prototype.hasOwnProperty.call(changes, 'is_active')) sets.push(`is_active = ${sqlBoolean(changes.is_active)}`);
+  if (Object.prototype.hasOwnProperty.call(changes, 'deleted_at')) sets.push(`deleted_at = ${changes.deleted_at ? sqlLiteral(changes.deleted_at) : 'null'}`);
+  if (Object.prototype.hasOwnProperty.call(changes, 'deleted_by_user_id')) sets.push(`deleted_by_user_id = ${changes.deleted_by_user_id ? `${sqlLiteral(changes.deleted_by_user_id)}::uuid` : 'null'}`);
+  sets.push('updated_at = now()');
+
+  const data = await executeHasuraSql(`
+    update public.${meta.table}
+    set ${sets.join(', ')}
+    where id = ${sqlLiteral(id)}::uuid
+    returning ${buildMasterOptionSelectFields(meta)};
+  `);
+  return normalizeMasterOptionRow(mapSqlRows(data)[0], meta);
+}
+
+async function deleteMasterOptionWithSql(config, id) {
+  const meta = getMasterOptionSqlMeta(config);
+  if (!meta) return undefined;
+
+  const data = await executeHasuraSql(`
+    delete from public.${meta.table}
+    where id = ${sqlLiteral(id)}::uuid
+    returning id::text;
+  `);
+  return mapSqlRows(data)[0] || null;
+}
+
 async function executeResourceHasura(config, query, variables = {}) {
   try {
     return await executeHasura(query, variables);
@@ -370,6 +547,18 @@ async function executeRouteTypeFallback(config, operation, payload) {
   if (operation === 'create') return createRouteTypeWithSql(payload.object);
   if (operation === 'update') return updateRouteTypeWithSql(payload.id, payload.changes);
   if (operation === 'delete') return deleteRouteTypeWithSql(payload.id);
+  return undefined;
+}
+
+async function executeSqlFallback(config, operation, payload) {
+  const routeTypeFallback = await executeRouteTypeFallback(config, operation, payload);
+  if (routeTypeFallback !== undefined) return routeTypeFallback;
+
+  if (operation === 'list') return listMasterOptionsWithSql(config, payload);
+  if (operation === 'get') return getMasterOptionByIdWithSql(config, payload.id);
+  if (operation === 'create') return createMasterOptionWithSql(config, payload.object);
+  if (operation === 'update') return updateMasterOptionWithSql(config, payload.id, payload.changes);
+  if (operation === 'delete') return deleteMasterOptionWithSql(config, payload.id);
   return undefined;
 }
 
@@ -396,7 +585,7 @@ async function listResources(config, options) {
       return enrichOptionalFieldsWithSql(config, data);
     }
 
-    const fallback = await executeRouteTypeFallback(config, 'list', options);
+    const fallback = await executeSqlFallback(config, 'list', options);
     if (fallback !== undefined) return fallback;
     throw error;
   }
@@ -464,7 +653,7 @@ async function getResourceById(config, id) {
       return enriched.item;
     }
 
-    const fallback = await executeRouteTypeFallback(config, 'get', { id });
+    const fallback = await executeSqlFallback(config, 'get', { id });
     if (fallback !== undefined) return fallback;
     throw error;
   }
@@ -489,7 +678,7 @@ async function createResource(config, object) {
       return enriched.item;
     }
 
-    const fallback = await executeRouteTypeFallback(config, 'create', { object });
+    const fallback = await executeSqlFallback(config, 'create', { object });
     if (fallback !== undefined) return fallback;
     throw error;
   }
@@ -514,7 +703,7 @@ async function updateResource(config, id, changes) {
       return enriched.item;
     }
 
-    const fallback = await executeRouteTypeFallback(config, 'update', { id, changes });
+    const fallback = await executeSqlFallback(config, 'update', { id, changes });
     if (fallback !== undefined) return fallback;
     throw error;
   }
@@ -533,7 +722,7 @@ async function deleteResource(config, id) {
     const data = await executeResourceHasura(config, query, { id });
     return data.item;
   } catch (error) {
-    const fallback = await executeRouteTypeFallback(config, 'delete', { id });
+    const fallback = await executeSqlFallback(config, 'delete', { id });
     if (fallback !== undefined) return fallback;
     throw error;
   }
