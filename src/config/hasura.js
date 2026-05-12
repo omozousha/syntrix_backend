@@ -82,7 +82,9 @@ async function ensureHasuraTableTracked(tableName, schema = 'public') {
     });
   } catch (error) {
     const message = String(error.response?.data?.error || error.response?.data?.message || error.message || '').toLowerCase();
-    if (!message.includes('already') && !message.includes('exists') && !message.includes('tracked')) {
+    const tableMissing = message.includes('no such table') || message.includes('no such table/view');
+    const alreadyTracked = message.includes('already') || message.includes('already tracked') || message.includes('is already tracked');
+    if (tableMissing || !alreadyTracked) {
       throw error;
     }
   }
