@@ -913,6 +913,7 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
   const currentPortByIndex = new Map(before.ports.map((port) => [Number(port.port_index), port]));
 
   const deviceChanges = pickObject(payloadDevice, [
+    'device_name',
     'status',
     'splitter_ratio',
     'total_ports',
@@ -925,6 +926,8 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
   // while `devices.validation_status` still uses legacy enum (`valid|warning|invalid|unvalidated`).
   deviceChanges.validation_status = 'valid';
   deviceChanges.validation_date = new Date().toISOString().slice(0, 10);
+  deviceChanges.last_validation_at = new Date().toISOString();
+  deviceChanges.updated_at = new Date().toISOString();
   deviceChanges.deleted_at = null;
   deviceChanges.deleted_by_user_id = null;
 
@@ -969,8 +972,11 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
     try {
       const rollbackDevice = pickObject(before.device, [
         'status',
+        'device_name',
         'validation_status',
         'validation_date',
+        'last_validation_at',
+        'updated_at',
         'deleted_at',
         'deleted_by_user_id',
         'splitter_ratio',
