@@ -96,6 +96,12 @@ async function submitValidationRequest(req, res, next) {
         'Validation request sedang menunggu review superadmin. Tunggu keputusan sebelum submit ulang.',
       );
     }
+    if (activeRequest && activeRequest.current_status === STATUS.REJECTED_SUPERADMIN) {
+      throw createHttpError(
+        409,
+        'Validation request ditolak superadmin. Adminregion harus review dan resubmit ke superadmin terlebih dahulu.',
+      );
+    }
 
     let request;
     let auditActionName = 'validation_request_submitted';
@@ -104,10 +110,11 @@ async function submitValidationRequest(req, res, next) {
     let responseCode = 201;
     let message = 'Validation request submitted';
 
-    if (activeRequest && activeRequest.current_status === STATUS.ONGOING) {
+    if (activeRequest && [STATUS.ONGOING, STATUS.REJECTED_ADMINREGION].includes(activeRequest.current_status)) {
       request = await resubmitActiveRequest({
         requestId: activeRequest.id,
         submittedByUserId: actorUserId,
+        nextStatus: STATUS.ONGOING,
         payloadSnapshot,
         evidenceAttachments,
         checklist,
@@ -115,7 +122,7 @@ async function submitValidationRequest(req, res, next) {
       });
       auditActionName = 'validation_request_resubmitted_by_validator';
       actionType = ACTION.RESUBMIT_VALIDATOR;
-      beforeStatus = STATUS.ONGOING;
+      beforeStatus = activeRequest.current_status;
       responseCode = 200;
       message = 'Validation request resubmitted';
     } else {
@@ -321,6 +328,62 @@ async function rejectByAdminRegion(req, res, next) {
     });
 
     return sendSuccess(res, updated, 'Rejected by adminregion');
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function resubmitByAdminRegion(req, res, next) {
+  try {
+    assertValidationWorkflowEnabled();
+    const { actorUserId, actorRole } = getRequestContext(req);
+    if (!isAdminRegion(actorRole)) {
+      throw createHttpError(403, 'Only adminregion can resubmit this stage');
+    }
+
+    const request = await loadRequestById(req.params.id);
+    if (!request) throw createHttpError(404, 'Validation request not found');
+    assertHasRegionAccess(req.auth, request.region_id);
+    assertPilotRegionAllowed(request.region_id);
+
+    if (request.current_status !== STATUS.REJECTED_SUPERADMIN) {
+      throw createHttpError(409, 'Request is not in rejected_by_superadmin status');
+    }
+
+    const updated = await updateRequestStatus({
+      requestId: request.id,
+      nextStatus: STATUS.PENDING_ASYNC,
+      approvedByUserId: actorUserId,
+      rejectedByUserId: null,
+    });
+
+    await insertRequestLog({
+      requestId: request.id,
+      actionType: ACTION.RESUBMIT_ADMINREGION,
+      actorUserId,
+      actorRole,
+      beforeStatus: STATUS.REJECTED_SUPERADMIN,
+      afterStatus: STATUS.PENDING_ASYNC,
+    });
+
+    await createAuditLog({
+      actorUserId,
+      actionName: 'validation_request_resubmitted_by_adminregion',
+      entityType: 'validation_requests',
+      entityId: request.id,
+      beforeData: {
+        request_id: request.request_id,
+        status: STATUS.REJECTED_SUPERADMIN,
+      },
+      afterData: {
+        request_id: request.request_id,
+        status: STATUS.PENDING_ASYNC,
+      },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] || null,
+    });
+
+    return sendSuccess(res, updated, 'Resubmitted by adminregion');
   } catch (error) {
     return next(error);
   }
@@ -619,6 +682,7 @@ module.exports = {
   listValidationRequests,
   approveByAdminRegion,
   rejectByAdminRegion,
+  resubmitByAdminRegion,
   approveBySuperAdmin,
   rejectBySuperAdmin,
   getValidationRequestHistory,

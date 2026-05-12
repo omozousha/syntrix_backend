@@ -100,7 +100,7 @@ async function loadActiveRequestByEntity(entityId) {
         where: {
           entity_type: { _eq: "device" }
           entity_id: { _eq: $entityId }
-          current_status: { _in: ["ongoing_validated", "pending_async"] }
+          current_status: { _in: ["ongoing_validated", "pending_async", "rejected_by_adminregion", "rejected_by_superadmin"] }
         }
         order_by: [{ updated_at: desc }]
         limit: 1
@@ -180,6 +180,7 @@ async function createRequest({
 async function resubmitActiveRequest({
   requestId,
   submittedByUserId,
+  nextStatus = STATUS.ONGOING,
   payloadSnapshot = {},
   evidenceAttachments = [],
   checklist = {},
@@ -214,10 +215,15 @@ async function resubmitActiveRequest({
     id: requestId,
     set: {
       submitted_by_user_id: submittedByUserId,
+      current_status: nextStatus,
       payload_snapshot: payloadSnapshot,
       evidence_attachments: evidenceAttachments,
       checklist,
       finding_note: findingNote,
+      approved_by_user_id: null,
+      approved_at: null,
+      rejected_by_user_id: null,
+      rejected_at: null,
     },
   });
   return data.item || null;
@@ -296,7 +302,7 @@ async function listRequestsByQueue({ queue, regionIds, regionIdFilter = null }) 
       query ListValidationRequestsAdminregion($regionIds: [uuid!], $regionIdFilter: uuid!) {
         items: validation_requests(
           where: {
-            current_status: { _eq: "ongoing_validated" }
+            current_status: { _in: ["ongoing_validated", "rejected_by_superadmin"] }
             region_id: { _in: $regionIds }
             _and: [{ region_id: { _eq: $regionIdFilter } }]
           }
@@ -310,7 +316,7 @@ async function listRequestsByQueue({ queue, regionIds, regionIdFilter = null }) 
       query ListValidationRequestsAdminregion($regionIds: [uuid!]) {
         items: validation_requests(
           where: {
-            current_status: { _eq: "ongoing_validated" }
+            current_status: { _in: ["ongoing_validated", "rejected_by_superadmin"] }
             region_id: { _in: $regionIds }
           }
           order_by: [{ updated_at: desc }]
@@ -465,6 +471,7 @@ async function updateRequestStatus({
   if (rejectedByUserId !== undefined) setObj.rejected_by_user_id = rejectedByUserId;
   if (nextStatus === STATUS.VALIDATED || nextStatus === STATUS.PENDING_ASYNC) setObj.approved_at = 'now()';
   if (nextStatus === STATUS.REJECTED_ADMINREGION || nextStatus === STATUS.REJECTED_SUPERADMIN) setObj.rejected_at = 'now()';
+  if (nextStatus === STATUS.ONGOING || nextStatus === STATUS.PENDING_ASYNC) setObj.rejected_at = null;
 
   const mutation = `
     mutation UpdateValidationRequestStatus($id: uuid!, $set: validation_requests_set_input!) {
