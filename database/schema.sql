@@ -317,7 +317,8 @@ begin
   into mapped_code
   from public.regions r
   where r.id = input_region_id
-    and r.inventory_region_code is not null;
+    and r.inventory_region_code is not null
+    and r.inventory_region_code <> '00';
 
   if mapped_code is not null then
     return mapped_code;
@@ -326,7 +327,8 @@ begin
   select irc.region_code
   into mapped_code
   from public.inventory_region_codes irc
-  where irc.region_id = input_region_id;
+  where irc.region_id = input_region_id
+    and irc.region_code <> '00';
 
   if mapped_code is not null then
     return mapped_code;
@@ -339,11 +341,12 @@ begin
 
   return case
     when normalized_name = 'banten' then '01'
-    when normalized_name in ('jabo', 'jabodetabek') then '02'
+    when normalized_name in ('jabo', 'jabodebek', 'jabodetabek') then '02'
     when normalized_name in ('jabar', 'jawabarat') then '03'
     when normalized_name in ('jateng', 'jawatengah') then '04'
-    when normalized_name in ('jatimkal', 'jawatimurkalimantan', 'jatimkalimantan') then '05'
+    when normalized_name in ('jatim', 'jawatimur', 'jatimkal', 'jawatimurkalimantan', 'jatimkalimantan') then '05'
     when normalized_name = 'sulawesi' then '06'
+    when normalized_name = 'bali' then '07'
     else '00'
   end;
 end;
