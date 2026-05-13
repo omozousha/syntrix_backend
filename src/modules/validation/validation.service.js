@@ -330,6 +330,74 @@ async function listRequestsByQueue({ queue, regionIds, regionIdFilter = null }) 
   return data.items || [];
 }
 
+async function listQualityQueueRequests({ queueKey, regionIds, actorRole, regionIdFilter = null }) {
+  const fields = `
+    id
+    request_id
+    entity_type
+    entity_id
+    region_id
+    submitted_by_user_id
+    current_status
+    payload_snapshot
+    evidence_attachments
+    checklist
+    finding_note
+    adminregion_review_note
+    superadmin_review_note
+    created_at
+    updated_at
+  `;
+
+  const statusMap = {
+    pending_adminregion: ['ongoing_validated'],
+    pending_superadmin: ['pending_async'],
+    rejected_adminregion: ['rejected_by_adminregion'],
+    rejected_superadmin: ['rejected_by_superadmin'],
+    evidence_missing: ['ongoing_validated', 'pending_async', 'rejected_by_adminregion', 'rejected_by_superadmin'],
+  };
+  const statuses = statusMap[queueKey];
+  if (!statuses) return [];
+
+  const regionClause = actorRole === 'superadmin'
+    ? (regionIdFilter ? 'region_id: { _eq: $regionIdFilter }' : '')
+    : regionIdFilter
+      ? 'region_id: { _in: $regionIds }, _and: [{ region_id: { _eq: $regionIdFilter } }]'
+      : 'region_id: { _in: $regionIds }';
+
+  const whereLines = [
+    `current_status: { _in: $statuses }`,
+    ...(regionClause ? [regionClause] : []),
+  ];
+
+  const variableDefs = [
+    '$statuses: [String!]',
+    ...(actorRole === 'superadmin' ? [] : ['$regionIds: [uuid!]']),
+    ...(regionIdFilter ? ['$regionIdFilter: uuid!'] : []),
+  ];
+  const query = `
+    query ListValidationQualityQueue(${variableDefs.join(', ')}) {
+      items: validation_requests(
+        where: {
+          ${whereLines.join('\n          ')}
+        }
+        order_by: [{ updated_at: desc }]
+      ) {
+        ${fields}
+      }
+    }
+  `;
+  const variables = {
+    statuses,
+    ...(actorRole === 'superadmin' ? {} : { regionIds }),
+    ...(regionIdFilter ? { regionIdFilter } : {}),
+  };
+  const data = await executeHasura(query, variables);
+  const items = data.items || [];
+  if (queueKey !== 'evidence_missing') return items;
+  return items.filter((item) => !Array.isArray(item.evidence_attachments) || item.evidence_attachments.length === 0);
+}
+
 async function listRequestsForNotificationInbox({ queue, regionIds, regionIdFilter = null }) {
   if (queue === 'superadmin') {
     return listRequestsByQueue({ queue, regionIds, regionIdFilter });
@@ -807,6 +875,8 @@ async function loadDeviceSnapshot(deviceId) {
         deleted_at
         deleted_by_user_id
         splitter_ratio
+        odp_type
+        installation_type
         total_ports
         used_ports
         address
@@ -916,6 +986,8 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
     'device_name',
     'status',
     'splitter_ratio',
+    'odp_type',
+    'installation_type',
     'total_ports',
     'used_ports',
     'address',
@@ -980,6 +1052,8 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
         'deleted_at',
         'deleted_by_user_id',
         'splitter_ratio',
+        'odp_type',
+        'installation_type',
         'total_ports',
         'used_ports',
         'address',
@@ -1020,6 +1094,8 @@ async function applyAdminRegionCreateDeviceRequest({ request }) {
     'device_name',
     'status',
     'splitter_ratio',
+    'odp_type',
+    'installation_type',
     'total_ports',
     'used_ports',
     'address',
@@ -1043,6 +1119,8 @@ async function applyAdminRegionCreateDeviceRequest({ request }) {
         'deleted_at',
         'deleted_by_user_id',
         'splitter_ratio',
+        'odp_type',
+        'installation_type',
         'total_ports',
         'used_ports',
         'address',
@@ -1118,6 +1196,7 @@ module.exports = {
   resubmitActiveRequest,
   insertRequestLog,
   listRequestsByQueue,
+  listQualityQueueRequests,
   listRequestsForValidator,
   listRequestsByEntity,
   updateRequestStatus,

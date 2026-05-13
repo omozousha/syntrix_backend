@@ -333,6 +333,8 @@ function buildAdminRegionCreateRequestPayload(device) {
       model_id: device.model_id || null,
       serial_number: device.serial_number || null,
       splitter_ratio: device.splitter_ratio || null,
+      odp_type: device.odp_type || null,
+      installation_type: device.installation_type || null,
       total_ports: device.total_ports ?? null,
       used_ports: device.used_ports ?? null,
       validation_status: device.validation_status || null,

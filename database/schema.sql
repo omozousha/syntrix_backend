@@ -762,6 +762,8 @@ create table if not exists public.devices (
   total_ports integer check (total_ports is null or total_ports >= 0),
   used_ports integer check (used_ports is null or used_ports >= 0),
   splitter_ratio text,
+  odp_type text,
+  installation_type text,
   image_attachment_id uuid,
   image_attachments jsonb not null default '[]'::jsonb,
   installation_date date,

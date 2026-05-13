@@ -3,6 +3,7 @@ const { authenticate } = require('../../middleware/auth.middleware');
 const {
   submitValidationRequest,
   listValidationRequests,
+  listValidationQualityQueue,
   approveByAdminRegion,
   rejectByAdminRegion,
   resubmitByAdminRegion,
@@ -22,6 +23,7 @@ validationRouter.use(authenticate);
 
 validationRouter.post('/', submitValidationRequest);
 validationRouter.get('/', listValidationRequests);
+validationRouter.get('/quality-queue', listValidationQualityQueue);
 validationRouter.get('/notifications', listValidationNotifications);
 validationRouter.get('/notifications/digest', getValidationNotificationDigest);
 validationRouter.post('/notifications/read-all', markAllValidationNotificationsRead);

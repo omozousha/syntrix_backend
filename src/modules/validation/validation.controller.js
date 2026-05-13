@@ -15,6 +15,7 @@ const {
   resubmitActiveRequest,
   insertRequestLog,
   listRequestsByQueue,
+  listQualityQueueRequests,
   listRequestsForValidator,
   listRequestsByEntity,
   updateRequestStatus,
@@ -210,6 +211,30 @@ async function listValidationRequests(req, res, next) {
       regionIds,
     });
     return sendSuccess(res, items, 'Validation requests loaded');
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function listValidationQualityQueue(req, res, next) {
+  try {
+    assertValidationWorkflowEnabled();
+    const { actorRole, regionIds } = getRequestContext(req);
+    if (!isAdminRegion(actorRole) && !isSuperAdmin(actorRole)) {
+      throw createHttpError(403, 'Only adminregion or superadmin can access validation quality queue');
+    }
+    const queueKey = String(req.query.queue || '').trim();
+    if (!['pending_adminregion', 'pending_superadmin', 'rejected_adminregion', 'rejected_superadmin', 'evidence_missing'].includes(queueKey)) {
+      throw createHttpError(400, 'queue must be a supported quality queue');
+    }
+    const regionIdFilter = String(req.query.region_id || '').trim() || null;
+    const items = await listQualityQueueRequests({
+      queueKey,
+      regionIds,
+      actorRole,
+      regionIdFilter,
+    });
+    return sendSuccess(res, items, 'Validation quality queue loaded');
   } catch (error) {
     return next(error);
   }
@@ -680,6 +705,7 @@ async function markAllValidationNotificationsRead(req, res, next) {
 module.exports = {
   submitValidationRequest,
   listValidationRequests,
+  listValidationQualityQueue,
   approveByAdminRegion,
   rejectByAdminRegion,
   resubmitByAdminRegion,
