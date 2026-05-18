@@ -691,6 +691,7 @@ create table if not exists public.customers (
   customer_code text unique,
   customer_name text not null,
   customer_number text,
+  service_type_id uuid,
   service_type text,
   status text not null default 'prospect' check (status in ('prospect', 'active', 'suspend', 'inactive', 'terminated')),
   contact_name text,
@@ -699,6 +700,10 @@ create table if not exists public.customers (
   longitude numeric(10,7),
   latitude numeric(10,7),
   address text,
+  province text,
+  province_id uuid,
+  city text,
+  city_id uuid,
   region_id uuid not null references public.regions(id) on update cascade on delete restrict,
   pop_id uuid references public.pops(id) on update cascade on delete set null,
   project_id uuid references public.projects(id) on update cascade on delete set null,
@@ -732,6 +737,24 @@ for each row execute function public.set_customer_codes();
 drop trigger if exists trg_customers_updated_at on public.customers;
 create trigger trg_customers_updated_at
 before update on public.customers
+for each row execute function public.set_current_timestamp_updated_at();
+
+create table if not exists public.service_types (
+  id uuid primary key default gen_random_uuid(),
+  service_type_code text unique,
+  service_type_name text not null unique,
+  description text,
+  sort_order integer not null default 0,
+  is_active boolean not null default true,
+  deleted_at timestamptz,
+  deleted_by_user_id uuid,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+drop trigger if exists trg_service_types_updated_at on public.service_types;
+create trigger trg_service_types_updated_at
+before update on public.service_types
 for each row execute function public.set_current_timestamp_updated_at();
 
 create table if not exists public.devices (
