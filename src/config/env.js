@@ -15,6 +15,15 @@ function toCsvList(value, fallback = '') {
     .filter(Boolean);
 }
 
+function toCorsOrigins(value) {
+  return Array.from(new Set([
+    ...toCsvList(value, 'http://localhost:3000,http://127.0.0.1:3000'),
+    'http://localhost',
+    'https://localhost',
+    'capacitor://localhost',
+  ]));
+}
+
 function toBoolean(value, fallback) {
   if (value == null || value === '') {
     return fallback;
@@ -44,10 +53,7 @@ const env = {
   port: toNumber(process.env.PORT, 3000),
   nodeEnv: process.env.NODE_ENV || 'development',
   serveTestUi: toBoolean(process.env.SERVE_TEST_UI, (process.env.NODE_ENV || 'development') !== 'production'),
-  corsOrigins: (process.env.CORS_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000')
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean),
+  corsOrigins: toCorsOrigins(process.env.CORS_ORIGINS),
   apiBodyLimit: process.env.API_BODY_LIMIT || '10mb',
   hasuraUrl: getRequired('HASURA_URL'),
   hasuraAdminSecret: getRequired('HASURA_ADMIN_SECRET'),
