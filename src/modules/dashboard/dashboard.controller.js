@@ -1,5 +1,5 @@
 const { sendSuccess } = require('../../utils/response');
-const { getDashboardSummary } = require('./dashboard.service');
+const { getDashboardSummary, getValidationProgress } = require('./dashboard.service');
 
 async function summary(req, res, next) {
   try {
@@ -10,4 +10,16 @@ async function summary(req, res, next) {
   }
 }
 
-module.exports = { summary };
+async function validationProgress(req, res, next) {
+  try {
+    const data = await getValidationProgress({
+      month: req.query.month,
+      year: req.query.year,
+    });
+    return sendSuccess(res, data, 'Validation progress fetched successfully');
+  } catch (error) {
+    return next(error);
+  }
+}
+
+module.exports = { summary, validationProgress };
