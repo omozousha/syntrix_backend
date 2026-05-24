@@ -1,5 +1,6 @@
 const { createHttpError } = require('../../utils/httpError');
 const { sendSuccess } = require('../../utils/response');
+const { getFirebaseHealth } = require('../../config/firebase');
 const {
   listUserNotifications,
   markAllNotificationsRead,
@@ -72,10 +73,19 @@ async function readAllNotifications(req, res, next) {
   }
 }
 
+async function getFcmHealth(_req, res, next) {
+  try {
+    return sendSuccess(res, getFirebaseHealth(), 'FCM health loaded');
+  } catch (error) {
+    return next(createHttpError(error.statusCode || 400, error.message || 'Failed to load FCM health'));
+  }
+}
+
 module.exports = {
   registerToken,
   revokeToken,
   listNotifications,
   readNotification,
   readAllNotifications,
+  getFcmHealth,
 };
