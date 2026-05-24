@@ -154,6 +154,22 @@ async function markNotificationRead({ userId, notificationId }) {
   return data.result?.returning?.[0] || null;
 }
 
+async function markAllNotificationsRead({ userId }) {
+  await ensureNotificationTablesTracked();
+  const mutation = `
+    mutation MarkAllNotificationsRead($userId: uuid!, $now: timestamptz!) {
+      result: update_app_notifications(
+        where: { recipient_user_id: { _eq: $userId }, read_at: { _is_null: true } }
+        _set: { read_at: $now }
+      ) {
+        affected_rows
+      }
+    }
+  `;
+  const data = await executeHasura(mutation, { userId, now: new Date().toISOString() });
+  return data.result || { affected_rows: 0 };
+}
+
 async function loadActiveTokens(userIds) {
   if (!userIds.length) return [];
   await ensureNotificationTablesTracked();
@@ -366,6 +382,32 @@ async function listValidatorUserIdsByRegion(regionId) {
   ]);
 }
 
+async function filterUserIdsByRegion(userIds, regionId) {
+  const ids = unique(userIds);
+  if (!ids.length || !regionId) return [];
+
+  const data = await executeHasura(`
+    query FilterNotificationRecipientsByRegion($userIds: [uuid!]!, $regionId: uuid!) {
+      users: app_users(
+        where: { id: { _in: $userIds }, is_active: { _eq: true } }
+      ) {
+        id
+        default_region_id
+      }
+      scopedUsers: user_region_scopes(
+        where: { app_user_id: { _in: $userIds }, region_id: { _eq: $regionId } }
+      ) {
+        app_user_id
+      }
+    }
+  `, { userIds: ids, regionId });
+
+  const scopedUserIds = new Set((data.scopedUsers || []).map((row) => row.app_user_id));
+  return unique((data.users || [])
+    .filter((row) => row.default_region_id === regionId || scopedUserIds.has(row.id))
+    .map((row) => row.id));
+}
+
 async function notifyValidationRequestStatus({ request, status, actorRole }) {
   const context = await loadDeviceNotificationContext(request.entity_id).catch(() => null);
   const deviceType = context?.deviceTypeLabel || 'Device';
@@ -390,9 +432,11 @@ async function notifyValidationRequestStatus({ request, status, actorRole }) {
   }[status];
 
   if (!statusCopy || !request.submitted_by_user_id) return;
+  const regionalRecipients = await filterUserIdsByRegion([request.submitted_by_user_id], request.region_id).catch(() => []);
+  if (!regionalRecipients.length) return;
 
   await sendNotificationToUsers({
-    userIds: [request.submitted_by_user_id],
+    userIds: regionalRecipients,
     notificationType: status,
     title: statusCopy.title,
     body: statusCopy.body,
@@ -449,6 +493,7 @@ module.exports = {
   revokePushToken,
   listUserNotifications,
   markNotificationRead,
+  markAllNotificationsRead,
   sendNotificationToUsers,
   notifyValidationRequestStatus,
   notifyValidationTaskCreated,

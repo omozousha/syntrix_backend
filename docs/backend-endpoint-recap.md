@@ -2,7 +2,7 @@
 
 Dokumen ini merangkum endpoint backend Syntrix berdasarkan route yang terdaftar di kode saat ini.
 
-Tanggal update: 22 Mei 2026
+Tanggal update: 24 Mei 2026
 
 ## Base URL
 
@@ -59,6 +59,21 @@ Base path: `/api/v1/imports`
 | Method | Endpoint | Keterangan |
 | --- | --- | --- |
 | POST | `/ingest` | Import file `xlsx`, `xls`, `csv`, `kml`, atau `kmz`; mendukung preview/apply melalui body |
+
+## User Inbox & Push Notification
+
+Base path: `/api/v1/me`
+
+| Method | Endpoint | Keterangan |
+| --- | --- | --- |
+| POST | `/push-tokens` | Register FCM token device user aktif |
+| POST | `/push-tokens/revoke` | Revoke FCM token user aktif |
+| DELETE | `/push-tokens/:token` | Revoke FCM token melalui path token |
+| GET | `/notifications` | List inbox notifikasi user aktif, mendukung query `limit` |
+| PATCH | `/notifications/read-all` | Tandai semua inbox user aktif sudah dibaca |
+| POST | `/notifications/read-all` | Alias untuk tandai semua inbox user aktif sudah dibaca |
+| PATCH | `/notifications/:id/read` | Tandai satu inbox user aktif sudah dibaca |
+| POST | `/notifications/:id/read` | Alias untuk tandai satu inbox user aktif sudah dibaca |
 
 ## Validation Requests
 

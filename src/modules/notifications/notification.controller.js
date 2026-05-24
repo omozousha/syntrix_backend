@@ -2,6 +2,7 @@ const { createHttpError } = require('../../utils/httpError');
 const { sendSuccess } = require('../../utils/response');
 const {
   listUserNotifications,
+  markAllNotificationsRead,
   markNotificationRead,
   registerPushToken,
   revokePushToken,
@@ -60,9 +61,21 @@ async function readNotification(req, res, next) {
   }
 }
 
+async function readAllNotifications(req, res, next) {
+  try {
+    const result = await markAllNotificationsRead({
+      userId: req.auth.appUser.id,
+    });
+    return sendSuccess(res, result, 'Notifications marked as read');
+  } catch (error) {
+    return next(createHttpError(error.statusCode || 400, error.message || 'Failed to update notifications'));
+  }
+}
+
 module.exports = {
   registerToken,
   revokeToken,
   listNotifications,
   readNotification,
+  readAllNotifications,
 };

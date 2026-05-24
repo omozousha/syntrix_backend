@@ -9,6 +9,9 @@ notificationRouter.post('/push-tokens', controller.registerToken);
 notificationRouter.delete('/push-tokens/:token', controller.revokeToken);
 notificationRouter.post('/push-tokens/revoke', controller.revokeToken);
 notificationRouter.get('/notifications', controller.listNotifications);
+notificationRouter.patch('/notifications/read-all', controller.readAllNotifications);
+notificationRouter.post('/notifications/read-all', controller.readAllNotifications);
+notificationRouter.patch('/notifications/:id/read', controller.readNotification);
 notificationRouter.post('/notifications/:id/read', controller.readNotification);
 
 module.exports = { notificationRouter };
