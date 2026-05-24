@@ -75,6 +75,10 @@ const env = {
   validationWorkflowEnabled: toBoolean(process.env.VALIDATION_WORKFLOW_ENABLED, true),
   validationWorkflowAllowedRegionIds: toCsvList(process.env.VALIDATION_WORKFLOW_ALLOWED_REGION_IDS, ''),
   validationNotificationUrgentAfterHours: toNumber(process.env.VALIDATION_NOTIFICATION_URGENT_AFTER_HOURS, 8),
+  fcmEnabled: toBoolean(process.env.FCM_ENABLED, false),
+  firebaseProjectId: process.env.FIREBASE_PROJECT_ID || '',
+  firebaseClientEmail: process.env.FIREBASE_CLIENT_EMAIL || '',
+  firebasePrivateKey: process.env.FIREBASE_PRIVATE_KEY || '',
 };
 
 module.exports = { env };

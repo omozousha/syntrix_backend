@@ -3,6 +3,10 @@ const { createHttpError } = require('../../utils/httpError');
 const { env } = require('../../config/env');
 const { createAuditLog } = require('../../shared/audit.service');
 const {
+  notifyValidationRequestStatus,
+  notifyValidationTaskCreated,
+} = require('../notifications/notification.service');
+const {
   STATUS,
   ACTION,
   normalizeRole,
@@ -290,6 +294,12 @@ async function approveByAdminRegion(req, res, next) {
       userAgent: req.headers['user-agent'] || null,
     });
 
+    notifyValidationRequestStatus({
+      request,
+      status: ACTION.APPROVED_ADMINREGION,
+      actorRole,
+    }).catch((error) => console.warn('FCM adminregion approve notification failed:', error.message || error));
+
     return sendSuccess(res, updated, 'Approved by adminregion');
   } catch (error) {
     return next(error);
@@ -351,6 +361,12 @@ async function rejectByAdminRegion(req, res, next) {
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'] || null,
     });
+
+    notifyValidationRequestStatus({
+      request,
+      status: ACTION.REJECTED_ADMINREGION,
+      actorRole,
+    }).catch((error) => console.warn('FCM adminregion reject notification failed:', error.message || error));
 
     return sendSuccess(res, updated, 'Rejected by adminregion');
   } catch (error) {
@@ -486,6 +502,17 @@ async function approveBySuperAdmin(req, res, next) {
       userAgent: req.headers['user-agent'] || null,
     });
 
+    notifyValidationRequestStatus({
+      request,
+      status: ACTION.APPROVED_SUPERADMIN,
+      actorRole,
+    }).catch((error) => console.warn('FCM superadmin approve notification failed:', error.message || error));
+
+    if ((request.payload_snapshot || {}).source === 'adminregion-create-device') {
+      notifyValidationTaskCreated({ request })
+        .catch((error) => console.warn('FCM validation task notification failed:', error.message || error));
+    }
+
     return sendSuccess(res, updated, 'Approved by superadmin');
   } catch (error) {
     return next(error);
@@ -545,6 +572,12 @@ async function rejectBySuperAdmin(req, res, next) {
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'] || null,
     });
+
+    notifyValidationRequestStatus({
+      request,
+      status: ACTION.REJECTED_SUPERADMIN,
+      actorRole,
+    }).catch((error) => console.warn('FCM superadmin reject notification failed:', error.message || error));
 
     return sendSuccess(res, updated, 'Rejected by superadmin');
   } catch (error) {
