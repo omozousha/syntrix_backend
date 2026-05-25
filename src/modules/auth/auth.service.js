@@ -7,6 +7,11 @@ async function loginWithPassword(email, password) {
   return data;
 }
 
+function isRedirectToNotAllowed(error) {
+  const message = String(error.response?.data?.message || error.message || '').toLowerCase();
+  return message.includes('redirectto') && message.includes('not allowed');
+}
+
 async function signUpUser({ email, password, displayName, metadata = {}, redirectTo = '' }) {
   const options = {
     displayName,
@@ -17,13 +22,27 @@ async function signUpUser({ email, password, displayName, metadata = {}, redirec
     options.redirectTo = redirectTo;
   }
 
-  const { data } = await nhostAuthClient.post('/signup/email-password', {
-    email,
-    password,
-    options,
-  });
+  const payload = { email, password, options };
 
-  return data;
+  try {
+    const { data } = await nhostAuthClient.post('/signup/email-password', payload);
+    return data;
+  } catch (error) {
+    if (!redirectTo || !isRedirectToNotAllowed(error)) {
+      throw error;
+    }
+
+    const retryPayload = {
+      email,
+      password,
+      options: {
+        displayName,
+        metadata,
+      },
+    };
+    const { data } = await nhostAuthClient.post('/signup/email-password', retryPayload);
+    return data;
+  }
 }
 
 async function logout(refreshToken) {
@@ -57,8 +76,17 @@ async function requestPasswordReset(email, redirectTo = '') {
     payload.options = { redirectTo };
   }
 
-  const { data } = await nhostAuthClient.post('/user/password/reset', payload);
-  return data;
+  try {
+    const { data } = await nhostAuthClient.post('/user/password/reset', payload);
+    return data;
+  } catch (error) {
+    if (!redirectTo || !isRedirectToNotAllowed(error)) {
+      throw error;
+    }
+
+    const { data } = await nhostAuthClient.post('/user/password/reset', { email });
+    return data;
+  }
 }
 
 async function createAppUser(object) {
@@ -413,4 +441,5 @@ module.exports = {
   cleanupUnusedAvatarAttachment,
   listOrphanAvatarAttachments,
   cleanupOrphanAvatarAttachments,
+  isRedirectToNotAllowed,
 };

@@ -13,6 +13,7 @@ const { sendSuccess } = require('../../utils/response');
 const { buildWhereClause, listResources } = require('../../shared/resource.service');
 const { createAuditLog } = require('../../shared/audit.service');
 const { buildOdpCoreChainSummary, buildOdpCoreChainDraft } = require('../device/odp-chain.service');
+const { isRedirectToNotAllowed } = require('../auth/auth.service');
 const { getPagination } = require('../../utils/pagination');
 const { normalizeRoleName, isSuperAdminRole } = require('../../utils/roles');
 
@@ -1165,7 +1166,14 @@ async function resendManagedUserVerification(req, res, next) {
       payload.options.redirectTo = env.nhostEmailRedirectTo;
     }
 
-    await nhostAuthClient.post('/user/email/send-verification-email', payload);
+    try {
+      await nhostAuthClient.post('/user/email/send-verification-email', payload);
+    } catch (error) {
+      if (!env.nhostEmailRedirectTo || !isRedirectToNotAllowed(error)) {
+        throw error;
+      }
+      await nhostAuthClient.post('/user/email/send-verification-email', { email: existingUser.email });
+    }
     const { sentAt } = await markVerificationEmailSent(existingUser.id, existingUser.metadata);
 
     await createAuditLog({
