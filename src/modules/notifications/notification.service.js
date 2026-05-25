@@ -24,6 +24,51 @@ function normalizeDeviceTypeLabel(value) {
   return labels[key] || (key ? key : 'Device');
 }
 
+function pickFirstText(...values) {
+  for (const value of values) {
+    const text = String(value || '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function pickDeviceNameFromRequest(request = {}) {
+  const snapshot = request.payload_snapshot || {};
+  return pickFirstText(
+    snapshot.device?.device_name,
+    snapshot.resource_payload?.device_name,
+    snapshot.device_name,
+  );
+}
+
+function resolveDeviceDisplayName(request = {}, context = null) {
+  return pickFirstText(
+    context?.device?.device_name,
+    pickDeviceNameFromRequest(request),
+    context?.device?.device_code,
+    context?.device?.inventory_id,
+    context?.device?.device_id,
+    request.request_id,
+    'Device',
+  );
+}
+
+function resolveDeviceTypeKey(request = {}, context = null) {
+  const snapshot = request.payload_snapshot || {};
+  return pickFirstText(
+    context?.device?.device_type_key,
+    snapshot.device?.device_type_key,
+    snapshot.resource_payload?.device_type_key,
+    context?.device?.asset_group,
+    snapshot.device?.asset_group,
+    snapshot.resource_payload?.asset_group,
+  ).toUpperCase();
+}
+
+function shouldSkipValidationTaskNotification(request = {}, context = null) {
+  return ['CUSTOMER', 'ONT'].includes(resolveDeviceTypeKey(request, context));
+}
+
 function stringifyData(data = {}) {
   return Object.entries(data).reduce((acc, [key, value]) => {
     if (value === undefined || value === null) return acc;
@@ -373,7 +418,7 @@ async function loadDeviceNotificationContext(deviceId) {
 
   return {
     device,
-    deviceName: device.device_name || device.device_id || device.inventory_id || device.device_code || 'Device',
+    deviceName: resolveDeviceDisplayName({}, { device }),
     deviceTypeLabel: normalizeDeviceTypeLabel(device.device_type_key || device.asset_group),
     popName: pop?.pop_name || pop?.pop_code || 'POP terkait',
   };
@@ -432,7 +477,7 @@ async function filterUserIdsByRegion(userIds, regionId) {
 async function notifyValidationRequestStatus({ request, status, actorRole }) {
   const context = await loadDeviceNotificationContext(request.entity_id).catch(() => null);
   const deviceType = context?.deviceTypeLabel || 'Device';
-  const deviceName = context?.deviceName || request.request_id || 'request';
+  const deviceName = resolveDeviceDisplayName(request, context);
   const statusCopy = {
     approved_by_adminregion: {
       title: 'Request validasi disetujui adminregion',
@@ -472,6 +517,7 @@ async function notifyValidationRequestStatus({ request, status, actorRole }) {
       entity_id: request.entity_id,
       request_id: request.id,
       request_code: request.request_id,
+      device_name: deviceName,
       region_id: request.region_id,
       route: 'validation_status',
     },
@@ -480,11 +526,13 @@ async function notifyValidationRequestStatus({ request, status, actorRole }) {
 
 async function notifyValidationTaskCreated({ request }) {
   const context = await loadDeviceNotificationContext(request.entity_id).catch(() => null);
+  if (shouldSkipValidationTaskNotification(request, context)) return;
+
   const validatorUserIds = await listValidatorUserIdsByRegion(request.region_id).catch(() => []);
   if (!validatorUserIds.length) return;
 
   const deviceType = context?.deviceTypeLabel || 'Device';
-  const deviceName = context?.deviceName || request.request_id || 'Device';
+  const deviceName = resolveDeviceDisplayName(request, context);
   const popName = context?.popName || 'POP terkait';
 
   await sendNotificationToUsers({
@@ -502,6 +550,7 @@ async function notifyValidationTaskCreated({ request }) {
       entity_id: request.entity_id,
       request_id: request.id,
       request_code: request.request_id,
+      device_name: deviceName,
       region_id: request.region_id,
       route: 'asset_detail',
     },

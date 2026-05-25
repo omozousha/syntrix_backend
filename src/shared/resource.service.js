@@ -184,6 +184,27 @@ async function enrichOptionalFieldsWithSql(config, data) {
     }
   }
 
+  if (config.table === 'validation_records' && optionalFields.includes('validator_name')) {
+    try {
+      const rows = mapSqlRows(await executeHasuraSql(`
+        select
+          vr.id::text,
+          au.full_name as validator_name,
+          au.email as validator_email
+        from public.validation_records vr
+        left join public.app_users au on au.id = vr.validator_user_id
+        where vr.id in (${ids.map((id) => `${sqlLiteral(id)}::uuid`).join(', ')});
+      `));
+      const rowsById = new Map(rows.map((row) => [row.id, row]));
+      const mergeItem = (item) => (item?.id && rowsById.has(item.id) ? { ...item, ...rowsById.get(item.id) } : item);
+
+      if (data.items) return { ...data, items: data.items.map(mergeItem) };
+      if (data.item) return { ...data, item: mergeItem(data.item) };
+    } catch (error) {
+      return data;
+    }
+  }
+
   try {
     const rows = mapSqlRows(await executeHasuraSql(`
       select id::text, ${optionalFields.join(', ')}

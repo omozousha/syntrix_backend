@@ -749,10 +749,17 @@ async function create(req, res, next) {
       await notifyValidationTaskCreated({
         request: {
           id: null,
-          request_id: item.device_id || item.inventory_id || item.device_name || item.id,
+          request_id: item.device_name || item.inventory_id || item.device_code || item.device_id || item.id,
           entity_type: 'device',
           entity_id: item.id,
           region_id: item.region_id,
+          payload_snapshot: {
+            device: {
+              device_name: item.device_name || null,
+              device_type_key: item.device_type_key || null,
+              asset_group: item.asset_group || null,
+            },
+          },
         },
       }).catch((error) => console.warn('FCM direct superadmin create device notification failed:', error.message || error));
     }
