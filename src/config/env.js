@@ -49,6 +49,22 @@ function getRequired(name, fallback) {
   return value;
 }
 
+function getPublicEmailRedirect() {
+  const configured = process.env.NHOST_EMAIL_REDIRECT_TO || '';
+  const productionFallback = 'https://syntrix-one.vercel.app/login';
+  const isLocalRedirect = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(configured);
+
+  if (!configured) {
+    return productionFallback;
+  }
+
+  if ((process.env.NODE_ENV || 'development') === 'production' && isLocalRedirect) {
+    return productionFallback;
+  }
+
+  return configured;
+}
+
 const env = {
   port: toNumber(process.env.PORT, 3000),
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -59,7 +75,7 @@ const env = {
   hasuraAdminSecret: getRequired('HASURA_ADMIN_SECRET'),
   nhostAuthUrl: getRequired('NHOST_AUTH_URL', process.env.NHOST_AUTH_URL),
   nhostStorageUrl: getRequired('NHOST_STORAGE_URL'),
-  nhostEmailRedirectTo: process.env.NHOST_EMAIL_REDIRECT_TO || '',
+  nhostEmailRedirectTo: getPublicEmailRedirect(),
   defaultStorageBucket: process.env.DEFAULT_STORAGE_BUCKET || 'default',
   maxUploadSizeMb: toNumber(process.env.MAX_UPLOAD_SIZE_MB, 25),
   imageUploadMaxSizeMb: toNumber(process.env.IMAGE_UPLOAD_MAX_SIZE_MB, 5),
