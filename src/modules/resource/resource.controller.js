@@ -746,7 +746,7 @@ async function create(req, res, next) {
     });
 
     if (shouldNotifyValidatorsForDirectDeviceCreate(req, item, approvalRequest)) {
-      notifyValidationTaskCreated({
+      await notifyValidationTaskCreated({
         request: {
           id: null,
           request_id: item.device_id || item.inventory_id || item.device_name || item.id,
