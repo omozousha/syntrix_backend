@@ -28,6 +28,7 @@ const {
   createRequest: createValidationRequest,
   insertRequestLog: insertValidationRequestLog,
 } = require('../validation/validation.service');
+const { notifyValidationTaskCreated } = require('../notifications/notification.service');
 
 const ADMINREGION_CREATE_APPROVAL_RESOURCES = new Set(['devices', 'pops', 'routes', 'projects']);
 const REQUEST_ENTITY_TYPE_BY_RESOURCE = {
@@ -315,6 +316,14 @@ function shouldHoldDeviceForSuperadminApproval(req, object) {
 
 function shouldHoldCreateForSuperadminApproval(req, object) {
   return ADMINREGION_CREATE_APPROVAL_RESOURCES.has(req.resourceName) && req.auth.role === 'user_all_region' && object.region_id;
+}
+
+function shouldNotifyValidatorsForDirectDeviceCreate(req, item, approvalRequest) {
+  if (approvalRequest) return false;
+  if (req.resourceName !== 'devices') return false;
+  if (req.auth.role !== 'admin') return false;
+  if (!item?.id || !item.region_id || item.deleted_at) return false;
+  return String(item.validation_status || '').toLowerCase() !== 'valid';
 }
 
 function buildAdminRegionCreateRequestPayload(device) {
@@ -735,6 +744,19 @@ async function create(req, res, next) {
       ipAddress: req.ip,
       userAgent: req.get('user-agent'),
     });
+
+    if (shouldNotifyValidatorsForDirectDeviceCreate(req, item, approvalRequest)) {
+      notifyValidationTaskCreated({
+        request: {
+          id: null,
+          request_id: item.device_id || item.inventory_id || item.device_name || item.id,
+          entity_type: 'device',
+          entity_id: item.id,
+          region_id: item.region_id,
+        },
+      }).catch((error) => console.warn('FCM direct superadmin create device notification failed:', error.message || error));
+    }
+
     return sendSuccess(
       res,
       approvalRequest ? { ...item, approval_request: approvalRequest } : item,
