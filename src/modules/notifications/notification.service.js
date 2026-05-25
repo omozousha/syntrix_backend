@@ -247,6 +247,21 @@ async function markRowsPushed(rowIds, pushError = null) {
   await executeHasura(mutation, { ids: rowIds, now: new Date().toISOString(), pushError });
 }
 
+async function markRowsPushError(rowIds, pushError) {
+  if (!rowIds.length || !pushError) return;
+  const mutation = `
+    mutation MarkRowsPushError($ids: [uuid!]!, $pushError: String) {
+      update_app_notifications(
+        where: { id: { _in: $ids } }
+        _set: { push_error: $pushError }
+      ) {
+        affected_rows
+      }
+    }
+  `;
+  await executeHasura(mutation, { ids: rowIds, pushError });
+}
+
 async function sendNotificationToUsers({
   userIds,
   notificationType,
@@ -261,8 +276,9 @@ async function sendNotificationToUsers({
   const recipients = unique(userIds);
   if (!recipients.length) return { recipients: 0, pushed: 0 };
 
+  let inboxRows = [];
   try {
-    const inboxRows = await createInboxRows({
+    inboxRows = await createInboxRows({
       userIds: recipients,
       notificationType,
       title,
@@ -276,12 +292,16 @@ async function sendNotificationToUsers({
 
     const admin = getFirebaseAdmin();
     if (!admin || !env.fcmEnabled) {
+      await markRowsPushError(inboxRows.map((row) => row.id), 'FCM disabled or Firebase admin unavailable');
       return { recipients: recipients.length, pushed: 0, skipped: true };
     }
 
     const tokenRows = await loadActiveTokens(recipients);
     const tokens = unique(tokenRows.map((row) => row.token));
-    if (!tokens.length) return { recipients: recipients.length, pushed: 0 };
+    if (!tokens.length) {
+      await markRowsPushError(inboxRows.map((row) => row.id), 'No active push tokens for recipients');
+      return { recipients: recipients.length, pushed: 0 };
+    }
 
     const response = await admin.messaging().sendEachForMulticast({
       tokens,
@@ -311,6 +331,7 @@ async function sendNotificationToUsers({
     return { recipients: recipients.length, pushed: response.successCount, failed: response.failureCount };
   } catch (error) {
     console.warn('Push notification delivery failed:', error.message || error);
+    await markRowsPushError(inboxRows.map((row) => row.id), error.message || 'push failed').catch(() => undefined);
     return { recipients: recipients.length, pushed: 0, error: error.message || 'push failed' };
   }
 }
