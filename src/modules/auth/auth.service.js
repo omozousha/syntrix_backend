@@ -12,6 +12,12 @@ function isRedirectToNotAllowed(error) {
   return message.includes('redirectto') && message.includes('not allowed');
 }
 
+function createRedirectToNotAllowedError(redirectTo) {
+  const error = new Error(`Nhost rejected verification redirect URL. Add ${redirectTo} to Nhost Auth allowed redirect URLs.`);
+  error.statusCode = 502;
+  return error;
+}
+
 async function signUpUser({ email, password, displayName, metadata = {}, redirectTo = '' }) {
   const options = {
     displayName,
@@ -28,20 +34,10 @@ async function signUpUser({ email, password, displayName, metadata = {}, redirec
     const { data } = await nhostAuthClient.post('/signup/email-password', payload);
     return data;
   } catch (error) {
-    if (!redirectTo || !isRedirectToNotAllowed(error)) {
-      throw error;
+    if (redirectTo && isRedirectToNotAllowed(error)) {
+      throw createRedirectToNotAllowedError(redirectTo);
     }
-
-    const retryPayload = {
-      email,
-      password,
-      options: {
-        displayName,
-        metadata,
-      },
-    };
-    const { data } = await nhostAuthClient.post('/signup/email-password', retryPayload);
-    return data;
+    throw error;
   }
 }
 
@@ -80,12 +76,10 @@ async function requestPasswordReset(email, redirectTo = '') {
     const { data } = await nhostAuthClient.post('/user/password/reset', payload);
     return data;
   } catch (error) {
-    if (!redirectTo || !isRedirectToNotAllowed(error)) {
-      throw error;
+    if (redirectTo && isRedirectToNotAllowed(error)) {
+      throw createRedirectToNotAllowedError(redirectTo);
     }
-
-    const { data } = await nhostAuthClient.post('/user/password/reset', { email });
-    return data;
+    throw error;
   }
 }
 
@@ -442,4 +436,5 @@ module.exports = {
   listOrphanAvatarAttachments,
   cleanupOrphanAvatarAttachments,
   isRedirectToNotAllowed,
+  createRedirectToNotAllowedError,
 };
