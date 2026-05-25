@@ -31,9 +31,6 @@ function assertCanRegisterUser(auth, payload) {
   ].filter(Boolean)));
 
   if (isSuperAdminRole(requesterRole)) {
-    if (targetRole === 'superadmin') {
-      throw createHttpError(403, 'Superadmin account creation is restricted from Account Management');
-    }
     return;
   }
 
