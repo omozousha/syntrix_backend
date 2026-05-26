@@ -351,21 +351,30 @@ async function sendNotificationToUsers({
     }
 
     const isPersistent = data?.persistent === true || data?.persistent === 'true';
-    const response = await admin.messaging().sendEachForMulticast({
+    const message = {
       tokens,
-      notification: { title, body },
-      data: stringifyData(data),
+      data: stringifyData({
+        ...data,
+        title,
+        body,
+        channel_id: HIGH_PRIORITY_CHANNEL_ID,
+      }),
       android: {
         priority: 'high',
-        notification: {
+      },
+    };
+
+    if (!isPersistent) {
+      message.notification = { title, body };
+      message.android.notification = {
           channelId: HIGH_PRIORITY_CHANNEL_ID,
           priority: 'high',
           visibility: 'public',
           sound: 'default',
-          sticky: isPersistent,
-        },
-      },
-    });
+      };
+    }
+
+    const response = await admin.messaging().sendEachForMulticast(message);
 
     const invalidTokens = [];
     response.responses.forEach((item, index) => {
