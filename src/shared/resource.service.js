@@ -205,6 +205,38 @@ async function enrichOptionalFieldsWithSql(config, data) {
     }
   }
 
+  if (config.table === 'devices' && optionalFields.includes('latest_validation_request_status')) {
+    try {
+      const rows = mapSqlRows(await executeHasuraSql(`
+        with latest_requests as (
+          select distinct on (vr.entity_id)
+            vr.entity_id::text as id,
+            vr.id::text as latest_validation_request_id,
+            vr.request_id as latest_validation_request_code,
+            vr.current_status as latest_validation_request_status,
+            vr.submitted_by_user_id::text as latest_validation_submitted_by_user_id,
+            au.full_name as latest_validation_submitted_by_name,
+            vr.created_at as latest_validation_submitted_at,
+            vr.updated_at as latest_validation_request_updated_at
+          from public.validation_requests vr
+          left join public.app_users au on au.id = vr.submitted_by_user_id
+          where vr.entity_type = 'device'
+            and vr.entity_id in (${ids.map((id) => `${sqlLiteral(id)}::uuid`).join(', ')})
+          order by vr.entity_id, vr.updated_at desc
+        )
+        select *
+        from latest_requests;
+      `));
+      const rowsById = new Map(rows.map((row) => [row.id, row]));
+      const mergeItem = (item) => (item?.id && rowsById.has(item.id) ? { ...item, ...rowsById.get(item.id) } : item);
+
+      if (data.items) return { ...data, items: data.items.map(mergeItem) };
+      if (data.item) return { ...data, item: mergeItem(data.item) };
+    } catch (error) {
+      return data;
+    }
+  }
+
   try {
     const rows = mapSqlRows(await executeHasuraSql(`
       select id::text, ${optionalFields.join(', ')}
