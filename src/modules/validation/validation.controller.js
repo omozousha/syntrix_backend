@@ -21,6 +21,7 @@ const {
   listRequestsByQueue,
   listQualityQueueRequests,
   listRequestsForValidator,
+  listValidatorValidationHistory,
   listRequestsByEntity,
   updateRequestStatus,
   listRequestHistory,
@@ -31,6 +32,7 @@ const {
   getNotificationDigest,
   applyValidationPayloadToAsset,
 } = require('./validation.service');
+const { getPagination } = require('../../utils/pagination');
 
 function getRequestContext(req) {
   return {
@@ -215,6 +217,53 @@ async function listValidationRequests(req, res, next) {
       regionIds,
     });
     return sendSuccess(res, items, 'Validation requests loaded');
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function listMyValidationHistory(req, res, next) {
+  try {
+    assertValidationWorkflowEnabled();
+    const { actorRole, regionIds, actorUserId } = getRequestContext(req);
+    if (!isValidator(actorRole)) {
+      throw createHttpError(403, 'Only validator can access personal validation history');
+    }
+
+    const { page, limit, offset } = getPagination(req.query);
+    const result = await listValidatorValidationHistory({
+      validatorUserId: actorUserId,
+      regionIds,
+      limit,
+      offset,
+    });
+
+    return sendSuccess(res, result, 'Validation history loaded', 200, {
+      page,
+      limit,
+      total: result.meta.total,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function getMyValidationHistorySummary(req, res, next) {
+  try {
+    assertValidationWorkflowEnabled();
+    const { actorRole, regionIds, actorUserId } = getRequestContext(req);
+    if (!isValidator(actorRole)) {
+      throw createHttpError(403, 'Only validator can access personal validation history');
+    }
+
+    const result = await listValidatorValidationHistory({
+      validatorUserId: actorUserId,
+      regionIds,
+      limit: 1,
+      offset: 0,
+    });
+
+    return sendSuccess(res, result.summary, 'Validation history summary loaded');
   } catch (error) {
     return next(error);
   }
@@ -738,6 +787,8 @@ async function markAllValidationNotificationsRead(req, res, next) {
 module.exports = {
   submitValidationRequest,
   listValidationRequests,
+  listMyValidationHistory,
+  getMyValidationHistorySummary,
   listValidationQualityQueue,
   approveByAdminRegion,
   rejectByAdminRegion,

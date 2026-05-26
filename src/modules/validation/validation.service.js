@@ -1,4 +1,4 @@
-const { executeHasura } = require('../../config/hasura');
+const { executeHasura, executeHasuraSql } = require('../../config/hasura');
 const { createHttpError } = require('../../utils/httpError');
 const {
   createResource,
@@ -33,6 +33,27 @@ function normalizeRole(role) {
   if (role === 'user_all_region') return 'adminregion';
   if (role === 'user_region') return 'validator';
   return role;
+}
+
+function sqlLiteral(value) {
+  if (value === null || value === undefined) return 'null';
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function parseRunSqlRows(response) {
+  const result = response?.result || [];
+  const [headers = [], ...rows] = result;
+  return rows.map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index]])));
+}
+
+function parseJsonColumn(value, fallback) {
+  if (value === null || value === undefined || value === '') return fallback;
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch (_error) {
+    return fallback;
+  }
 }
 
 function assertRejectNote(note) {
@@ -485,6 +506,180 @@ async function listRequestsForValidator({ submittedByUserId, entityId, regionIds
   `;
   const data = await executeHasura(query, { submittedByUserId, entityId, regionIds });
   return data.items || [];
+}
+
+async function listValidatorValidationHistory({ validatorUserId, regionIds, limit = 30, offset = 0 }) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 30, 100));
+  const safeOffset = Math.max(0, Number(offset) || 0);
+  const regionFilter = Array.isArray(regionIds) && regionIds.length
+    ? `and vr.region_id in (${regionIds.map((id) => `${sqlLiteral(id)}::uuid`).join(', ')})`
+    : '';
+
+  const sql = `
+    with scoped_requests as (
+      select
+        vr.id,
+        vr.request_id,
+        vr.entity_type,
+        vr.entity_id,
+        vr.region_id,
+        vr.submitted_by_user_id,
+        vr.current_status,
+        vr.payload_snapshot,
+        vr.evidence_attachments,
+        vr.checklist,
+        vr.finding_note,
+        vr.adminregion_review_note,
+        vr.superadmin_review_note,
+        vr.approved_at,
+        vr.rejected_at,
+        vr.created_at,
+        vr.updated_at,
+        d.device_id,
+        d.device_code,
+        d.device_name,
+        d.device_type_key,
+        d.asset_group,
+        d.serial_number,
+        d.total_ports,
+        d.used_ports,
+        d.validation_status as device_validation_status,
+        d.validation_date as device_validation_date,
+        d.last_validation_at,
+        d.pop_id,
+        p.pop_name,
+        p.pop_code,
+        r.region_name,
+        count(*) over()::int as total_count
+      from public.validation_requests vr
+      left join public.devices d on d.id = vr.entity_id
+      left join public.pops p on p.id = d.pop_id
+      left join public.regions r on r.id = vr.region_id
+      where vr.submitted_by_user_id = ${sqlLiteral(validatorUserId)}::uuid
+        ${regionFilter}
+      order by vr.updated_at desc
+      limit ${safeLimit}
+      offset ${safeOffset}
+    )
+    select
+      id::text,
+      request_id,
+      entity_type,
+      entity_id::text,
+      region_id::text,
+      submitted_by_user_id::text,
+      current_status,
+      payload_snapshot::text,
+      evidence_attachments::text,
+      checklist::text,
+      finding_note,
+      adminregion_review_note,
+      superadmin_review_note,
+      approved_at,
+      rejected_at,
+      created_at,
+      updated_at,
+      device_id,
+      device_code,
+      device_name,
+      device_type_key,
+      asset_group,
+      serial_number,
+      total_ports,
+      used_ports,
+      device_validation_status,
+      device_validation_date,
+      last_validation_at,
+      pop_id::text,
+      pop_name,
+      pop_code,
+      region_name,
+      total_count,
+      coalesce(jsonb_array_length(evidence_attachments), 0)::int as evidence_count
+    from scoped_requests;
+  `;
+
+  const response = await executeHasuraSql(sql);
+  const rows = parseRunSqlRows(response);
+  const items = rows.map((row) => ({
+    id: row.id,
+    request_id: row.request_id,
+    entity_type: row.entity_type,
+    entity_id: row.entity_id,
+    region_id: row.region_id,
+    submitted_by_user_id: row.submitted_by_user_id,
+    current_status: row.current_status,
+    payload_snapshot: parseJsonColumn(row.payload_snapshot, {}),
+    evidence_attachments: parseJsonColumn(row.evidence_attachments, []),
+    checklist: parseJsonColumn(row.checklist, {}),
+    finding_note: row.finding_note || null,
+    adminregion_review_note: row.adminregion_review_note || null,
+    superadmin_review_note: row.superadmin_review_note || null,
+    approved_at: row.approved_at || null,
+    rejected_at: row.rejected_at || null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    submitted_at: row.created_at,
+    evidence_count: Number(row.evidence_count || 0),
+    device: {
+      id: row.entity_id,
+      device_id: row.device_id || null,
+      device_code: row.device_code || null,
+      device_name: row.device_name || null,
+      device_type_key: row.device_type_key || null,
+      asset_group: row.asset_group || null,
+      serial_number: row.serial_number || null,
+      total_ports: row.total_ports === null || row.total_ports === undefined ? null : Number(row.total_ports),
+      used_ports: row.used_ports === null || row.used_ports === undefined ? null : Number(row.used_ports),
+      validation_status: row.device_validation_status || null,
+      validation_date: row.device_validation_date || null,
+      last_validation_at: row.last_validation_at || null,
+      pop_id: row.pop_id || null,
+      region_id: row.region_id || null,
+    },
+    pop: {
+      id: row.pop_id || null,
+      pop_name: row.pop_name || null,
+      pop_code: row.pop_code || null,
+    },
+    region: {
+      id: row.region_id || null,
+      region_name: row.region_name || null,
+    },
+  }));
+
+  const total = Number(rows[0]?.total_count || 0);
+  const summarySql = `
+    select
+      count(*)::int as submitted_total,
+      count(*) filter (where current_status = 'ongoing_validated')::int as pending_adminregion_total,
+      count(*) filter (where current_status = 'pending_async')::int as pending_superadmin_total,
+      count(*) filter (where current_status in ('rejected_by_adminregion', 'rejected_by_superadmin'))::int as rejected_total,
+      count(*) filter (where current_status = 'validated')::int as approved_total,
+      max(created_at) as last_submitted_at
+    from public.validation_requests vr
+    where vr.submitted_by_user_id = ${sqlLiteral(validatorUserId)}::uuid
+      ${regionFilter};
+  `;
+  const summaryRows = parseRunSqlRows(await executeHasuraSql(summarySql));
+  const summaryRow = summaryRows[0] || {};
+
+  return {
+    summary: {
+      submitted_total: Number(summaryRow.submitted_total || 0),
+      pending_adminregion_total: Number(summaryRow.pending_adminregion_total || 0),
+      pending_superadmin_total: Number(summaryRow.pending_superadmin_total || 0),
+      rejected_total: Number(summaryRow.rejected_total || 0),
+      approved_total: Number(summaryRow.approved_total || 0),
+      last_submitted_at: summaryRow.last_submitted_at || null,
+    },
+    items,
+    meta: {
+      total,
+      limit: safeLimit,
+      offset: safeOffset,
+    },
+  };
 }
 
 async function listRequestsByEntity({ entityId, role, regionIds }) {
@@ -1198,6 +1393,7 @@ module.exports = {
   listRequestsByQueue,
   listQualityQueueRequests,
   listRequestsForValidator,
+  listValidatorValidationHistory,
   listRequestsByEntity,
   updateRequestStatus,
   listRequestHistory,
