@@ -385,9 +385,8 @@ async function sendNotificationToUsers({
 
 async function loadDeviceNotificationContext(deviceId) {
   if (!deviceId) return null;
-  const query = `
-    query LoadDeviceNotificationContext($id: uuid!) {
-      device: devices_by_pk(id: $id) {
+  const identifier = String(deviceId).trim();
+  const deviceFields = `
         id
         device_id
         device_code
@@ -397,11 +396,40 @@ async function loadDeviceNotificationContext(deviceId) {
         asset_group
         pop_id
         region_id
-      }
-    }
   `;
-  const data = await executeHasura(query, { id: deviceId });
-  const device = data.device || null;
+
+  let device = null;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(identifier)) {
+    const data = await executeHasura(`
+      query LoadDeviceNotificationContext($id: uuid!) {
+        device: devices_by_pk(id: $id) {
+          ${deviceFields}
+        }
+      }
+    `, { id: identifier });
+    device = data.device || null;
+  }
+
+  if (!device) {
+    const data = await executeHasura(`
+      query FindDeviceNotificationContext($identifier: String!) {
+        devices(
+          where: {
+            _or: [
+              { device_id: { _eq: $identifier } }
+              { device_code: { _eq: $identifier } }
+              { inventory_id: { _eq: $identifier } }
+            ]
+          }
+          limit: 1
+        ) {
+          ${deviceFields}
+        }
+      }
+    `, { identifier });
+    device = data.devices?.[0] || null;
+  }
+
   if (!device) return null;
 
   let pop = null;
