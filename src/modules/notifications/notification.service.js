@@ -1,6 +1,8 @@
 const { executeHasura, ensureHasuraTableTracked } = require('../../config/hasura');
 const { getFirebaseAdmin } = require('../../config/firebase');
 const { env } = require('../../config/env');
+const { getResourceById } = require('../../shared/resource.service');
+const { getResourceConfig } = require('../resource/resource.registry');
 
 const HIGH_PRIORITY_CHANNEL_ID = 'syntrix_high_priority';
 
@@ -386,6 +388,7 @@ async function sendNotificationToUsers({
 async function loadDeviceNotificationContext(deviceId) {
   if (!deviceId) return null;
   const identifier = String(deviceId).trim();
+  const devicesConfig = getResourceConfig('devices');
   const deviceFields = `
         id
         device_id
@@ -400,14 +403,7 @@ async function loadDeviceNotificationContext(deviceId) {
 
   let device = null;
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(identifier)) {
-    const data = await executeHasura(`
-      query LoadDeviceNotificationContext($id: uuid!) {
-        device: devices_by_pk(id: $id) {
-          ${deviceFields}
-        }
-      }
-    `, { id: identifier });
-    device = data.device || null;
+    device = await getResourceById(devicesConfig, identifier).catch(() => null);
   }
 
   if (!device) {
