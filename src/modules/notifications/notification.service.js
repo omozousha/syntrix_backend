@@ -348,6 +348,7 @@ async function sendNotificationToUsers({
       return { recipients: recipients.length, pushed: 0 };
     }
 
+    const isPersistent = data?.persistent === true || data?.persistent === 'true';
     const response = await admin.messaging().sendEachForMulticast({
       tokens,
       notification: { title, body },
@@ -359,6 +360,7 @@ async function sendNotificationToUsers({
           priority: 'high',
           visibility: 'public',
           sound: 'default',
+          sticky: isPersistent,
         },
       },
     });
@@ -557,6 +559,70 @@ async function notifyValidationTaskCreated({ request }) {
   });
 }
 
+async function sendValidationReminder({ deviceId, validatorUserId, actorUserId, actorRole, actorRegionIds = [] }) {
+  const context = await loadDeviceNotificationContext(deviceId).catch(() => null);
+  if (!context?.device?.id) {
+    const error = new Error('Device not found');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const regionId = context.device.region_id;
+  if (actorRole !== 'superadmin' && !actorRegionIds.includes(regionId)) {
+    const error = new Error('You do not have access to this device region');
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const regionalRecipients = await filterUserIdsByRegion([validatorUserId], regionId).catch(() => []);
+  if (!regionalRecipients.length) {
+    const error = new Error('Validator is not active or outside device region');
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const validatorData = await executeHasura(`
+    query LoadReminderValidator($id: uuid!) {
+      validator: app_users_by_pk(id: $id) {
+        id
+        role_name
+        is_active
+      }
+    }
+  `, { id: regionalRecipients[0] });
+  const validator = validatorData.validator || null;
+  if (!validator?.is_active || !['validator', 'user_region'].includes(validator.role_name)) {
+    const error = new Error('Selected recipient must be an active validator');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const deviceType = context.deviceTypeLabel || 'Device';
+  const deviceName = context.deviceName || resolveDeviceDisplayName({}, context);
+  const popName = context.popName || 'POP terkait';
+
+  return sendNotificationToUsers({
+    userIds: [validator.id],
+    notificationType: 'validation_reminder',
+    title: `Reminder validasi ${deviceType}`,
+    body: `${deviceName} di ${popName} menunggu validasi lapangan.`,
+    entityType: 'device',
+    entityId: context.device.id,
+    regionId,
+    data: {
+      type: 'validation_reminder',
+      persistent: true,
+      dismiss_action: true,
+      actor_user_id: actorUserId,
+      entity_type: 'device',
+      entity_id: context.device.id,
+      device_name: deviceName,
+      region_id: regionId,
+      route: 'asset_detail',
+    },
+  });
+}
+
 module.exports = {
   HIGH_PRIORITY_CHANNEL_ID,
   registerPushToken,
@@ -565,6 +631,7 @@ module.exports = {
   markNotificationRead,
   markAllNotificationsRead,
   sendNotificationToUsers,
+  sendValidationReminder,
   notifyValidationRequestStatus,
   notifyValidationTaskCreated,
 };

@@ -10,6 +10,7 @@ notificationRouter.delete('/push-tokens/:token', controller.revokeToken);
 notificationRouter.post('/push-tokens/revoke', controller.revokeToken);
 notificationRouter.get('/notifications', controller.listNotifications);
 notificationRouter.get('/notifications/fcm-health', requireRole('superadmin'), controller.getFcmHealth);
+notificationRouter.post('/notifications/validation-reminders', requireRole('admin', 'user_all_region'), controller.createValidationReminder);
 notificationRouter.patch('/notifications/read-all', controller.readAllNotifications);
 notificationRouter.post('/notifications/read-all', controller.readAllNotifications);
 notificationRouter.patch('/notifications/:id/read', controller.readNotification);

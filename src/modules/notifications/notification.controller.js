@@ -7,6 +7,7 @@ const {
   markNotificationRead,
   registerPushToken,
   revokePushToken,
+  sendValidationReminder,
 } = require('./notification.service');
 
 async function registerToken(req, res, next) {
@@ -81,6 +82,21 @@ async function getFcmHealth(_req, res, next) {
   }
 }
 
+async function createValidationReminder(req, res, next) {
+  try {
+    const result = await sendValidationReminder({
+      deviceId: req.body?.device_id,
+      validatorUserId: req.body?.validator_user_id,
+      actorUserId: req.auth.appUser.id,
+      actorRole: req.auth.normalizedRole,
+      actorRegionIds: req.auth.regions || [],
+    });
+    return sendSuccess(res, result, 'Validation reminder sent');
+  } catch (error) {
+    return next(createHttpError(error.statusCode || 400, error.message || 'Failed to send validation reminder'));
+  }
+}
+
 module.exports = {
   registerToken,
   revokeToken,
@@ -88,4 +104,5 @@ module.exports = {
   readNotification,
   readAllNotifications,
   getFcmHealth,
+  createValidationReminder,
 };
