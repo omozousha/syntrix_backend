@@ -56,6 +56,37 @@ function parseJsonColumn(value, fallback) {
   }
 }
 
+async function loadSubmitterMap(userIds) {
+  const ids = Array.from(new Set((userIds || []).filter(Boolean)));
+  if (!ids.length) return new Map();
+  const query = `
+    query LoadValidationRequestSubmitters($ids: [uuid!]!) {
+      items: app_users(where: { id: { _in: $ids } }) {
+        id
+        user_code
+        full_name
+        email
+      }
+    }
+  `;
+  const data = await executeHasura(query, { ids });
+  return new Map((data.items || []).map((item) => [item.id, item]));
+}
+
+async function enrichRequestsWithSubmitters(items) {
+  const submitterMap = await loadSubmitterMap((items || []).map((item) => item.submitted_by_user_id));
+  return (items || []).map((item) => {
+    const submitter = submitterMap.get(item.submitted_by_user_id);
+    if (!submitter) return item;
+    return {
+      ...item,
+      submitted_by_name: submitter.full_name || null,
+      submitted_by_email: submitter.email || null,
+      submitted_by_user_code: submitter.user_code || null,
+    };
+  });
+}
+
 function assertRejectNote(note) {
   if (!note || String(note).trim().length < 10) {
     throw createHttpError(400, 'reject note is required and must be at least 10 characters');
@@ -315,7 +346,7 @@ async function listRequestsByQueue({ queue, regionIds, regionIdFilter = null }) 
       `;
     const variables = regionIdFilter ? { regionIdFilter } : {};
     const data = await executeHasura(query, variables);
-    return data.items || [];
+    return enrichRequestsWithSubmitters(data.items || []);
   }
 
   const query = regionIdFilter
@@ -348,7 +379,7 @@ async function listRequestsByQueue({ queue, regionIds, regionIdFilter = null }) 
     `;
   const variables = regionIdFilter ? { regionIds, regionIdFilter } : { regionIds };
   const data = await executeHasura(query, variables);
-  return data.items || [];
+  return enrichRequestsWithSubmitters(data.items || []);
 }
 
 async function listQualityQueueRequests({ queueKey, regionIds, actorRole, regionIdFilter = null }) {

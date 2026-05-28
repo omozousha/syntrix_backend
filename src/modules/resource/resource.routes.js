@@ -938,6 +938,30 @@ function assertCanManageUser(auth, user) {
   return scope;
 }
 
+function assertCanViewManagedUser(auth, user) {
+  const scope = getAccountManagerScope(auth);
+  if (scope.isSuperAdmin) return scope;
+  if (user.role_name !== 'user_region') {
+    throw createHttpError(403, 'Adminregion can only view validator accounts');
+  }
+  if (!user.default_region_id || !scope.allowedRegions.includes(user.default_region_id)) {
+    throw createHttpError(403, 'You do not have access to this user region');
+  }
+  return scope;
+}
+
+async function getManagedUser(req, res, next) {
+  try {
+    const user = await loadManagedUserById(req.params.id);
+    if (!user) throw createHttpError(404, 'User not found');
+    assertCanViewManagedUser(req.auth, user);
+    const verificationMap = await loadAuthVerificationMap([user.auth_user_id]);
+    return sendSuccess(res, enrichUsersWithVerification([user], verificationMap)[0], 'User fetched successfully');
+  } catch (error) {
+    return next(error);
+  }
+}
+
 function normalizeManagedUserPayload(auth, body, existingUser) {
   const scope = assertCanManageUser(auth, existingUser);
   const changes = {};
@@ -1194,6 +1218,7 @@ async function resendManagedUserVerification(req, res, next) {
 }
 
 resourceRouter.get('/users', authenticate, requireRole('admin', 'user_all_region'), listManagedUsers);
+resourceRouter.get('/users/:id', authenticate, requireRole('admin', 'user_all_region'), getManagedUser);
 resourceRouter.post('/users/:id/resend-verification', authenticate, requireRole('admin', 'user_all_region'), resendManagedUserVerification);
 resourceRouter.patch('/users/:id', authenticate, requireRole('admin', 'user_all_region'), updateManagedUser);
 resourceRouter.delete('/users/:id', authenticate, requireRole('admin', 'user_all_region'), deleteManagedUser);
