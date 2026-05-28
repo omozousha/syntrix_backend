@@ -73,19 +73,99 @@ async function loadSubmitterMap(userIds) {
   return new Map((data.items || []).map((item) => [item.id, item]));
 }
 
-async function enrichRequestsWithSubmitters(items) {
+function toActorDisplay(user) {
+  if (!user) return { name: null, email: null, user_code: null };
+  return {
+    name: user.full_name || user.email || user.user_code || null,
+    email: user.email || null,
+    user_code: user.user_code || null,
+  };
+}
+
+async function loadRequestActorTimelineMap(requestIds) {
+  const ids = Array.from(new Set((requestIds || []).filter(Boolean)));
+  if (!ids.length) return new Map();
+
+  const sql = `
+    select
+      l.request_id::text,
+      l.action_type,
+      l.actor_user_id::text,
+      l.actor_role,
+      l.before_status,
+      l.after_status,
+      l.note,
+      l.created_at,
+      au.full_name as actor_name,
+      au.email as actor_email,
+      au.user_code as actor_user_code
+    from public.validation_request_logs l
+    left join public.app_users au on au.id = l.actor_user_id
+    where l.request_id in (${ids.map((id) => `${sqlLiteral(id)}::uuid`).join(', ')})
+    order by l.created_at asc;
+  `;
+  const rows = parseRunSqlRows(await executeHasuraSql(sql));
+  const timelineMap = new Map();
+  rows.forEach((row) => {
+    const timeline = timelineMap.get(row.request_id) || [];
+    timeline.push({
+      action_type: row.action_type,
+      actor_user_id: row.actor_user_id || null,
+      actor_role: normalizeRole(row.actor_role),
+      actor_name: row.actor_name || row.actor_email || row.actor_user_code || null,
+      actor_email: row.actor_email || null,
+      actor_user_code: row.actor_user_code || null,
+      before_status: row.before_status || null,
+      after_status: row.after_status || null,
+      note: row.note || null,
+      created_at: row.created_at || null,
+    });
+    timelineMap.set(row.request_id, timeline);
+  });
+  return timelineMap;
+}
+
+function latestTimelineAction(timeline, actionTypes) {
+  return [...(timeline || [])].reverse().find((item) => actionTypes.includes(item.action_type)) || null;
+}
+
+async function enrichRequestsWithActors(items) {
   const submitterMap = await loadSubmitterMap((items || []).map((item) => item.submitted_by_user_id));
+  const timelineMap = await loadRequestActorTimelineMap((items || []).map((item) => item.id));
   return (items || []).map((item) => {
     const submitter = submitterMap.get(item.submitted_by_user_id);
-    if (!submitter) return item;
+    const submitterActor = toActorDisplay(submitter);
+    const actorTimeline = timelineMap.get(item.id) || [];
+    const adminregionActor = latestTimelineAction(actorTimeline, [
+      ACTION.APPROVED_ADMINREGION,
+      ACTION.REJECTED_ADMINREGION,
+      ACTION.RESUBMIT_ADMINREGION,
+    ]);
+    const superadminActor = latestTimelineAction(actorTimeline, [
+      ACTION.APPROVED_SUPERADMIN,
+      ACTION.REJECTED_SUPERADMIN,
+    ]);
     return {
       ...item,
-      submitted_by_name: submitter.full_name || null,
-      submitted_by_email: submitter.email || null,
-      submitted_by_user_code: submitter.user_code || null,
+      submitted_by_name: submitterActor.name,
+      submitted_by_email: submitterActor.email,
+      submitted_by_user_code: submitterActor.user_code,
+      adminregion_actor_name: adminregionActor?.actor_name || null,
+      adminregion_actor_email: adminregionActor?.actor_email || null,
+      adminregion_actor_user_code: adminregionActor?.actor_user_code || null,
+      adminregion_action_at: adminregionActor?.created_at || null,
+      adminregion_action_type: adminregionActor?.action_type || null,
+      superadmin_actor_name: superadminActor?.actor_name || null,
+      superadmin_actor_email: superadminActor?.actor_email || null,
+      superadmin_actor_user_code: superadminActor?.actor_user_code || null,
+      superadmin_action_at: superadminActor?.created_at || null,
+      superadmin_action_type: superadminActor?.action_type || null,
+      actor_timeline: actorTimeline,
     };
   });
 }
+
+const enrichRequestsWithSubmitters = enrichRequestsWithActors;
 
 function assertRejectNote(note) {
   if (!note || String(note).trim().length < 10) {
@@ -446,8 +526,10 @@ async function listQualityQueueRequests({ queueKey, regionIds, actorRole, region
   };
   const data = await executeHasura(query, variables);
   const items = data.items || [];
-  if (queueKey !== 'evidence_missing') return items;
-  return items.filter((item) => !Array.isArray(item.evidence_attachments) || item.evidence_attachments.length === 0);
+  const filteredItems = queueKey !== 'evidence_missing'
+    ? items
+    : items.filter((item) => !Array.isArray(item.evidence_attachments) || item.evidence_attachments.length === 0);
+  return enrichRequestsWithActors(filteredItems);
 }
 
 async function listRequestsForNotificationInbox({ queue, regionIds, regionIdFilter = null }) {
@@ -503,7 +585,7 @@ async function listRequestsForNotificationInbox({ queue, regionIds, regionIdFilt
     `;
   const variables = regionIdFilter ? { regionIds, regionIdFilter } : { regionIds };
   const data = await executeHasura(query, variables);
-  return data.items || [];
+  return enrichRequestsWithActors(data.items || []);
 }
 
 async function listRequestsForValidator({ submittedByUserId, entityId, regionIds }) {
@@ -679,6 +761,7 @@ async function listValidatorValidationHistory({ validatorUserId, regionIds, limi
     },
   }));
 
+  const enrichedItems = await enrichRequestsWithActors(items);
   const total = Number(rows[0]?.total_count || 0);
   const summarySql = `
     select
@@ -704,7 +787,7 @@ async function listValidatorValidationHistory({ validatorUserId, regionIds, limi
       approved_total: Number(summaryRow.approved_total || 0),
       last_submitted_at: summaryRow.last_submitted_at || null,
     },
-    items,
+    items: enrichedItems,
     meta: {
       total,
       limit: safeLimit,
@@ -745,7 +828,7 @@ async function listRequestsByEntity({ entityId, role, regionIds }) {
   `;
   const variables = role === 'superadmin' ? { entityId } : { entityId, regionIds };
   const data = await executeHasura(query, variables);
-  return data.items || [];
+  return enrichRequestsWithActors(data.items || []);
 }
 
 async function updateRequestStatus({
@@ -805,26 +888,40 @@ async function updateRequestStatus({
 }
 
 async function listRequestHistory(requestId) {
-  const query = `
-    query ListValidationRequestHistory($requestId: uuid!) {
-      items: validation_request_logs(
-        where: { request_id: { _eq: $requestId } }
-        order_by: [{ created_at: asc }]
-      ) {
-        id
-        action_type
-        actor_user_id
-        actor_role
-        before_status
-        after_status
-        note
-        payload_patch
-        created_at
-      }
-    }
+  const sql = `
+    select
+      l.id::text,
+      l.action_type,
+      l.actor_user_id::text,
+      l.actor_role,
+      l.before_status,
+      l.after_status,
+      l.note,
+      l.payload_patch::text,
+      l.created_at,
+      au.full_name as actor_name,
+      au.email as actor_email,
+      au.user_code as actor_user_code
+    from public.validation_request_logs l
+    left join public.app_users au on au.id = l.actor_user_id
+    where l.request_id = ${sqlLiteral(requestId)}::uuid
+    order by l.created_at asc;
   `;
-  const data = await executeHasura(query, { requestId });
-  return data.items || [];
+  const rows = parseRunSqlRows(await executeHasuraSql(sql));
+  return rows.map((row) => ({
+    id: row.id,
+    action_type: row.action_type,
+    actor_user_id: row.actor_user_id || null,
+    actor_role: normalizeRole(row.actor_role),
+    actor_name: row.actor_name || row.actor_email || row.actor_user_code || null,
+    actor_email: row.actor_email || null,
+    actor_user_code: row.actor_user_code || null,
+    before_status: row.before_status || null,
+    after_status: row.after_status || null,
+    note: row.note || null,
+    payload_patch: parseJsonColumn(row.payload_patch, {}),
+    created_at: row.created_at || null,
+  }));
 }
 
 async function listRejectReasonMetrics({ regionIds = null, limit = 1000 } = {}) {
