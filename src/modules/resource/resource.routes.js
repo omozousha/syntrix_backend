@@ -26,8 +26,14 @@ const upload = multer({
 
 const resourceRouter = express.Router();
 
-async function loadDeviceById(deviceId) {
-  const query = `
+function isMissingTenantFieldError(error) {
+  const message = String(error?.message || error?.response?.data?.message || '').toLowerCase();
+  return message.includes('tenant_id') || message.includes('tenants_by_pk') || message.includes('field') && message.includes('not found');
+}
+
+async function loadDeviceById(deviceId, options = {}) {
+  const includeTenant = options.includeTenant !== false;
+  const query = includeTenant ? `
     query LoadDeviceById($id: uuid!) {
       item: devices_by_pk(id: $id) {
         id
@@ -43,9 +49,32 @@ async function loadDeviceById(deviceId) {
         deleted_at
       }
     }
+  ` : `
+    query LoadDeviceById($id: uuid!) {
+      item: devices_by_pk(id: $id) {
+        id
+        device_id
+        device_code
+        device_name
+        device_type_key
+        total_ports
+        region_id
+        pop_id
+        status
+        deleted_at
+      }
+    }
   `;
 
-  const data = await executeHasura(query, { id: deviceId });
+  let data;
+  try {
+    data = await executeHasura(query, { id: deviceId });
+  } catch (error) {
+    if (includeTenant && isMissingTenantFieldError(error)) {
+      return loadDeviceById(deviceId, { includeTenant: false });
+    }
+    throw error;
+  }
   return data.item;
 }
 
