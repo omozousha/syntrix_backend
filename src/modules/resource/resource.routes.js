@@ -32,18 +32,31 @@ async function loadDeviceById(deviceId) {
       item: devices_by_pk(id: $id) {
         id
         device_id
+        device_code
         device_name
         device_type_key
         total_ports
         region_id
         pop_id
         status
+        deleted_at
       }
     }
   `;
 
   const data = await executeHasura(query, { id: deviceId });
   return data.item;
+}
+
+async function loadPublicQrDeviceContext(deviceId) {
+  const device = await loadDeviceById(deviceId);
+  if (!device || device.deleted_at) return null;
+
+  return {
+    id: device.id,
+    device_type_key: device.device_type_key || null,
+    device_name: device.device_name || device.device_code || device.device_id || null,
+  };
 }
 
 async function loadDevicePortTemplate(deviceTypeKey, profileName = 'default') {
@@ -1222,6 +1235,24 @@ resourceRouter.get('/users/:id', authenticate, requireRole('admin', 'user_all_re
 resourceRouter.post('/users/:id/resend-verification', authenticate, requireRole('admin', 'user_all_region'), resendManagedUserVerification);
 resourceRouter.patch('/users/:id', authenticate, requireRole('admin', 'user_all_region'), updateManagedUser);
 resourceRouter.delete('/users/:id', authenticate, requireRole('admin', 'user_all_region'), deleteManagedUser);
+
+resourceRouter.get('/public/qr/devices/:id', async (req, res, next) => {
+  try {
+    const deviceId = String(req.params.id || '').trim();
+    if (!isUuidLike(deviceId)) {
+      throw createHttpError(404, 'Device not found');
+    }
+
+    const device = await loadPublicQrDeviceContext(deviceId);
+    if (!device) {
+      throw createHttpError(404, 'Device not found');
+    }
+
+    return sendSuccess(res, device, 'QR device context fetched successfully');
+  } catch (error) {
+    return next(error);
+  }
+});
 
 function bindResource(resourceName, config) {
   const router = express.Router();
