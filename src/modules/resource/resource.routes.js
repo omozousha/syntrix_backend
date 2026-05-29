@@ -96,15 +96,40 @@ async function loadTenantById(tenantId) {
   return data.item && !data.item.deleted_at ? data.item : null;
 }
 
+async function loadRegionById(regionId) {
+  if (!regionId) return null;
+  const query = `
+    query LoadRegionById($id: uuid!) {
+      item: regions_by_pk(id: $id) {
+        id
+        region_code
+        region_name
+      }
+    }
+  `;
+
+  const data = await executeHasura(query, { id: regionId });
+  return data.item || null;
+}
+
 async function loadPublicQrDeviceContext(deviceId) {
   const device = await loadDeviceById(deviceId);
   if (!device || device.deleted_at) return null;
   const tenant = await loadTenantById(device.tenant_id).catch(() => null);
+  const region = await loadRegionById(device.region_id).catch(() => null);
 
   return {
     id: device.id,
+    region_id: device.region_id || null,
     device_type_key: device.device_type_key || null,
     device_name: device.device_name || device.device_code || device.device_id || null,
+    region: region
+      ? {
+          id: region.id,
+          region_code: region.region_code || null,
+          region_name: region.region_name || null,
+        }
+      : null,
     tenant: tenant
       ? {
           id: tenant.id,
