@@ -757,6 +757,24 @@ create trigger trg_service_types_updated_at
 before update on public.service_types
 for each row execute function public.set_current_timestamp_updated_at();
 
+create table if not exists public.tenants (
+  id uuid primary key default gen_random_uuid(),
+  tenant_code text unique,
+  tenant_name text not null unique,
+  description text,
+  sort_order integer not null default 0,
+  is_active boolean not null default true,
+  deleted_at timestamptz,
+  deleted_by_user_id uuid,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+drop trigger if exists trg_tenants_updated_at on public.tenants;
+create trigger trg_tenants_updated_at
+before update on public.tenants
+for each row execute function public.set_current_timestamp_updated_at();
+
 create table if not exists public.devices (
   id uuid primary key default gen_random_uuid(),
   device_id text unique,
@@ -771,6 +789,7 @@ create table if not exists public.devices (
   pop_id uuid references public.pops(id) on update cascade on delete set null,
   project_id uuid references public.projects(id) on update cascade on delete set null,
   customer_id uuid references public.customers(id) on update cascade on delete set null,
+  tenant_id uuid references public.tenants(id) on update cascade on delete set null,
   category_asset text,
   bast_id text,
   status text not null default 'draft' check (status in ('draft', 'installed', 'active', 'inactive', 'maintenance', 'retired')),
@@ -1196,8 +1215,11 @@ create index if not exists idx_devices_region_id on public.devices(region_id);
 create index if not exists idx_devices_pop_id on public.devices(pop_id);
 create index if not exists idx_devices_project_id on public.devices(project_id);
 create index if not exists idx_devices_customer_id on public.devices(customer_id);
+create index if not exists idx_devices_tenant_id on public.devices(tenant_id);
 create index if not exists idx_devices_type_key on public.devices(device_type_key);
 create index if not exists idx_devices_deleted_at on public.devices(deleted_at);
+create index if not exists idx_tenants_active on public.tenants(is_active, sort_order, tenant_name);
+create index if not exists idx_tenants_deleted_at on public.tenants(deleted_at);
 create index if not exists idx_routes_region_id on public.network_routes(region_id);
 create index if not exists idx_device_links_region_id on public.device_links(region_id);
 create index if not exists idx_device_links_from_to on public.device_links(from_device_id, to_device_id);

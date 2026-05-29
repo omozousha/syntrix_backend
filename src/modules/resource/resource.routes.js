@@ -38,6 +38,7 @@ async function loadDeviceById(deviceId) {
         total_ports
         region_id
         pop_id
+        tenant_id
         status
         deleted_at
       }
@@ -48,14 +49,40 @@ async function loadDeviceById(deviceId) {
   return data.item;
 }
 
+async function loadTenantById(tenantId) {
+  if (!tenantId) return null;
+  const query = `
+    query LoadTenantById($id: uuid!) {
+      item: tenants_by_pk(id: $id) {
+        id
+        tenant_code
+        tenant_name
+        is_active
+        deleted_at
+      }
+    }
+  `;
+
+  const data = await executeHasura(query, { id: tenantId });
+  return data.item && !data.item.deleted_at ? data.item : null;
+}
+
 async function loadPublicQrDeviceContext(deviceId) {
   const device = await loadDeviceById(deviceId);
   if (!device || device.deleted_at) return null;
+  const tenant = await loadTenantById(device.tenant_id).catch(() => null);
 
   return {
     id: device.id,
     device_type_key: device.device_type_key || null,
     device_name: device.device_name || device.device_code || device.device_id || null,
+    tenant: tenant
+      ? {
+          id: tenant.id,
+          tenant_code: tenant.tenant_code || null,
+          tenant_name: tenant.tenant_name || null,
+        }
+      : null,
   };
 }
 
