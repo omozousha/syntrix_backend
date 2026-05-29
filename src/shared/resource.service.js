@@ -418,6 +418,13 @@ function getMasterOptionSqlMeta(config) {
       nameColumn: 'installation_type_name',
     };
   }
+  if (config.table === 'tenants') {
+    return {
+      table: 'tenants',
+      codeColumn: 'tenant_code',
+      nameColumn: 'tenant_name',
+    };
+  }
   return null;
 }
 
@@ -484,19 +491,36 @@ async function listMasterOptionsWithSql(config, options = {}) {
   const offset = Math.max(Number(options.offset) || 0, 0);
   const whereSql = buildMasterOptionWhere(options, meta);
   const selectFields = buildMasterOptionSelectFields(meta);
-  const data = await executeHasuraSql(`
-    select ${selectFields}
-    from public.${meta.table}
-    ${whereSql}
-    order by sort_order asc, ${meta.nameColumn} asc
-    limit ${limit}
-    offset ${offset};
-  `);
-  const countData = await executeHasuraSql(`
-    select count(*)::text as count
-    from public.${meta.table}
-    ${whereSql};
-  `);
+  let data;
+  let countData;
+  try {
+    data = await executeHasuraSql(`
+      select ${selectFields}
+      from public.${meta.table}
+      ${whereSql}
+      order by sort_order asc, ${meta.nameColumn} asc
+      limit ${limit}
+      offset ${offset};
+    `);
+    countData = await executeHasuraSql(`
+      select count(*)::text as count
+      from public.${meta.table}
+      ${whereSql};
+    `);
+  } catch (error) {
+    const message = String(error?.message || error?.response?.data?.message || '').toLowerCase();
+    if (message.includes('relation') && message.includes(meta.table) && message.includes('does not exist')) {
+      return {
+        items: [],
+        aggregate: {
+          aggregate: {
+            count: 0,
+          },
+        },
+      };
+    }
+    throw error;
+  }
 
   return {
     items: mapSqlRows(data).map((row) => normalizeMasterOptionRow(row, meta)),
