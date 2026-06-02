@@ -5,6 +5,7 @@ const { createHttpError } = require('../../utils/httpError');
 const { nhostStorageClient } = require('../../config/nhost');
 const { executeHasura } = require('../../config/hasura');
 const { createAuditLog } = require('../../shared/audit.service');
+const { applyResourceNameNormalization } = require('../../utils/nameNormalization');
 const {
   buildWhereClause,
   sanitizePayload,
@@ -584,7 +585,7 @@ async function create(req, res, next) {
     if (req.resourceName === 'devicePorts') {
       validateUsedPortEndpointState(req.body);
     }
-    const object = sanitizePayload(req.resourceConfig, req.body);
+    const object = applyResourceNameNormalization(req.resourceName, sanitizePayload(req.resourceConfig, req.body));
 
     if (
       req.resourceConfig.regionScoped &&
@@ -794,7 +795,7 @@ async function update(req, res, next) {
       }
     }
 
-    const changes = sanitizePayload(req.resourceConfig, req.body);
+    const changes = applyResourceNameNormalization(req.resourceName, sanitizePayload(req.resourceConfig, req.body));
     if (req.resourceName === 'devicePorts') {
       validateUsedPortEndpointState({ ...existing, ...changes });
     }

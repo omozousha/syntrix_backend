@@ -4,6 +4,7 @@ const AdmZip = require('adm-zip');
 const { XMLParser } = require('fast-xml-parser');
 const { executeHasura } = require('../../config/hasura');
 const { createHttpError } = require('../../utils/httpError');
+const { applyResourceNameNormalization } = require('../../utils/nameNormalization');
 
 const IMPORT_FILE_CATEGORY = {
   xlsx: 'excel',
@@ -167,7 +168,7 @@ function mapRowToEntity(entityType, row, defaults = {}) {
   const pick = (...keys) => keys.map((key) => row[key]).find((value) => value !== undefined && value !== null && String(value).trim() !== '');
 
   if (entityType === 'devices') {
-    return {
+    return applyResourceNameNormalization('devices', {
       device_name: pick('device_name', 'Device Name', 'name', 'Name'),
       asset_group: pick('asset_group', 'Asset Group') || 'active',
       device_type_key: pick('device_type_key', 'device_type', 'Device Type') || 'OLT',
@@ -190,11 +191,11 @@ function mapRowToEntity(entityType, row, defaults = {}) {
       used_core: pick('used_core', 'Used Core'),
       splitter_ratio: pick('splitter_ratio', 'Splitter Ratio') || null,
       custom_fields: row,
-    };
+    });
   }
 
   if (entityType === 'pops') {
-    return {
+    return applyResourceNameNormalization('pops', {
       pop_name: pick('pop_name', 'POP Name', 'name', 'Name'),
       pop_code: pick('pop_code', 'POP Code', 'code', 'Code'),
       region_id: pick('region_id', 'Region ID') || defaults.region_id || null,
@@ -208,7 +209,7 @@ function mapRowToEntity(entityType, row, defaults = {}) {
       validation_date: pick('validation_date', 'Validation Date', 'Tanggal Validasi') || null,
       pop_type: pick('pop_type', 'POP Type') || null,
       custom_fields: row,
-    };
+    });
   }
 
   if (entityType === 'projects') {
