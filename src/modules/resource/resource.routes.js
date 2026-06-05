@@ -8,7 +8,7 @@ const { getResourceConfig, RESOURCE_CONFIG } = require('./resource.registry');
 const controller = require('./resource.controller');
 const { createHttpError } = require('../../utils/httpError');
 const { nhostAuthClient, nhostStorageClient } = require('../../config/nhost');
-const { executeHasura } = require('../../config/hasura');
+const { executeHasura, executeHasuraSql } = require('../../config/hasura');
 const { sendSuccess } = require('../../utils/response');
 const { buildWhereClause, listResources } = require('../../shared/resource.service');
 const { createAuditLog } = require('../../shared/audit.service');
@@ -25,6 +25,67 @@ const upload = multer({
 });
 
 const resourceRouter = express.Router();
+const DEFAULT_QR_LABEL_FOOTER = 'Scan QR untuk membuka detail/validasi Device';
+
+function sqlLiteral(value) {
+  if (value == null || value === '') return 'null';
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function sqlBoolean(value) {
+  return value === false || String(value).toLowerCase() === 'false' ? 'false' : 'true';
+}
+
+function mapSqlRows(result) {
+  const rows = result?.result || [];
+  const headers = rows[0] || [];
+  return rows.slice(1).map((row) => headers.reduce((accumulator, header, index) => {
+    accumulator[header] = row[index] === '' ? null : row[index];
+    return accumulator;
+  }, {}));
+}
+
+function normalizeQrLabelSetting(row = {}) {
+  return {
+    id: row.id || null,
+    setting_key: row.setting_key || 'default',
+    qr_logo_attachment_id: row.qr_logo_attachment_id || null,
+    qr_logo_url: row.qr_logo_attachment_id ? `/attachments/${row.qr_logo_attachment_id}/preview` : null,
+    qr_logo_original_name: row.qr_logo_original_name || null,
+    qr_logo_mime_type: row.qr_logo_mime_type || null,
+    footer_text: row.footer_text || DEFAULT_QR_LABEL_FOOTER,
+    is_active: row.is_active == null ? true : String(row.is_active) === 'true',
+    updated_by_user_id: row.updated_by_user_id || null,
+    updated_at: row.updated_at || null,
+  };
+}
+
+async function getQrLabelSetting() {
+  await executeHasuraSql(`
+    insert into public.qr_label_settings (setting_key, footer_text, is_active)
+    values ('default', ${sqlLiteral(DEFAULT_QR_LABEL_FOOTER)}, true)
+    on conflict (setting_key) do nothing;
+  `);
+
+  const rows = mapSqlRows(await executeHasuraSql(`
+    select
+      s.id::text,
+      s.setting_key,
+      s.qr_logo_attachment_id::text,
+      a.original_name as qr_logo_original_name,
+      a.mime_type as qr_logo_mime_type,
+      s.footer_text,
+      s.is_active::text,
+      s.updated_by_user_id::text,
+      s.updated_at::text
+    from public.qr_label_settings s
+    left join public.attachments a on a.id = s.qr_logo_attachment_id
+    where s.setting_key = 'default'
+    limit 1;
+  `));
+
+  return normalizeQrLabelSetting(rows[0]);
+}
 
 function isMissingTenantFieldError(error) {
   const message = String(error?.message || error?.response?.data?.message || '').toLowerCase();
@@ -2387,6 +2448,78 @@ resourceRouter.get('/topology/trace', authenticate, requireRole('admin', 'user_r
     );
   } catch (error) {
     return next(error);
+  }
+});
+
+resourceRouter.get('/qr-label-settings', authenticate, requireRole('admin', 'user_all_region'), async (_req, res, next) => {
+  try {
+    const setting = await getQrLabelSetting();
+    return sendSuccess(res, setting, 'QR label settings fetched successfully');
+  } catch (error) {
+    return next(createHttpError(error.statusCode || 500, error.message || 'QR label settings fetch failed', error.details));
+  }
+});
+
+resourceRouter.patch('/qr-label-settings', authenticate, requireRole('admin'), async (req, res, next) => {
+  try {
+    const before = await getQrLabelSetting();
+    const footerText = String(req.body.footer_text || DEFAULT_QR_LABEL_FOOTER).trim() || DEFAULT_QR_LABEL_FOOTER;
+    const resetLogo = Boolean(req.body.reset_logo);
+    const logoAttachmentId = resetLogo ? null : String(req.body.qr_logo_attachment_id || '').trim() || null;
+
+    if (logoAttachmentId) {
+      const attachment = await loadAttachmentById(logoAttachmentId);
+      if (!attachment) {
+        throw createHttpError(404, 'QR logo attachment not found');
+      }
+      if (!String(attachment.mime_type || '').toLowerCase().startsWith('image/')) {
+        throw createHttpError(400, 'QR logo must be an image file');
+      }
+      const maxImageSize = env.imageUploadMaxSizeMb * 1024 * 1024;
+      if (Number(attachment.size_bytes || 0) > maxImageSize) {
+        throw createHttpError(400, `QR logo exceeds ${env.imageUploadMaxSizeMb}MB image limit`);
+      }
+    }
+
+    await executeHasuraSql(`
+      insert into public.qr_label_settings (
+        setting_key,
+        qr_logo_attachment_id,
+        footer_text,
+        is_active,
+        updated_by_user_id
+      )
+      values (
+        'default',
+        ${logoAttachmentId ? `${sqlLiteral(logoAttachmentId)}::uuid` : 'null'},
+        ${sqlLiteral(footerText)},
+        ${sqlBoolean(req.body.is_active)},
+        ${sqlLiteral(req.auth.appUser.id)}::uuid
+      )
+      on conflict (setting_key)
+      do update set
+        qr_logo_attachment_id = excluded.qr_logo_attachment_id,
+        footer_text = excluded.footer_text,
+        is_active = excluded.is_active,
+        updated_by_user_id = excluded.updated_by_user_id,
+        updated_at = now();
+    `);
+
+    const after = await getQrLabelSetting();
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'qr_label_settings.updated',
+      entityType: 'qr_label_settings',
+      entityId: after.id,
+      beforeData: before,
+      afterData: after,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent') || null,
+    });
+
+    return sendSuccess(res, after, 'QR label settings updated successfully');
+  } catch (error) {
+    return next(createHttpError(error.statusCode || 500, error.message || 'QR label settings update failed', error.details));
   }
 });
 

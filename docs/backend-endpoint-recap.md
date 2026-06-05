@@ -176,6 +176,8 @@ Base path: `/api/v1`
 | GET | `/attachments/:id/preview` | Preview attachment |
 | GET | `/attachments/resolve/:identifier` | Resolve attachment berdasarkan identifier |
 | GET | `/attachments/:id/download` | Download attachment |
+| GET | `/qr-label-settings` | Baca konfigurasi logo/footer QR label |
+| PATCH | `/qr-label-settings` | Update konfigurasi QR label, khusus superadmin |
 | GET | `/resource-config/:resourceName` | Introspeksi config resource, khusus admin |
 
 ## Catatan Integrasi
