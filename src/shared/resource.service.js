@@ -145,6 +145,235 @@ function mapSqlRows(result) {
   }, {}));
 }
 
+async function getExistingPublicTables(tableNames) {
+  const normalized = Array.from(new Set(tableNames.map((name) => String(name || '').trim()).filter(Boolean)));
+  if (!normalized.length) return new Set();
+
+  const rows = mapSqlRows(await executeHasuraSql(`
+    select table_name
+    from information_schema.tables
+    where table_schema = 'public'
+      and table_name in (${normalized.map(sqlLiteral).join(', ')});
+  `));
+
+  return new Set(rows.map((row) => row.table_name));
+}
+
+function compactRelation(object) {
+  if (!object || !object.id) return null;
+  return Object.fromEntries(
+    Object.entries(object).filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')
+  );
+}
+
+async function enrichDeviceRelationsWithSql(data) {
+  if (!data) return data;
+
+  const sourceItems = data.items || (data.item ? [data.item] : []);
+  const ids = Array.from(new Set(sourceItems.map((item) => item?.id).filter(Boolean)));
+  if (!ids.length) return data;
+
+  try {
+    const existingTables = await getExistingPublicTables([
+      'regions',
+      'pops',
+      'projects',
+      'customers',
+      'tenants',
+      'manufacturers',
+      'brands',
+      'asset_models',
+      'device_type_catalog',
+    ]);
+
+    const selectFields = ['d.id::text'];
+    const joins = [];
+
+    if (existingTables.has('regions')) {
+      joins.push('left join public.regions r on r.id = d.region_id');
+      selectFields.push(
+        'r.id::text as region_ref_id',
+        'r.region_id as region_code',
+        'r.region_name as region_name',
+        'r.region_color as region_color'
+      );
+    }
+
+    if (existingTables.has('pops')) {
+      joins.push('left join public.pops p on p.id = d.pop_id');
+      selectFields.push(
+        'p.id::text as pop_ref_id',
+        'p.pop_id as pop_inventory_id',
+        'p.pop_name as pop_name',
+        'p.pop_code as pop_code',
+        'p.region_id::text as pop_region_id'
+      );
+    }
+
+    if (existingTables.has('projects')) {
+      joins.push('left join public.projects pr on pr.id = d.project_id');
+      selectFields.push(
+        'pr.id::text as project_ref_id',
+        'pr.project_id as project_inventory_id',
+        'pr.project_code as project_code',
+        'pr.project_name as project_name'
+      );
+    }
+
+    if (existingTables.has('customers')) {
+      joins.push('left join public.customers c on c.id = d.customer_id');
+      selectFields.push(
+        'c.id::text as customer_ref_id',
+        'c.customer_id as customer_inventory_id',
+        'c.customer_code as customer_code',
+        'c.customer_name as customer_name',
+        'c.customer_number as customer_number'
+      );
+    }
+
+    if (existingTables.has('tenants')) {
+      joins.push('left join public.tenants t on t.id = d.tenant_id');
+      selectFields.push(
+        't.id::text as tenant_ref_id',
+        't.tenant_code as tenant_code',
+        't.tenant_name as tenant_name'
+      );
+    }
+
+    if (existingTables.has('manufacturers')) {
+      joins.push('left join public.manufacturers mf on mf.id = d.manufacturer_id');
+      selectFields.push(
+        'mf.id::text as manufacturer_ref_id',
+        'mf.manufacturer_code as manufacturer_code',
+        'mf.manufacturer_name as manufacturer_name'
+      );
+    }
+
+    if (existingTables.has('brands')) {
+      joins.push('left join public.brands b on b.id = d.brand_id');
+      selectFields.push(
+        'b.id::text as brand_ref_id',
+        'b.brand_code as brand_code',
+        'b.brand_name as brand_name',
+        'b.manufacturer_id::text as brand_manufacturer_id'
+      );
+    }
+
+    if (existingTables.has('asset_models')) {
+      joins.push('left join public.asset_models am on am.id = d.model_id');
+      selectFields.push(
+        'am.id::text as model_ref_id',
+        'am.model_code as model_code',
+        'am.model_name as model_name',
+        'am.brand_id::text as model_brand_id',
+        'am.manufacturer_id::text as model_manufacturer_id'
+      );
+    }
+
+    if (existingTables.has('device_type_catalog')) {
+      joins.push('left join public.device_type_catalog dt on dt.device_type_key = d.device_type_key');
+      selectFields.push(
+        'dt.id::text as device_type_ref_id',
+        'dt.device_type_key as device_type_catalog_key',
+        'dt.device_type_name as device_type_name',
+        'dt.asset_group as device_type_asset_group',
+        'dt.icon_name as device_type_icon_name'
+      );
+    }
+
+    if (!joins.length) return data;
+
+    const rows = mapSqlRows(await executeHasuraSql(`
+      select
+        ${selectFields.join(',\n        ')}
+      from public.devices d
+      ${joins.join('\n      ')}
+      where d.id in (${ids.map((id) => `${sqlLiteral(id)}::uuid`).join(', ')});
+    `));
+
+    const rowsById = new Map(rows.map((row) => [row.id, row]));
+    const mergeItem = (item) => {
+      const row = item?.id ? rowsById.get(item.id) : null;
+      if (!row) return item;
+
+      return {
+        ...item,
+        region: compactRelation({
+          id: row.region_ref_id,
+          region_id: row.region_code,
+          region_name: row.region_name,
+          region_color: row.region_color,
+        }),
+        pop: compactRelation({
+          id: row.pop_ref_id,
+          pop_id: row.pop_inventory_id,
+          pop_name: row.pop_name,
+          pop_code: row.pop_code,
+          region_id: row.pop_region_id,
+        }),
+        project: compactRelation({
+          id: row.project_ref_id,
+          project_id: row.project_inventory_id,
+          project_code: row.project_code,
+          project_name: row.project_name,
+        }),
+        customer: compactRelation({
+          id: row.customer_ref_id,
+          customer_id: row.customer_inventory_id,
+          customer_code: row.customer_code,
+          customer_name: row.customer_name,
+          customer_number: row.customer_number,
+        }),
+        tenant: compactRelation({
+          id: row.tenant_ref_id,
+          tenant_code: row.tenant_code,
+          tenant_name: row.tenant_name,
+        }),
+        manufacturer: compactRelation({
+          id: row.manufacturer_ref_id,
+          manufacturer_code: row.manufacturer_code,
+          manufacturer_name: row.manufacturer_name,
+        }),
+        brand: compactRelation({
+          id: row.brand_ref_id,
+          brand_code: row.brand_code,
+          brand_name: row.brand_name,
+          manufacturer_id: row.brand_manufacturer_id,
+        }),
+        model: compactRelation({
+          id: row.model_ref_id,
+          model_code: row.model_code,
+          model_name: row.model_name,
+          brand_id: row.model_brand_id,
+          manufacturer_id: row.model_manufacturer_id,
+        }),
+        device_type: compactRelation({
+          id: row.device_type_ref_id,
+          device_type_key: row.device_type_catalog_key,
+          device_type_name: row.device_type_name,
+          asset_group: row.device_type_asset_group,
+          icon_name: row.device_type_icon_name,
+        }),
+      };
+    };
+
+    if (data.items) return { ...data, items: data.items.map(mergeItem) };
+    if (data.item) return { ...data, item: mergeItem(data.item) };
+  } catch (error) {
+    return data;
+  }
+
+  return data;
+}
+
+async function enrichResourceData(config, data) {
+  let enriched = data;
+  if (config.table === 'devices') {
+    enriched = await enrichDeviceRelationsWithSql(enriched);
+  }
+  return enrichOptionalFieldsWithSql(config, enriched);
+}
+
 async function enrichOptionalFieldsWithSql(config, data) {
   const optionalFields = config.optionalListFields || [];
   if (!optionalFields.length || !data) return data;
@@ -655,11 +884,11 @@ async function listResources(config, options) {
 
   try {
     const data = await executeResourceHasura(config, buildQuery(true), options);
-    return data;
+    return enrichResourceData(config, data);
   } catch (error) {
     if (isOptionalFieldError(error, config)) {
       const data = await executeResourceHasura(config, buildQuery(false), options);
-      return enrichOptionalFieldsWithSql(config, data);
+      return enrichResourceData(config, data);
     }
 
     const fallback = await executeSqlFallback(config, 'list', options);
@@ -722,11 +951,12 @@ async function getResourceById(config, id) {
 
   try {
     const data = await executeResourceHasura(config, buildQuery(true), { id });
-    return data.item;
+    const enriched = await enrichResourceData(config, data);
+    return enriched.item;
   } catch (error) {
     if (isOptionalFieldError(error, config)) {
       const data = await executeResourceHasura(config, buildQuery(false), { id });
-      const enriched = await enrichOptionalFieldsWithSql(config, data);
+      const enriched = await enrichResourceData(config, data);
       return enriched.item;
     }
 
@@ -747,11 +977,12 @@ async function createResource(config, object) {
 
   try {
     const data = await executeResourceHasura(config, buildQuery(true), { object });
-    return data.item;
+    const enriched = await enrichResourceData(config, data);
+    return enriched.item;
   } catch (error) {
     if (isOptionalFieldError(error, config)) {
       const data = await executeResourceHasura(config, buildQuery(false), { object });
-      const enriched = await enrichOptionalFieldsWithSql(config, data);
+      const enriched = await enrichResourceData(config, data);
       return enriched.item;
     }
 
@@ -772,11 +1003,12 @@ async function updateResource(config, id, changes) {
 
   try {
     const data = await executeResourceHasura(config, buildQuery(true), { id, changes });
-    return data.item;
+    const enriched = await enrichResourceData(config, data);
+    return enriched.item;
   } catch (error) {
     if (isOptionalFieldError(error, config)) {
       const data = await executeResourceHasura(config, buildQuery(false), { id, changes });
-      const enriched = await enrichOptionalFieldsWithSql(config, data);
+      const enriched = await enrichResourceData(config, data);
       return enriched.item;
     }
 
