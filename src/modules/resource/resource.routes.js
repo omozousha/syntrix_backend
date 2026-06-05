@@ -15,7 +15,7 @@ const { createAuditLog } = require('../../shared/audit.service');
 const { buildOdpCoreChainSummary, buildOdpCoreChainDraft } = require('../device/odp-chain.service');
 const { createRedirectToNotAllowedError, isRedirectToNotAllowed } = require('../auth/auth.service');
 const { getPagination } = require('../../utils/pagination');
-const { normalizeRoleName, isSuperAdminRole } = require('../../utils/roles');
+const { normalizeRoleName, isSuperAdminRole, isRegionalRole } = require('../../utils/roles');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -26,6 +26,23 @@ const upload = multer({
 
 const resourceRouter = express.Router();
 const DEFAULT_QR_LABEL_FOOTER = 'Scan QR untuk membuka detail/validasi Device';
+const REFERENCE_DATA_GROUPS = {
+  regions: { resourceName: 'regions' },
+  pops: { resourceName: 'pops' },
+  tenants: { resourceName: 'tenants' },
+  deviceTypes: { resourceName: 'deviceTypes' },
+  brands: { resourceName: 'brands' },
+  models: { resourceName: 'assetModels' },
+  assetModels: { resourceName: 'assetModels' },
+  manufacturers: { resourceName: 'manufacturers' },
+  projects: { resourceName: 'projects' },
+  customers: { resourceName: 'customers' },
+  serviceTypes: { resourceName: 'serviceTypes' },
+  odpTypes: { resourceName: 'odpTypes' },
+  installationTypes: { resourceName: 'installationTypes' },
+  splitterProfiles: { resourceName: 'splitterProfiles' },
+};
+const DEFAULT_REFERENCE_DATA_GROUPS = ['regions', 'pops', 'tenants', 'deviceTypes', 'brands', 'models', 'manufacturers'];
 
 function sqlLiteral(value) {
   if (value == null || value === '') return 'null';
@@ -55,6 +72,31 @@ function normalizeNullableUuid(value) {
   const text = String(value || '').trim();
   if (!text || text.toLowerCase() === 'null' || text.toLowerCase() === 'undefined') return null;
   return text;
+}
+
+function parseReferenceGroups(value) {
+  const rawGroups = String(value || '')
+    .split(',')
+    .map((group) => group.trim())
+    .filter(Boolean);
+  const groups = rawGroups.length ? rawGroups : DEFAULT_REFERENCE_DATA_GROUPS;
+  return Array.from(new Set(groups)).filter((group) => REFERENCE_DATA_GROUPS[group]);
+}
+
+function buildReferenceDataWhere(config, query, auth) {
+  const where = buildWhereClause(config, query, auth);
+  const normalizedRole = normalizeRoleName(auth.role);
+  if (config.table === 'regions' && isRegionalRole(normalizedRole)) {
+    if (!auth.regions.length) {
+      throw createHttpError(403, 'This regional user does not have any assigned region');
+    }
+
+    const scopedCondition = { id: { _in: auth.regions } };
+    if (!where._and?.length) return { _and: [scopedCondition] };
+    return { _and: [...where._and, scopedCondition] };
+  }
+
+  return where;
 }
 
 function normalizeQrLabelSetting(row = {}) {
@@ -1403,6 +1445,57 @@ resourceRouter.get('/public/qr/devices/:id', async (req, res, next) => {
     }
 
     return sendSuccess(res, device, 'QR device context fetched successfully');
+  } catch (error) {
+    return next(error);
+  }
+});
+
+resourceRouter.get('/reference-data', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const groups = parseReferenceGroups(req.query.groups);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 500, 1), 1000);
+    const result = {};
+    const meta = {};
+
+    await Promise.all(groups.map(async (group) => {
+      const groupConfig = REFERENCE_DATA_GROUPS[group];
+      const resourceName = groupConfig.resourceName;
+      const config = getResourceConfig(resourceName);
+      if (!config) {
+        result[group] = [];
+        meta[group] = { total: 0, skipped: true };
+        return;
+      }
+
+      const query = { ...req.query };
+      delete query.groups;
+      delete query.limit;
+      delete query.page;
+
+      if (group !== 'pops' && group !== 'projects' && group !== 'customers') {
+        delete query.region_id;
+      }
+
+      const where = buildReferenceDataWhere(config, query, req.auth);
+      const data = await listResources(config, {
+        where,
+        limit,
+        offset: 0,
+        orderBy: config.defaultOrderBy,
+      });
+
+      result[group] = data.items || [];
+      meta[group] = {
+        total: Number(data.aggregate?.aggregate?.count || 0),
+        limit,
+        resource: resourceName,
+      };
+    }));
+
+    return sendSuccess(res, result, 'Reference data fetched successfully', 200, {
+      groups,
+      ...meta,
+    });
   } catch (error) {
     return next(error);
   }

@@ -159,6 +159,7 @@ Base path: `/api/v1`
 | Method | Endpoint | Keterangan |
 | --- | --- | --- |
 | GET | `/exports/pops.xlsx` | Export POP ke file Excel |
+| GET | `/reference-data` | Batch master/reference data untuk label relasi, mendukung query `groups`, `region_id`, dan `limit` |
 | GET | `/users` | List managed users |
 | POST | `/users/:id/resend-verification` | Kirim ulang verifikasi user |
 | PATCH | `/users/:id` | Update managed user |
@@ -182,6 +183,6 @@ Base path: `/api/v1`
 
 ## Catatan Integrasi
 
-- Frontend dan mobile app sebaiknya membaca master data dari resource dinamis, misalnya `odpTypes`, `installationTypes`, `serviceTypes`, `regions`, `pops`, `customers`, dan `devices`.
+- Frontend dan mobile app sebaiknya membaca master data dari resource dinamis, atau memakai `/reference-data` untuk batch label relasi umum seperti `regions`, `pops`, `tenants`, `deviceTypes`, `brands`, `models`, `manufacturers`, `projects`, `customers`, `serviceTypes`, `odpTypes`, `installationTypes`, dan `splitterProfiles`.
 - Mobile validator memakai endpoint auth, dashboard, resource device/POP, attachment, dan validation request.
 - Jika resource baru ditambahkan ke `RESOURCE_CONFIG`, pola CRUD otomatis ikut tersedia selama config read/write role sudah didefinisikan.
