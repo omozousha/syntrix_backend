@@ -40,16 +40,28 @@ function mapSqlRows(result) {
   const rows = result?.result || [];
   const headers = rows[0] || [];
   return rows.slice(1).map((row) => headers.reduce((accumulator, header, index) => {
-    accumulator[header] = row[index] === '' ? null : row[index];
+    accumulator[header] = normalizeSqlValue(row[index]);
     return accumulator;
   }, {}));
+}
+
+function normalizeSqlValue(value) {
+  if (value === '' || value == null) return null;
+  if (String(value).toUpperCase() === 'NULL') return null;
+  return value;
+}
+
+function normalizeNullableUuid(value) {
+  const text = String(value || '').trim();
+  if (!text || text.toLowerCase() === 'null' || text.toLowerCase() === 'undefined') return null;
+  return text;
 }
 
 function normalizeQrLabelSetting(row = {}) {
   return {
     id: row.id || null,
     setting_key: row.setting_key || 'default',
-    qr_logo_attachment_id: row.qr_logo_attachment_id || null,
+    qr_logo_attachment_id: normalizeNullableUuid(row.qr_logo_attachment_id),
     qr_logo_url: row.qr_logo_attachment_id ? `/attachments/${row.qr_logo_attachment_id}/preview` : null,
     qr_logo_original_name: row.qr_logo_original_name || null,
     qr_logo_mime_type: row.qr_logo_mime_type || null,
@@ -2465,7 +2477,7 @@ resourceRouter.patch('/qr-label-settings', authenticate, requireRole('admin'), a
     const before = await getQrLabelSetting();
     const footerText = String(req.body.footer_text || DEFAULT_QR_LABEL_FOOTER).trim() || DEFAULT_QR_LABEL_FOOTER;
     const resetLogo = Boolean(req.body.reset_logo);
-    const logoAttachmentId = resetLogo ? null : String(req.body.qr_logo_attachment_id || '').trim() || null;
+    const logoAttachmentId = resetLogo ? null : normalizeNullableUuid(req.body.qr_logo_attachment_id);
 
     if (logoAttachmentId) {
       const attachment = await loadAttachmentById(logoAttachmentId);
