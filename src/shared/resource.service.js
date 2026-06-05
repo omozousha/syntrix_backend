@@ -160,10 +160,16 @@ async function getExistingPublicTables(tableNames) {
 }
 
 function compactRelation(object) {
-  if (!object || !object.id) return null;
+  if (!object || isSqlNullText(object.id)) return null;
   return Object.fromEntries(
-    Object.entries(object).filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')
+    Object.entries(object).filter(([, value]) => !isSqlNullText(value))
   );
+}
+
+function isSqlNullText(value) {
+  if (value === null || value === undefined) return true;
+  const text = String(value).trim();
+  return !text || text.toLowerCase() === 'null' || text.toLowerCase() === 'undefined';
 }
 
 async function enrichDeviceRelationsWithSql(data) {
