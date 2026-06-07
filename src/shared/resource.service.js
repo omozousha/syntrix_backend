@@ -190,6 +190,9 @@ async function enrichDeviceRelationsWithSql(data) {
       'brands',
       'asset_models',
       'device_type_catalog',
+      'odp_types',
+      'installation_types',
+      'splitter_profiles',
     ]);
 
     const selectFields = ['d.id::text'];
@@ -287,6 +290,54 @@ async function enrichDeviceRelationsWithSql(data) {
       );
     }
 
+    if (existingTables.has('odp_types')) {
+      joins.push(`
+        left join public.odp_types ot on d.odp_type is not null
+          and (
+            lower(trim(d.odp_type)) = lower(trim(ot.odp_type_code))
+            or lower(trim(d.odp_type)) = lower(trim(ot.odp_type_name))
+          )
+          and ot.deleted_at is null
+      `);
+      selectFields.push(
+        'ot.id::text as odp_type_ref_id',
+        'ot.odp_type_code as odp_type_code',
+        'ot.odp_type_name as odp_type_name'
+      );
+    }
+
+    if (existingTables.has('installation_types')) {
+      joins.push(`
+        left join public.installation_types it on d.installation_type is not null
+          and (
+            lower(trim(d.installation_type)) = lower(trim(it.installation_type_code))
+            or lower(trim(d.installation_type)) = lower(trim(it.installation_type_name))
+          )
+          and it.deleted_at is null
+      `);
+      selectFields.push(
+        'it.id::text as installation_type_ref_id',
+        'it.installation_type_code as installation_type_code',
+        'it.installation_type_name as installation_type_name'
+      );
+    }
+
+    if (existingTables.has('splitter_profiles')) {
+      joins.push(`
+        left join public.splitter_profiles sp on d.splitter_ratio is not null
+          and lower(trim(d.splitter_ratio)) = lower(trim(sp.ratio_label))
+          and sp.is_active = true
+      `);
+      selectFields.push(
+        'sp.id::text as splitter_profile_ref_id',
+        'sp.splitter_profile_id as splitter_profile_code',
+        'sp.ratio_label as splitter_ratio_label',
+        'sp.input_port_count::text as splitter_input_port_count',
+        'sp.output_port_count::text as splitter_output_port_count',
+        'sp.expected_loss_db::text as splitter_expected_loss_db'
+      );
+    }
+
     if (!joins.length) return data;
 
     const rows = mapSqlRows(await executeHasuraSql(`
@@ -359,6 +410,24 @@ async function enrichDeviceRelationsWithSql(data) {
           device_type_name: row.device_type_name,
           asset_group: row.device_type_asset_group,
           icon_name: row.device_type_icon_name,
+        }),
+        odp_type_ref: compactRelation({
+          id: row.odp_type_ref_id,
+          odp_type_code: row.odp_type_code,
+          odp_type_name: row.odp_type_name,
+        }),
+        installation_type_ref: compactRelation({
+          id: row.installation_type_ref_id,
+          installation_type_code: row.installation_type_code,
+          installation_type_name: row.installation_type_name,
+        }),
+        splitter_profile: compactRelation({
+          id: row.splitter_profile_ref_id,
+          splitter_profile_id: row.splitter_profile_code,
+          ratio_label: row.splitter_ratio_label,
+          input_port_count: row.splitter_input_port_count,
+          output_port_count: row.splitter_output_port_count,
+          expected_loss_db: row.splitter_expected_loss_db,
         }),
       };
     };

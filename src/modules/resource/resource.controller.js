@@ -349,6 +349,8 @@ function buildAdminRegionCreateRequestPayload(device) {
       used_ports: device.used_ports ?? null,
       validation_status: device.validation_status || null,
       validation_date: device.validation_date || null,
+      image_attachment_id: device.image_attachment_id || null,
+      image_attachments: Array.isArray(device.image_attachments) ? device.image_attachments : [],
       address: device.address || null,
       longitude: device.longitude ?? null,
       latitude: device.latitude ?? null,

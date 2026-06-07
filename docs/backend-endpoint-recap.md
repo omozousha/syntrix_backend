@@ -159,7 +159,7 @@ Base path: `/api/v1`
 | Method | Endpoint | Keterangan |
 | --- | --- | --- |
 | GET | `/exports/pops.xlsx` | Export POP ke file Excel |
-| GET | `/reference-data` | Batch master/reference data untuk label relasi, mendukung query `groups`, `region_id`, dan `limit` |
+| GET | `/reference-data` | Batch master/reference data untuk label relasi, mendukung query `groups`, `region_id`, dan `limit`; memakai cache TTL pendek per instance |
 | GET | `/users` | List managed users |
 | POST | `/users/:id/resend-verification` | Kirim ulang verifikasi user |
 | PATCH | `/users/:id` | Update managed user |

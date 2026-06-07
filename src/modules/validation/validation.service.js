@@ -1205,6 +1205,8 @@ async function loadDeviceSnapshot(deviceId) {
         address
         longitude
         latitude
+        image_attachment_id
+        image_attachments
         updated_at
       }
       ports: device_ports(
@@ -1306,7 +1308,6 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
   const currentPortByIndex = new Map(before.ports.map((port) => [Number(port.port_index), port]));
 
   const deviceChanges = pickObject(payloadDevice, [
-    'device_name',
     'status',
     'splitter_ratio',
     'odp_type',
@@ -1426,6 +1427,8 @@ async function applyAdminRegionCreateDeviceRequest({ request }) {
     'latitude',
     'validation_status',
     'validation_date',
+    'image_attachment_id',
+    'image_attachments',
   ]);
   deviceChanges.deleted_at = null;
   deviceChanges.deleted_by_user_id = null;
@@ -1449,6 +1452,8 @@ async function applyAdminRegionCreateDeviceRequest({ request }) {
         'address',
         'longitude',
         'latitude',
+        'image_attachment_id',
+        'image_attachments',
       ]);
       await updateDeviceById(request.entity_id, rollbackDevice);
     } catch (_rollbackError) {

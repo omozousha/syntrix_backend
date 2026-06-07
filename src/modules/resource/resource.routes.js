@@ -43,6 +43,8 @@ const REFERENCE_DATA_GROUPS = {
   splitterProfiles: { resourceName: 'splitterProfiles' },
 };
 const DEFAULT_REFERENCE_DATA_GROUPS = ['regions', 'pops', 'tenants', 'deviceTypes', 'brands', 'models', 'manufacturers'];
+const REFERENCE_DATA_CACHE_TTL_MS = 60 * 1000;
+const referenceDataCache = new Map();
 
 function sqlLiteral(value) {
   if (value == null || value === '') return 'null';
@@ -81,6 +83,43 @@ function parseReferenceGroups(value) {
     .filter(Boolean);
   const groups = rawGroups.length ? rawGroups : DEFAULT_REFERENCE_DATA_GROUPS;
   return Array.from(new Set(groups)).filter((group) => REFERENCE_DATA_GROUPS[group]);
+}
+
+function buildReferenceDataCacheKey(req, groups, limit) {
+  const query = { ...req.query };
+  delete query.page;
+  const normalizedQuery = Object.keys(query)
+    .sort()
+    .reduce((accumulator, key) => {
+      accumulator[key] = query[key];
+      return accumulator;
+    }, {});
+
+  return JSON.stringify({
+    role: normalizeRoleName(req.auth.role),
+    userId: req.auth.appUser?.id || null,
+    regions: [...(req.auth.regions || [])].sort(),
+    groups,
+    limit,
+    query: normalizedQuery,
+  });
+}
+
+function getCachedReferenceData(cacheKey) {
+  const cached = referenceDataCache.get(cacheKey);
+  if (!cached) return null;
+  if (Date.now() > cached.expiresAt) {
+    referenceDataCache.delete(cacheKey);
+    return null;
+  }
+  return cached.payload;
+}
+
+function setCachedReferenceData(cacheKey, payload) {
+  referenceDataCache.set(cacheKey, {
+    payload,
+    expiresAt: Date.now() + REFERENCE_DATA_CACHE_TTL_MS,
+  });
 }
 
 function buildReferenceDataWhere(config, query, auth) {
@@ -1454,6 +1493,15 @@ resourceRouter.get('/reference-data', authenticate, requireRole('admin', 'user_r
   try {
     const groups = parseReferenceGroups(req.query.groups);
     const limit = Math.min(Math.max(Number(req.query.limit) || 500, 1), 1000);
+    const cacheKey = buildReferenceDataCacheKey(req, groups, limit);
+    const cachedPayload = getCachedReferenceData(cacheKey);
+    if (cachedPayload) {
+      return sendSuccess(res, cachedPayload.data, 'Reference data fetched successfully', 200, {
+        ...cachedPayload.meta,
+        cached: true,
+      });
+    }
+
     const result = {};
     const meta = {};
 
@@ -1492,10 +1540,15 @@ resourceRouter.get('/reference-data', authenticate, requireRole('admin', 'user_r
       };
     }));
 
-    return sendSuccess(res, result, 'Reference data fetched successfully', 200, {
+    const responseMeta = {
       groups,
       ...meta,
-    });
+      cached: false,
+      cache_ttl_ms: REFERENCE_DATA_CACHE_TTL_MS,
+    };
+    setCachedReferenceData(cacheKey, { data: result, meta: responseMeta });
+
+    return sendSuccess(res, result, 'Reference data fetched successfully', 200, responseMeta);
   } catch (error) {
     return next(error);
   }
