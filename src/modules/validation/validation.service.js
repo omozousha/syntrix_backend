@@ -56,6 +56,51 @@ function parseJsonColumn(value, fallback) {
   }
 }
 
+function attachmentKey(attachment) {
+  if (typeof attachment === 'string') return attachment.trim();
+  if (!attachment || typeof attachment !== 'object') return '';
+  return String(attachment.id || attachment.attachment_id || attachment.file_id || '').trim();
+}
+
+function collectInspectionAttachments(fieldInspection) {
+  const refs = [];
+  if (!fieldInspection || typeof fieldInspection !== 'object') return refs;
+
+  ['initial_photos', 'condition_checks'].forEach((groupKey) => {
+    const group = fieldInspection[groupKey];
+    if (!group || typeof group !== 'object') return;
+
+    Object.values(group).forEach((item) => {
+      if (!item || typeof item !== 'object' || !item.attachment) return;
+      refs.push(item.attachment);
+    });
+  });
+
+  return refs;
+}
+
+function collectApprovedValidationAttachments(request) {
+  const payload = request.payload_snapshot || {};
+  return [
+    ...(Array.isArray(request.evidence_attachments) ? request.evidence_attachments : []),
+    ...collectInspectionAttachments(payload.field_inspection),
+  ];
+}
+
+function mergeAttachmentRefs(...attachmentGroups) {
+  const merged = [];
+  const seen = new Set();
+
+  attachmentGroups.flat().forEach((attachment) => {
+    const key = attachmentKey(attachment);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    merged.push(attachment);
+  });
+
+  return merged;
+}
+
 async function loadSubmitterMap(userIds) {
   const ids = Array.from(new Set((userIds || []).filter(Boolean)));
   if (!ids.length) return new Map();
@@ -1327,6 +1372,14 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
   deviceChanges.deleted_at = null;
   deviceChanges.deleted_by_user_id = null;
 
+  const approvedGalleryAttachments = mergeAttachmentRefs(
+    Array.isArray(before.device.image_attachments) ? before.device.image_attachments : [],
+    collectApprovedValidationAttachments(request),
+  );
+  if (approvedGalleryAttachments.length) {
+    deviceChanges.image_attachments = approvedGalleryAttachments;
+  }
+
   const changedPorts = [];
   const createdPorts = [];
   try {
@@ -1383,6 +1436,8 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
         'address',
         'longitude',
         'latitude',
+        'image_attachment_id',
+        'image_attachments',
       ]);
       await updateDeviceById(request.entity_id, rollbackDevice);
 
