@@ -457,6 +457,11 @@ async function enrichOptionalFieldsWithSql(config, data) {
           left join public.app_users au on au.id = vr.submitted_by_user_id
           where vr.entity_type = 'device'
             and vr.entity_id in (${ids.map((id) => `${sqlLiteral(id)}::uuid`).join(', ')})
+            and (
+              vr.payload_snapshot ? 'field_validation'
+              or vr.payload_snapshot ? 'field_inspection'
+              or vr.payload_snapshot ? 'port_summary'
+            )
           order by vr.entity_id, vr.updated_at desc
         )
         select *
