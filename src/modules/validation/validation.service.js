@@ -638,9 +638,12 @@ async function listRequestsForValidator({ submittedByUserId, entityId, regionIds
     query ListValidationRequestsForValidator($submittedByUserId: uuid!, $entityId: uuid!, $regionIds: [uuid!]) {
       items: validation_requests(
         where: {
-          submitted_by_user_id: { _eq: $submittedByUserId }
           entity_id: { _eq: $entityId }
           region_id: { _in: $regionIds }
+          _or: [
+            { submitted_by_user_id: { _eq: $submittedByUserId } }
+            { current_status: { _eq: "validated" } }
+          ]
         }
         order_by: [{ updated_at: desc }]
       ) {
@@ -663,7 +666,7 @@ async function listRequestsForValidator({ submittedByUserId, entityId, regionIds
     }
   `;
   const data = await executeHasura(query, { submittedByUserId, entityId, regionIds });
-  return data.items || [];
+  return enrichRequestsWithActors(data.items || []);
 }
 
 async function listValidatorValidationHistory({ validatorUserId, regionIds, limit = 30, offset = 0 }) {
