@@ -68,6 +68,27 @@ function assertPilotRegionAllowed(regionId) {
   }
 }
 
+function buildAuditRequestContext(request) {
+  const payload = request?.payload_snapshot || {};
+  const device = payload.device || {};
+  const fieldValidation = payload.field_validation || {};
+  const deviceName = [
+    device.device_name,
+    fieldValidation.old_device_name,
+    fieldValidation.new_device_name,
+    payload.device_name,
+  ].find((value) => String(value || '').trim());
+  const entityLabel = String(deviceName || request?.request_id || '').trim() || null;
+
+  return {
+    request_id: request?.request_id || null,
+    entity_type: request?.entity_type || null,
+    entity_id: request?.entity_id || null,
+    device_name: deviceName || null,
+    entity_label: entityLabel,
+  };
+}
+
 async function submitValidationRequest(req, res, next) {
   try {
     assertValidationWorkflowEnabled();
@@ -159,9 +180,12 @@ async function submitValidationRequest(req, res, next) {
       actionName: auditActionName,
       entityType: 'validation_requests',
       entityId: request.id,
-      beforeData: { status: beforeStatus },
+      beforeData: {
+        ...buildAuditRequestContext(request),
+        status: beforeStatus,
+      },
       afterData: {
-        request_id: request.request_id,
+        ...buildAuditRequestContext(request),
         status: STATUS.ONGOING,
       },
       ipAddress: req.ip,
@@ -332,11 +356,11 @@ async function approveByAdminRegion(req, res, next) {
       entityType: 'validation_requests',
       entityId: request.id,
       beforeData: {
-        request_id: request.request_id,
+        ...buildAuditRequestContext(request),
         status: STATUS.ONGOING,
       },
       afterData: {
-        request_id: request.request_id,
+        ...buildAuditRequestContext(request),
         status: STATUS.PENDING_ASYNC,
       },
       ipAddress: req.ip,
@@ -399,11 +423,11 @@ async function rejectByAdminRegion(req, res, next) {
       entityType: 'validation_requests',
       entityId: request.id,
       beforeData: {
-        request_id: request.request_id,
+        ...buildAuditRequestContext(request),
         status: STATUS.ONGOING,
       },
       afterData: {
-        request_id: request.request_id,
+        ...buildAuditRequestContext(request),
         status: STATUS.REJECTED_ADMINREGION,
         note,
       },
@@ -462,11 +486,11 @@ async function resubmitByAdminRegion(req, res, next) {
       entityType: 'validation_requests',
       entityId: request.id,
       beforeData: {
-        request_id: request.request_id,
+        ...buildAuditRequestContext(request),
         status: STATUS.REJECTED_SUPERADMIN,
       },
       afterData: {
-        request_id: request.request_id,
+        ...buildAuditRequestContext(request),
         status: STATUS.PENDING_ASYNC,
       },
       ipAddress: req.ip,
@@ -540,11 +564,11 @@ async function approveBySuperAdmin(req, res, next) {
       entityType: 'validation_requests',
       entityId: request.id,
       beforeData: {
-        request_id: request.request_id,
+        ...buildAuditRequestContext(request),
         status: STATUS.PENDING_ASYNC,
       },
       afterData: {
-        request_id: request.request_id,
+        ...buildAuditRequestContext(request),
         status: STATUS.VALIDATED,
       },
       ipAddress: req.ip,
@@ -610,11 +634,11 @@ async function rejectBySuperAdmin(req, res, next) {
       entityType: 'validation_requests',
       entityId: request.id,
       beforeData: {
-        request_id: request.request_id,
+        ...buildAuditRequestContext(request),
         status: STATUS.PENDING_ASYNC,
       },
       afterData: {
-        request_id: request.request_id,
+        ...buildAuditRequestContext(request),
         status: STATUS.REJECTED_SUPERADMIN,
         note,
       },

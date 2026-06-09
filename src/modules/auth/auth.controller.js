@@ -2,6 +2,7 @@ const { sendSuccess } = require('../../utils/response');
 const { createHttpError } = require('../../utils/httpError');
 const { env } = require('../../config/env');
 const { normalizeRoleName, isSuperAdminRole } = require('../../utils/roles');
+const { createAuditLog } = require('../../shared/audit.service');
 const {
   loginWithPassword,
   signUpUser,
@@ -181,6 +182,21 @@ async function login(req, res, next) {
       await activateAppUserByAuthUserId(authUser.id);
     }
 
+    await createAuditLog({
+      actorUserId: appUser.id,
+      actionName: 'account:login_success',
+      entityType: 'app_user',
+      entityId: appUser.id,
+      beforeData: null,
+      afterData: {
+        email: appUser.email,
+        role_name: appUser.role_name,
+        default_region_id: appUser.default_region_id,
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
     return sendSuccess(res, data, 'Login successful');
   } catch (error) {
     return next(createHttpError(error.response?.status || 400, error.response?.data?.message || error.message));
@@ -194,6 +210,23 @@ async function register(req, res, next) {
     const result = await createSyntrixUser({
       ...req.body,
       require_email_verification: true,
+    });
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'account:user_register',
+      entityType: 'app_user',
+      entityId: result.app_user.id,
+      beforeData: null,
+      afterData: {
+        id: result.app_user.id,
+        full_name: result.app_user.full_name,
+        email: result.app_user.email,
+        role_name: result.app_user.role_name,
+        default_region_id: result.app_user.default_region_id,
+        region_scope_count: result.region_scopes.length,
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
     });
     return sendSuccess(
       res,
@@ -237,6 +270,21 @@ async function bootstrapAdmin(req, res, next) {
       role_name: 'admin',
       region_ids: [],
       require_email_verification: false,
+    });
+    await createAuditLog({
+      actorUserId: result.app_user.id,
+      actionName: 'account:bootstrap_admin',
+      entityType: 'app_user',
+      entityId: result.app_user.id,
+      beforeData: null,
+      afterData: {
+        id: result.app_user.id,
+        full_name: result.app_user.full_name,
+        email: result.app_user.email,
+        role_name: result.app_user.role_name,
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
     });
 
     return sendSuccess(res, result, 'Bootstrap admin created successfully', 201);
@@ -315,6 +363,25 @@ async function updateMe(req, res, next) {
       cleanupUnusedAvatarAttachment(previousAvatarAttachmentId).catch(() => null);
     }
 
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'account:profile_update',
+      entityType: 'app_user',
+      entityId: updated.id,
+      beforeData: {
+        id: req.auth.appUser.id,
+        full_name: req.auth.appUser.full_name,
+        avatar_attachment_id: previousAvatarAttachmentId,
+      },
+      afterData: {
+        id: updated.id,
+        full_name: updated.full_name,
+        avatar_attachment_id: updated.avatar_attachment_id || updated.metadata?.avatar_attachment_id || null,
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
     return sendSuccess(res, updated, 'Profile updated successfully');
   } catch (error) {
     return next(createHttpError(error.response?.status || error.statusCode || 400, error.response?.data?.message || error.message));
@@ -359,6 +426,16 @@ async function changeCurrentPassword(req, res, next) {
     }
 
     const data = await changePassword(req.auth.token, new_password);
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'account:password_change',
+      entityType: 'app_user',
+      entityId: req.auth.appUser.id,
+      beforeData: { password_changed: false },
+      afterData: { password_changed: true },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
     return sendSuccess(res, data, 'Password changed successfully');
   } catch (error) {
     return next(createHttpError(error.response?.status || 400, error.response?.data?.message || error.message));
@@ -374,6 +451,20 @@ async function resetPassword(req, res, next) {
     }
 
     const data = await requestPasswordReset(email, redirect_to || env.nhostEmailRedirectTo || '');
+    const appUser = await findAppUserByEmail(email);
+    await createAuditLog({
+      actorUserId: appUser?.id || null,
+      actionName: 'account:password_reset_requested',
+      entityType: 'app_user',
+      entityId: appUser?.id || null,
+      beforeData: null,
+      afterData: {
+        email,
+        redirect_to: redirect_to || env.nhostEmailRedirectTo || null,
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
     return sendSuccess(res, data, 'Password reset email sent successfully');
   } catch (error) {
     return next(createHttpError(error.response?.status || 400, error.response?.data?.message || error.message));
@@ -403,6 +494,16 @@ async function cleanupAvatarOrphans(req, res, next) {
     const limitRaw = req.body?.limit ?? req.query?.limit;
     const limit = limitRaw !== undefined ? Number(limitRaw) : 100;
     const result = await cleanupOrphanAvatarAttachments(limit);
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'account:avatar_orphan_cleanup',
+      entityType: 'attachments',
+      entityId: null,
+      beforeData: { limit },
+      afterData: result,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
     return sendSuccess(res, result, 'Avatar orphan cleanup completed');
   } catch (error) {
     return next(createHttpError(error.response?.status || error.statusCode || 400, error.response?.data?.message || error.message));

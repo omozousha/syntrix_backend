@@ -2757,6 +2757,26 @@ resourceRouter.post('/attachments/upload', authenticate, requireRole('admin', 'u
       },
     });
 
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'attachment:upload',
+      entityType: 'attachments',
+      entityId: record.item.id,
+      beforeData: null,
+      afterData: {
+        id: record.item.id,
+        attachment_id: record.item.attachment_id,
+        entity_type: record.item.entity_type,
+        entity_id: record.item.entity_id,
+        file_category: record.item.file_category,
+        original_name: record.item.original_name,
+        mime_type: record.item.mime_type,
+        size_bytes: record.item.size_bytes,
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent') || null,
+    });
+
     return sendSuccess(res, record.item, 'File uploaded successfully', 201);
   } catch (error) {
     return next(createHttpError(error.statusCode || error.response?.status || 500, error.response?.data?.message || error.message || 'File upload failed', error.response?.data));

@@ -37,6 +37,16 @@ function buildWhereClause(config, query, auth) {
       andConditions.push({ action_name: { _ilike: `%${actionNameContains}%` } });
     }
 
+    const actionNameContainsAny = String(query.action_name_contains_any || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (actionNameContainsAny.length) {
+      andConditions.push({
+        _or: actionNameContainsAny.map((value) => ({ action_name: { _ilike: `%${value}%` } })),
+      });
+    }
+
     const requestId = String(query.request_id || '').trim();
     if (requestId) {
       andConditions.push({

@@ -1,6 +1,7 @@
 const { createHttpError } = require('../../utils/httpError');
 const { sendSuccess } = require('../../utils/response');
 const { getFirebaseHealth } = require('../../config/firebase');
+const { createAuditLog } = require('../../shared/audit.service');
 const {
   listUserNotifications,
   markAllNotificationsRead,
@@ -90,6 +91,20 @@ async function createValidationReminder(req, res, next) {
       actorUserId: req.auth.appUser.id,
       actorRole: req.auth.normalizedRole,
       actorRegionIds: req.auth.regions || [],
+    });
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'notification:validation_reminder_sent',
+      entityType: 'devices',
+      entityId: req.body?.device_id || null,
+      beforeData: null,
+      afterData: {
+        device_id: req.body?.device_id || null,
+        validator_user_id: req.body?.validator_user_id || null,
+        notification_id: result?.notification?.id || result?.id || null,
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
     });
     return sendSuccess(res, result, 'Validation reminder sent');
   } catch (error) {
