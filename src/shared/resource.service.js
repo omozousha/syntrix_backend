@@ -32,6 +32,11 @@ function buildWhereClause(config, query, auth) {
   }
 
   if (config.table === 'audit_logs') {
+    const actionNameContains = String(query.action_name_contains || '').trim();
+    if (actionNameContains) {
+      andConditions.push({ action_name: { _ilike: `%${actionNameContains}%` } });
+    }
+
     const requestId = String(query.request_id || '').trim();
     if (requestId) {
       andConditions.push({
