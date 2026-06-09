@@ -41,6 +41,15 @@ function buildWhereClause(config, query, auth) {
         ],
       });
     }
+
+    const createdFrom = String(query.created_from || '').trim();
+    const createdTo = String(query.created_to || '').trim();
+    if (createdFrom) {
+      andConditions.push({ created_at: { _gte: createdFrom } });
+    }
+    if (createdTo) {
+      andConditions.push({ created_at: { _lte: createdTo } });
+    }
   }
 
   if (config.regionScoped && isRegionalRole(normalizedRole)) {
