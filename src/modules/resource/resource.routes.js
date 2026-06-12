@@ -198,6 +198,7 @@ async function loadDeviceById(deviceId, options = {}) {
         total_ports
         region_id
         pop_id
+        project_id
         tenant_id
         status
         deleted_at
@@ -214,6 +215,7 @@ async function loadDeviceById(deviceId, options = {}) {
         total_ports
         region_id
         pop_id
+        project_id
         status
         deleted_at
       }
@@ -266,11 +268,50 @@ async function loadRegionById(regionId) {
   return data.item || null;
 }
 
+async function loadPopById(popId) {
+  if (!popId) return null;
+  const query = `
+    query LoadPopById($id: uuid!) {
+      item: pops_by_pk(id: $id) {
+        id
+        pop_id
+        pop_code
+        pop_name
+        deleted_at
+      }
+    }
+  `;
+
+  const data = await executeHasura(query, { id: popId });
+  return data.item && !data.item.deleted_at ? data.item : null;
+}
+
+async function loadProjectById(projectId) {
+  if (!projectId) return null;
+  const query = `
+    query LoadProjectById($id: uuid!) {
+      item: projects_by_pk(id: $id) {
+        id
+        project_id
+        project_code
+        project_name
+      }
+    }
+  `;
+
+  const data = await executeHasura(query, { id: projectId });
+  return data.item || null;
+}
+
 async function loadPublicQrDeviceContext(deviceId) {
   const device = await loadDeviceById(deviceId);
   if (!device || device.deleted_at) return null;
-  const tenant = await loadTenantById(device.tenant_id).catch(() => null);
-  const region = await loadRegionById(device.region_id).catch(() => null);
+  const [tenant, region, pop, project] = await Promise.all([
+    loadTenantById(device.tenant_id).catch(() => null),
+    loadRegionById(device.region_id).catch(() => null),
+    loadPopById(device.pop_id).catch(() => null),
+    loadProjectById(device.project_id).catch(() => null),
+  ]);
 
   return {
     id: device.id,
@@ -282,6 +323,22 @@ async function loadPublicQrDeviceContext(deviceId) {
           id: region.id,
           region_code: region.region_code || null,
           region_name: region.region_name || null,
+        }
+      : null,
+    pop: pop
+      ? {
+          id: pop.id,
+          pop_id: pop.pop_id || null,
+          pop_code: pop.pop_code || null,
+          pop_name: pop.pop_name || null,
+        }
+      : null,
+    project: project
+      ? {
+          id: project.id,
+          project_id: project.project_id || null,
+          project_code: project.project_code || null,
+          project_name: project.project_name || null,
         }
       : null,
     tenant: tenant
