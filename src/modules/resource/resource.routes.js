@@ -1,4 +1,5 @@
 const express = require('express');
+const { randomUUID } = require('crypto');
 const multer = require('multer');
 const FormData = require('form-data');
 const XLSX = require('xlsx');
@@ -16,6 +17,12 @@ const { buildOdpCoreChainSummary, buildOdpCoreChainDraft } = require('../device/
 const { createRedirectToNotAllowedError, isRedirectToNotAllowed } = require('../auth/auth.service');
 const { getPagination } = require('../../utils/pagination');
 const { normalizeRoleName, isSuperAdminRole, isRegionalRole } = require('../../utils/roles');
+const {
+  STATUS: VALIDATION_STATUS,
+  ACTION: VALIDATION_ACTION,
+  createRequest: createValidationRequest,
+  insertRequestLog: insertValidationRequestLog,
+} = require('../validation/validation.service');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -401,6 +408,140 @@ async function loadDevicePortsByDeviceId(deviceId) {
   return data.items || [];
 }
 
+async function syncDevicePortUsage(deviceId) {
+  if (!deviceId) return null;
+
+  const query = `
+    query DevicePortUsage($deviceId: uuid!, $usedWhere: device_ports_bool_exp!) {
+      total_ports: device_ports_aggregate(where: { device_id: { _eq: $deviceId }, deleted_at: { _is_null: true } }) {
+        aggregate { count }
+      }
+      used_ports: device_ports_aggregate(where: $usedWhere) {
+        aggregate { count }
+      }
+      device: devices_by_pk(id: $deviceId) {
+        id
+      }
+    }
+  `;
+
+  const usedWhere = {
+    device_id: { _eq: deviceId },
+    deleted_at: { _is_null: true },
+    _or: [
+      { status: { _eq: 'used' } },
+      { customer_id: { _is_null: false } },
+      { ont_device_id: { _is_null: false } },
+    ],
+  };
+
+  const data = await executeHasura(query, { deviceId, usedWhere });
+  if (!data.device?.id) return null;
+
+  const totalPorts = Number(data.total_ports?.aggregate?.count || 0);
+  const usedPorts = Number(data.used_ports?.aggregate?.count || 0);
+
+  await executeHasura(
+    `
+      mutation UpdateDevicePortUsage($deviceId: uuid!, $set: devices_set_input!) {
+        updated: update_devices_by_pk(pk_columns: { id: $deviceId }, _set: $set) {
+          id
+          total_ports
+          used_ports
+        }
+      }
+    `,
+    {
+      deviceId,
+      set: {
+        total_ports: totalPorts,
+        used_ports: usedPorts,
+      },
+    },
+  );
+
+  return { total_ports: totalPorts, used_ports: usedPorts };
+}
+
+async function findActiveProvisionPortsRequest(deviceId, profileName) {
+  const query = `
+    query FindActiveProvisionPortsRequest($deviceId: uuid!, $payloadMatcher: jsonb!) {
+      items: validation_requests(
+        where: {
+          entity_type: { _eq: "device" }
+          entity_id: { _eq: $deviceId }
+          current_status: { _eq: "pending_async" }
+          payload_snapshot: { _contains: $payloadMatcher }
+        }
+        order_by: { created_at: desc }
+        limit: 1
+      ) {
+        id
+        request_id
+        entity_type
+        entity_id
+        region_id
+        submitted_by_user_id
+        current_status
+        payload_snapshot
+        created_at
+        updated_at
+      }
+    }
+  `;
+
+  const data = await executeHasura(query, {
+    deviceId,
+    payloadMatcher: {
+      source: 'adminregion-provision-device-ports',
+      profile_name: profileName,
+    },
+  });
+  return data.items?.[0] || null;
+}
+
+async function findActivePortConnectionCreateRequest({ regionId, fromPortId, toPortId }) {
+  const query = `
+    query FindActivePortConnectionCreateRequest($regionId: uuid!, $payloadMatcher: jsonb!) {
+      items: validation_requests(
+        where: {
+          entity_type: { _eq: "portConnection" }
+          region_id: { _eq: $regionId }
+          current_status: { _eq: "pending_async" }
+          payload_snapshot: { _contains: $payloadMatcher }
+        }
+        order_by: { created_at: desc }
+        limit: 1
+      ) {
+        id
+        request_id
+        entity_type
+        entity_id
+        region_id
+        submitted_by_user_id
+        current_status
+        payload_snapshot
+        created_at
+        updated_at
+      }
+    }
+  `;
+
+  const data = await executeHasura(query, {
+    regionId,
+    payloadMatcher: {
+      source: 'adminregion-create-resource',
+      operation: 'create',
+      resource_name: 'portConnections',
+      resource_payload: {
+        from_port_id: fromPortId,
+        to_port_id: toPortId,
+      },
+    },
+  });
+  return data.items?.[0] || null;
+}
+
 async function loadDevicesByIds(ids) {
   if (!ids.length) return [];
 
@@ -560,6 +701,33 @@ async function loadPortConnections({ allowedRegionIds = [], requestedRegionId = 
   return data.items || [];
 }
 
+async function loadPortConnectionsByWhere(where, limit = 100) {
+  const query = `
+    query LoadPortConnectionsByWhere($where: port_connections_bool_exp!, $limit: Int!) {
+      items: port_connections(where: $where, limit: $limit, order_by: { updated_at: desc }) {
+        id
+        connection_id
+        region_id
+        from_port_id
+        to_port_id
+        connection_type
+        status
+        route_id
+        cable_device_id
+        core_start
+        core_end
+        fiber_count
+        installed_at
+        notes
+        created_at
+        updated_at
+      }
+    }
+  `;
+  const data = await executeHasura(query, { where, limit });
+  return data.items || [];
+}
+
 async function loadPortsByIds(portIds) {
   if (!portIds.length) return [];
 
@@ -582,22 +750,259 @@ async function loadPortsByIds(portIds) {
   return data.items || [];
 }
 
+async function loadRoutesByIds(routeIds) {
+  if (!routeIds.length) return [];
+
+  const query = `
+    query LoadRoutesByIds($ids: [uuid!]!) {
+      items: network_routes(where: { id: { _in: $ids } }) {
+        id
+        route_id
+        route_code
+        route_name
+        route_type
+        status
+        region_id
+        pop_id
+        project_id
+      }
+    }
+  `;
+  const data = await executeHasura(query, { ids: routeIds });
+  return data.items || [];
+}
+
+function buildPortConnectionLabel(connection, fromPort, toPort, cableDevice, route) {
+  const fromDeviceName = fromPort?.device?.device_name || fromPort?.device?.device_id || 'Unknown device';
+  const toDeviceName = toPort?.device?.device_name || toPort?.device?.device_id || 'Unknown device';
+  const fromPortName = fromPort?.port_label || fromPort?.port_id || `Port ${fromPort?.port_index || '-'}`;
+  const toPortName = toPort?.port_label || toPort?.port_id || `Port ${toPort?.port_index || '-'}`;
+
+  return {
+    title: `${fromDeviceName} ${fromPortName} -> ${toDeviceName} ${toPortName}`,
+    from: `${fromDeviceName} / ${fromPortName}`,
+    to: `${toDeviceName} / ${toPortName}`,
+    cable: cableDevice?.device_name || cableDevice?.device_id || null,
+    route: route?.route_name || route?.route_code || route?.route_id || null,
+    core_range:
+      connection.core_start && connection.core_end
+        ? `${connection.core_start}-${connection.core_end}`
+        : null,
+  };
+}
+
+async function enrichPortConnections(connections) {
+  if (!connections.length) return [];
+
+  const portIds = Array.from(
+    new Set(connections.flatMap((item) => [item.from_port_id, item.to_port_id]).filter(Boolean)),
+  );
+  const ports = await loadPortsByIds(portIds);
+  const portMap = new Map(ports.map((port) => [port.id, port]));
+
+  const deviceIds = Array.from(
+    new Set(
+      [
+        ...ports.map((port) => port.device_id),
+        ...connections.map((item) => item.cable_device_id),
+      ].filter(Boolean),
+    ),
+  );
+  const devices = await loadDevicesByIds(deviceIds);
+  const deviceMap = new Map(devices.map((device) => [device.id, device]));
+
+  const routeIds = Array.from(new Set(connections.map((item) => item.route_id).filter(Boolean)));
+  const routes = await loadRoutesByIds(routeIds);
+  const routeMap = new Map(routes.map((route) => [route.id, route]));
+
+  return connections.map((connection) => {
+    const rawFromPort = portMap.get(connection.from_port_id) || null;
+    const rawToPort = portMap.get(connection.to_port_id) || null;
+    const fromPort = rawFromPort
+      ? { ...rawFromPort, device: deviceMap.get(rawFromPort.device_id) || null }
+      : null;
+    const toPort = rawToPort
+      ? { ...rawToPort, device: deviceMap.get(rawToPort.device_id) || null }
+      : null;
+    const cableDevice = connection.cable_device_id ? deviceMap.get(connection.cable_device_id) || null : null;
+    const route = connection.route_id ? routeMap.get(connection.route_id) || null : null;
+
+    return {
+      ...connection,
+      from_port: fromPort,
+      to_port: toPort,
+      from_device: fromPort?.device || null,
+      to_device: toPort?.device || null,
+      cable_device: cableDevice,
+      route,
+      labels: buildPortConnectionLabel(connection, fromPort, toPort, cableDevice, route),
+    };
+  });
+}
+
+async function submitDevicePortAssignmentRequest({ req, port, changes, operation, context }) {
+  const payloadSnapshot = {
+    source: 'adminregion-update-resource',
+    operation: 'update',
+    resource_name: 'devicePorts',
+    resource_label: 'Device Port',
+    devicePort: {
+      ...port,
+      ...changes,
+    },
+    before: port,
+    resource_payload: changes,
+    context,
+  };
+
+  const approvalRequest = await createValidationRequest({
+    entityType: 'devicePort',
+    entityId: port.id,
+    regionId: port.region_id,
+    submittedByUserId: req.auth.appUser.id,
+    currentStatus: VALIDATION_STATUS.PENDING_ASYNC,
+    payloadSnapshot,
+    checklist: {},
+    findingNote: `${operation} port assignment request by adminregion.`,
+  });
+
+  await insertValidationRequestLog({
+    requestId: approvalRequest.id,
+    actionType: VALIDATION_ACTION.RESUBMIT_ADMINREGION,
+    actorUserId: req.auth.appUser.id,
+    actorRole: 'adminregion',
+    beforeStatus: VALIDATION_STATUS.UNVALIDATED,
+    afterStatus: VALIDATION_STATUS.PENDING_ASYNC,
+    note: `${operation} port assignment request submitted to superadmin.`,
+    payloadPatch: payloadSnapshot,
+  });
+
+  await createAuditLog({
+    actorUserId: req.auth.appUser.id,
+    actionName: `port_assignment_${operation}_request_submitted_by_adminregion`,
+    entityType: 'validation_requests',
+    entityId: approvalRequest.id,
+    beforeData: {
+      port_id: port.id,
+      status: port.status,
+      customer_id: port.customer_id,
+      ont_device_id: port.ont_device_id,
+    },
+    afterData: {
+      request_id: approvalRequest.request_id,
+      status: VALIDATION_STATUS.PENDING_ASYNC,
+      port_id: port.id,
+      device_id: port.device_id,
+      ...changes,
+      context,
+    },
+    ipAddress: req.ip,
+    userAgent: req.get('user-agent'),
+  });
+
+  return approvalRequest;
+}
+
 async function loadPortById(portId) {
   const query = `
     query LoadPortById($id: uuid!) {
       item: device_ports_by_pk(id: $id) {
         id
+        port_id
         region_id
         device_id
         port_index
         port_label
         port_type
+        direction
         status
+        customer_id
+        ont_device_id
+        occupied_at
+        notes
         deleted_at
       }
     }
   `;
   const data = await executeHasura(query, { id: portId });
+  return data.item || null;
+}
+
+async function loadCustomerById(customerId) {
+  if (!customerId) return null;
+  const query = `
+    query LoadCustomerById($id: uuid!) {
+      item: customers_by_pk(id: $id) {
+        id
+        customer_id
+        customer_number
+        customer_name
+        region_id
+        pop_id
+        project_id
+        status
+      }
+    }
+  `;
+  const data = await executeHasura(query, { id: customerId });
+  return data.item || null;
+}
+
+async function findActivePortAssignmentByField(fieldName, value, excludePortId = null) {
+  if (!value) return null;
+  const where = {
+    deleted_at: { _is_null: true },
+    [fieldName]: { _eq: value },
+    _or: [
+      { status: { _neq: 'idle' } },
+      { status: { _is_null: true } },
+    ],
+  };
+  if (excludePortId) {
+    where.id = { _neq: excludePortId };
+  }
+
+  const query = `
+    query FindActivePortAssignment($where: device_ports_bool_exp!) {
+      items: device_ports(where: $where, limit: 1) {
+        id
+        port_id
+        device_id
+        port_index
+        port_label
+        status
+        customer_id
+        ont_device_id
+      }
+    }
+  `;
+  const data = await executeHasura(query, { where });
+  return data.items?.[0] || null;
+}
+
+async function updateDevicePortAssignmentById(portId, changes) {
+  const query = `
+    mutation UpdateDevicePortAssignment($id: uuid!, $changes: device_ports_set_input!) {
+      item: update_device_ports_by_pk(pk_columns: { id: $id }, _set: $changes) {
+        id
+        port_id
+        region_id
+        device_id
+        port_index
+        port_label
+        port_type
+        direction
+        status
+        customer_id
+        ont_device_id
+        occupied_at
+        notes
+        deleted_at
+        updated_at
+      }
+    }
+  `;
+  const data = await executeHasura(query, { id: portId, changes });
   return data.item || null;
 }
 
@@ -1922,6 +2327,8 @@ resourceRouter.post('/devices/:id/core-chain-draft-link', authenticate, requireR
       );
     }
 
+    const upstreamDevice = await loadDeviceById(upstreamPort.device_id);
+
     const mutation = `
       mutation InsertDraftPortConnection($object: port_connections_insert_input!) {
         inserted: insert_port_connections_one(object: $object) {
@@ -1949,6 +2356,104 @@ resourceRouter.post('/devices/:id/core-chain-draft-link', authenticate, requireR
       fiber_count: fiberCount,
       notes: '[auto-draft] ODP core chain link suggestion',
     };
+
+    if (req.auth.role !== 'admin') {
+      const existingRequest = await findActivePortConnectionCreateRequest({
+        regionId: odpDevice.region_id,
+        fromPortId: upstreamPort.id,
+        toPortId: odpPort.id,
+      });
+      if (existingRequest) {
+        return sendSuccess(
+          res,
+          {
+            created: false,
+            approval_request: existingRequest,
+          },
+          'Draft link request is already waiting for superadmin approval',
+          200,
+        );
+      }
+
+      const pendingConnectionId = randomUUID();
+      const payloadSnapshot = {
+        source: 'adminregion-create-resource',
+        operation: 'create',
+        resource_name: 'portConnections',
+        resource_label: 'Port Connection',
+        portConnection: {
+          id: pendingConnectionId,
+          ...object,
+        },
+        resource_payload: object,
+        context: {
+          source: 'core-chain-draft-link',
+          odp_device_id: odpDevice.id,
+          odp_device_name: odpDevice.device_name || odpDevice.device_id || null,
+          upstream_device_id: upstreamDevice?.id || upstreamPort.device_id,
+          upstream_device_name: upstreamDevice?.device_name || upstreamDevice?.device_id || null,
+          upstream_port_id: upstreamPort.id,
+          upstream_port_label: upstreamPort.port_label || `#${upstreamPort.port_index}`,
+          odp_port_id: odpPort.id,
+          odp_port_label: odpPort.port_label || `#${odpPort.port_index}`,
+          cable_device_id: cableDeviceId,
+        },
+      };
+
+      const approvalRequest = await createValidationRequest({
+        entityType: 'portConnection',
+        entityId: pendingConnectionId,
+        regionId: odpDevice.region_id,
+        submittedByUserId: req.auth.appUser.id,
+        currentStatus: VALIDATION_STATUS.PENDING_ASYNC,
+        payloadSnapshot,
+        checklist: {},
+        findingNote: 'Create port connection request by adminregion.',
+      });
+
+      await insertValidationRequestLog({
+        requestId: approvalRequest.id,
+        actionType: VALIDATION_ACTION.RESUBMIT_ADMINREGION,
+        actorUserId: req.auth.appUser.id,
+        actorRole: req.auth.role === 'user_region' ? 'validator' : 'adminregion',
+        beforeStatus: VALIDATION_STATUS.UNVALIDATED,
+        afterStatus: VALIDATION_STATUS.PENDING_ASYNC,
+        note: 'Create port connection request submitted to superadmin.',
+        payloadPatch: payloadSnapshot,
+      });
+
+      await createAuditLog({
+        actorUserId: req.auth.appUser.id,
+        actionName: 'asset_create_request_submitted_by_adminregion',
+        entityType: 'validation_requests',
+        entityId: approvalRequest.id,
+        beforeData: null,
+        afterData: {
+          request_id: approvalRequest.request_id,
+          source: payloadSnapshot.source,
+          operation: payloadSnapshot.operation,
+          resource_name: payloadSnapshot.resource_name,
+          entity_type: 'portConnection',
+          entity_id: pendingConnectionId,
+          from_port_id: upstreamPort.id,
+          to_port_id: odpPort.id,
+          cable_device_id: cableDeviceId,
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent'),
+      });
+
+      return sendSuccess(
+        res,
+        {
+          created: false,
+          approval_request: approvalRequest,
+        },
+        'Draft link request sent to superadmin approval',
+        201,
+      );
+    }
+
     const result = await executeHasura(mutation, { object });
     const inserted = result.inserted;
 
@@ -2059,6 +2564,104 @@ resourceRouter.post('/devices/:id/provision-ports', authenticate, requireRole('a
       is_active: true,
     }));
 
+    if (req.auth.role !== 'admin') {
+      const existingRequest = await findActiveProvisionPortsRequest(device.id, template.profile_name);
+      if (existingRequest) {
+        return sendSuccess(
+          res,
+          {
+            device_id: device.id,
+            template_id: template.id,
+            profile_name: template.profile_name,
+            existing_port_count: existingPorts.length,
+            create_count: missingIndexes.length,
+            approval_request: existingRequest,
+          },
+          'Port provisioning request is already waiting for superadmin approval',
+          200,
+        );
+      }
+
+      const payloadSnapshot = {
+        source: 'adminregion-provision-device-ports',
+        operation: 'provision_ports',
+        profile_name: template.profile_name,
+        device: {
+          id: device.id,
+          device_id: device.device_id || null,
+          device_name: device.device_name || null,
+          device_type_key: device.device_type_key || null,
+          region_id: device.region_id || null,
+          pop_id: device.pop_id || null,
+          project_id: device.project_id || null,
+        },
+        template: {
+          id: template.id,
+          template_id: template.template_id || null,
+          profile_name: template.profile_name,
+          total_ports: template.total_ports,
+          start_port_index: template.start_port_index,
+        },
+        existing_port_count: existingPorts.length,
+        missing_port_indexes: missingIndexes,
+        port_objects: objects,
+      };
+
+      const approvalRequest = await createValidationRequest({
+        entityType: 'device',
+        entityId: device.id,
+        regionId: device.region_id,
+        submittedByUserId: req.auth.appUser.id,
+        currentStatus: VALIDATION_STATUS.PENDING_ASYNC,
+        payloadSnapshot,
+        checklist: {},
+        findingNote: 'Provision device ports request by adminregion.',
+      });
+
+      await insertValidationRequestLog({
+        requestId: approvalRequest.id,
+        actionType: VALIDATION_ACTION.RESUBMIT_ADMINREGION,
+        actorUserId: req.auth.appUser.id,
+        actorRole: 'adminregion',
+        beforeStatus: VALIDATION_STATUS.UNVALIDATED,
+        afterStatus: VALIDATION_STATUS.PENDING_ASYNC,
+        note: 'Provision device ports request submitted to superadmin.',
+        payloadPatch: payloadSnapshot,
+      });
+
+      await createAuditLog({
+        actorUserId: req.auth.appUser.id,
+        actionName: 'asset_provision_ports_request_submitted_by_adminregion',
+        entityType: 'validation_requests',
+        entityId: approvalRequest.id,
+        beforeData: { existing_port_count: existingPorts.length },
+        afterData: {
+          request_id: approvalRequest.request_id,
+          source: payloadSnapshot.source,
+          device_id: device.id,
+          profile_name: template.profile_name,
+          create_count: missingIndexes.length,
+          missing_port_indexes: missingIndexes,
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent'),
+      });
+
+      return sendSuccess(
+        res,
+        {
+          device_id: device.id,
+          template_id: template.id,
+          profile_name: template.profile_name,
+          existing_port_count: existingPorts.length,
+          create_count: missingIndexes.length,
+          approval_request: approvalRequest,
+        },
+        'Port provisioning request sent to superadmin approval',
+        201,
+      );
+    }
+
     const mutation = `
       mutation ProvisionPorts($objects: [device_ports_insert_input!]!) {
         inserted: insert_device_ports(objects: $objects) {
@@ -2077,6 +2680,7 @@ resourceRouter.post('/devices/:id/provision-ports', authenticate, requireRole('a
     `;
     const result = await executeHasura(mutation, { objects });
     const createdRows = result.inserted?.returning || [];
+    const usage = await syncDevicePortUsage(device.id);
 
     await createAuditLog({
       actorUserId: req.auth.appUser.id,
@@ -2088,6 +2692,7 @@ resourceRouter.post('/devices/:id/provision-ports', authenticate, requireRole('a
         profile_name: template.profile_name,
         created_count: createdRows.length,
         created_port_indexes: createdRows.map((row) => row.port_index),
+        usage,
       },
       ipAddress: req.ip,
       userAgent: req.get('user-agent'),
@@ -2102,9 +2707,239 @@ resourceRouter.post('/devices/:id/provision-ports', authenticate, requireRole('a
         existing_port_count: existingPorts.length,
         created_count: createdRows.length,
         created_ports: createdRows,
+        usage,
       },
       'Ports provisioned successfully',
     );
+  } catch (error) {
+    return next(error);
+  }
+});
+
+resourceRouter.post('/device-ports/:id/assignment', authenticate, requireRole('admin', 'user_all_region'), async (req, res, next) => {
+  try {
+    const port = await loadPortById(req.params.id);
+    if (!port) throw createHttpError(404, 'Device port not found');
+    if (port.deleted_at) throw createHttpError(400, 'Cannot assign deleted port');
+
+    if (req.auth.role === 'user_all_region' && !req.auth.regions.includes(port.region_id)) {
+      throw createHttpError(403, 'You do not have access to this port region');
+    }
+
+    const customerId = req.body?.customer_id ? String(req.body.customer_id) : null;
+    const ontDeviceId = req.body?.ont_device_id ? String(req.body.ont_device_id) : null;
+    if (!customerId && !ontDeviceId) {
+      throw createHttpError(400, 'customer_id or ont_device_id is required');
+    }
+
+    const currentStatus = String(port.status || '').toLowerCase();
+    if (!['idle', 'reserved'].includes(currentStatus)) {
+      throw createHttpError(400, 'Port must be idle or reserved before assignment');
+    }
+
+    const [device, customer, ontDevice] = await Promise.all([
+      loadDeviceById(port.device_id),
+      customerId ? loadCustomerById(customerId) : Promise.resolve(null),
+      ontDeviceId ? loadDeviceById(ontDeviceId) : Promise.resolve(null),
+    ]);
+    if (!device) throw createHttpError(404, 'Port device not found');
+    if (customerId && !customer) throw createHttpError(404, 'Customer not found');
+    if (ontDeviceId && !ontDevice) throw createHttpError(404, 'ONT device not found');
+    if (customer?.region_id && customer.region_id !== port.region_id) {
+      throw createHttpError(400, 'Customer region must match port region');
+    }
+    if (ontDevice?.region_id && ontDevice.region_id !== port.region_id) {
+      throw createHttpError(400, 'ONT device region must match port region');
+    }
+
+    const [customerAssignment, ontAssignment] = await Promise.all([
+      customerId ? findActivePortAssignmentByField('customer_id', customerId, port.id) : Promise.resolve(null),
+      ontDeviceId ? findActivePortAssignmentByField('ont_device_id', ontDeviceId, port.id) : Promise.resolve(null),
+    ]);
+    if (customerAssignment) throw createHttpError(400, 'Customer is already assigned to another active port');
+    if (ontAssignment) throw createHttpError(400, 'ONT device is already assigned to another active port');
+
+    const changes = {
+      status: 'used',
+      customer_id: customerId,
+      ont_device_id: ontDeviceId,
+      occupied_at: port.occupied_at || new Date().toISOString().slice(0, 10),
+      notes: req.body?.notes !== undefined ? req.body.notes : port.notes,
+    };
+    const context = {
+      device_id: device.id,
+      device_name: device.device_name || device.device_id || null,
+      port_label: port.port_label || `#${port.port_index}`,
+      customer_name: customer?.customer_name || null,
+      customer_number: customer?.customer_number || null,
+      ont_device_name: ontDevice?.device_name || ontDevice?.device_id || null,
+    };
+
+    if (req.auth.role !== 'admin') {
+      const approvalRequest = await submitDevicePortAssignmentRequest({
+        req,
+        port,
+        changes,
+        operation: 'assign',
+        context,
+      });
+      return sendSuccess(res, { approval_request: approvalRequest }, 'Port assignment request sent to superadmin approval', 201);
+    }
+
+    const item = await updateDevicePortAssignmentById(port.id, changes);
+    await syncDevicePortUsage(port.device_id);
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'port_assignment_assigned_by_superadmin',
+      entityType: 'device_ports',
+      entityId: port.id,
+      beforeData: port,
+      afterData: { ...item, context },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return sendSuccess(res, item, 'Port assignment saved successfully');
+  } catch (error) {
+    return next(error);
+  }
+});
+
+resourceRouter.delete('/device-ports/:id/assignment', authenticate, requireRole('admin', 'user_all_region'), async (req, res, next) => {
+  try {
+    const port = await loadPortById(req.params.id);
+    if (!port) throw createHttpError(404, 'Device port not found');
+    if (port.deleted_at) throw createHttpError(400, 'Cannot release deleted port');
+
+    if (req.auth.role === 'user_all_region' && !req.auth.regions.includes(port.region_id)) {
+      throw createHttpError(403, 'You do not have access to this port region');
+    }
+
+    const device = await loadDeviceById(port.device_id);
+    if (!device) throw createHttpError(404, 'Port device not found');
+
+    const releaseStatus = String(req.body?.status || 'idle').toLowerCase();
+    if (!['idle', 'reserved'].includes(releaseStatus)) {
+      throw createHttpError(400, 'Release status must be idle or reserved');
+    }
+
+    const changes = {
+      status: releaseStatus,
+      customer_id: null,
+      ont_device_id: null,
+      occupied_at: null,
+      notes: req.body?.notes !== undefined ? req.body.notes : port.notes,
+    };
+    const context = {
+      device_id: device.id,
+      device_name: device.device_name || device.device_id || null,
+      port_label: port.port_label || `#${port.port_index}`,
+    };
+
+    if (req.auth.role !== 'admin') {
+      const approvalRequest = await submitDevicePortAssignmentRequest({
+        req,
+        port,
+        changes,
+        operation: 'release',
+        context,
+      });
+      return sendSuccess(res, { approval_request: approvalRequest }, 'Port release request sent to superadmin approval', 201);
+    }
+
+    const item = await updateDevicePortAssignmentById(port.id, changes);
+    await syncDevicePortUsage(port.device_id);
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'port_assignment_released_by_superadmin',
+      entityType: 'device_ports',
+      entityId: port.id,
+      beforeData: port,
+      afterData: { ...item, context },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return sendSuccess(res, item, 'Port assignment released successfully');
+  } catch (error) {
+    return next(error);
+  }
+});
+
+resourceRouter.get('/topology/port-connections', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const requestedRegionId = req.query.region_id ? String(req.query.region_id) : null;
+    const requestedStatus = req.query.status ? String(req.query.status) : null;
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 200);
+
+    if (req.auth.role === 'user_region') {
+      if (!req.auth.regions.length) {
+        throw createHttpError(403, 'This regional user does not have any assigned region');
+      }
+      if (requestedRegionId && !req.auth.regions.includes(requestedRegionId)) {
+        throw createHttpError(403, 'You do not have access to this region');
+      }
+    }
+
+    const filters = [];
+    if (requestedRegionId) {
+      filters.push({ region_id: { _eq: requestedRegionId } });
+    } else if (req.auth.role === 'user_region') {
+      filters.push({ region_id: { _in: req.auth.regions } });
+    }
+
+    if (requestedStatus) {
+      filters.push({ status: { _eq: requestedStatus } });
+    } else {
+      filters.push({
+        _or: [
+          { status: { _neq: 'inactive' } },
+          { status: { _is_null: true } },
+        ],
+      });
+    }
+
+    const where = filters.length ? { _and: filters } : {};
+    const connections = await loadPortConnectionsByWhere(where, limit);
+    const items = await enrichPortConnections(connections);
+
+    return sendSuccess(
+      res,
+      {
+        scope: {
+          role: req.auth.role,
+          requested_region_id: requestedRegionId,
+          status: requestedStatus,
+          limit,
+        },
+        items,
+      },
+      'Port connections fetched successfully',
+    );
+  } catch (error) {
+    return next(error);
+  }
+});
+
+resourceRouter.get('/topology/port-connections/:id', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const filters = [{ id: { _eq: req.params.id } }];
+
+    if (req.auth.role === 'user_region') {
+      if (!req.auth.regions.length) {
+        throw createHttpError(403, 'This regional user does not have any assigned region');
+      }
+      filters.push({ region_id: { _in: req.auth.regions } });
+    }
+
+    const connections = await loadPortConnectionsByWhere({ _and: filters }, 1);
+    const items = await enrichPortConnections(connections);
+    const item = items[0] || null;
+    if (!item) {
+      throw createHttpError(404, 'Port connection not found');
+    }
+
+    return sendSuccess(res, item, 'Port connection fetched successfully');
   } catch (error) {
     return next(error);
   }

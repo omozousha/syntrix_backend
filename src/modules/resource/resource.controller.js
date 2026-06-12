@@ -31,18 +31,20 @@ const {
 } = require('../validation/validation.service');
 const { notifyValidationTaskCreated } = require('../notifications/notification.service');
 
-const ADMINREGION_CREATE_APPROVAL_RESOURCES = new Set(['devices', 'pops', 'routes', 'projects']);
+const ADMINREGION_CREATE_APPROVAL_RESOURCES = new Set(['devices', 'pops', 'routes', 'projects', 'portConnections']);
 const REQUEST_ENTITY_TYPE_BY_RESOURCE = {
   devices: 'device',
   pops: 'pop',
   routes: 'route',
   projects: 'project',
+  portConnections: 'portConnection',
 };
 const REQUEST_LABEL_BY_RESOURCE = {
   devices: 'Device',
   pops: 'POP',
   routes: 'Route',
   projects: 'Project',
+  portConnections: 'Port Connection',
 };
 
 async function loadDevicePortTemplate(deviceTypeKey, profileName = 'default') {
@@ -309,6 +311,80 @@ function validateUsedPortEndpointState(state) {
   if (!hasCustomer && !hasOnt) {
     throw createHttpError(400, 'status=used requires customer_id or ont_device_id');
   }
+}
+
+async function loadConnectionPortEndpoint(portId) {
+  if (!portId) return null;
+  const query = `
+    query LoadConnectionPortEndpoint($id: uuid!) {
+      item: device_ports_by_pk(id: $id) {
+        id
+        region_id
+        device_id
+        port_index
+        port_label
+        status
+        deleted_at
+      }
+    }
+  `;
+  const data = await executeHasura(query, { id: portId });
+  return data.item || null;
+}
+
+async function findActiveConnectionByPort(portId, excludeConnectionId = null) {
+  if (!portId) return null;
+  const where = {
+    status: { _in: ['active', 'planned', 'cutover'] },
+    _or: [
+      { from_port_id: { _eq: portId } },
+      { to_port_id: { _eq: portId } },
+    ],
+  };
+  if (excludeConnectionId) {
+    where.id = { _neq: excludeConnectionId };
+  }
+
+  const query = `
+    query FindActiveConnectionByPort($where: port_connections_bool_exp!) {
+      items: port_connections(where: $where, limit: 1) {
+        id
+        connection_id
+        from_port_id
+        to_port_id
+        status
+      }
+    }
+  `;
+  const data = await executeHasura(query, { where });
+  return data.items?.[0] || null;
+}
+
+async function validatePortConnectionOperationalState(payload, existing = null) {
+  const fromPortId = payload.from_port_id || existing?.from_port_id;
+  const toPortId = payload.to_port_id || existing?.to_port_id;
+  const regionId = payload.region_id || existing?.region_id;
+  if (!fromPortId || !toPortId) return;
+
+  const [fromPort, toPort] = await Promise.all([
+    loadConnectionPortEndpoint(fromPortId),
+    loadConnectionPortEndpoint(toPortId),
+  ]);
+  if (!fromPort || !toPort) throw createHttpError(404, 'Connection port endpoint not found');
+  if (fromPort.deleted_at || toPort.deleted_at) throw createHttpError(400, 'Cannot connect deleted port');
+  if (fromPort.region_id && toPort.region_id && fromPort.region_id !== toPort.region_id) {
+    throw createHttpError(400, 'Connection ports must be in the same region');
+  }
+  if (regionId && fromPort.region_id && regionId !== fromPort.region_id) {
+    throw createHttpError(400, 'Connection region must match port region');
+  }
+
+  const [fromActive, toActive] = await Promise.all([
+    findActiveConnectionByPort(fromPort.id, existing?.id),
+    findActiveConnectionByPort(toPort.id, existing?.id),
+  ]);
+  if (fromActive) throw createHttpError(400, 'from_port_id is already used by an active/planned connection');
+  if (toActive) throw createHttpError(400, 'to_port_id is already used by an active/planned connection');
 }
 
 function shouldHoldDeviceForSuperadminApproval(req, object) {
@@ -605,6 +681,10 @@ async function create(req, res, next) {
       object.created_by_user_id = req.auth.appUser.id;
     }
 
+    if (req.resourceName === 'portConnections') {
+      await validatePortConnectionOperationalState(object);
+    }
+
     if (shouldHoldCreateForSuperadminApproval(req, object) && req.resourceName !== 'devices') {
       const existingApprovalRequest = await findActiveCreateApprovalRequest(req, object);
       if (existingApprovalRequest) {
@@ -658,6 +738,9 @@ async function create(req, res, next) {
       }
       try {
         provisioningResult = await provisionPortsFromTemplate(item);
+        if (provisioningResult?.enabled) {
+          await syncDevicePortUsage(item.id);
+        }
         fiberSyncResult = await syncFiberCoresForCableDevice(item);
       } catch (provisionError) {
         try {
@@ -800,6 +883,9 @@ async function update(req, res, next) {
     const changes = applyResourceNameNormalization(req.resourceName, sanitizePayload(req.resourceConfig, req.body));
     if (req.resourceName === 'devicePorts') {
       validateUsedPortEndpointState({ ...existing, ...changes });
+    }
+    if (req.resourceName === 'portConnections') {
+      await validatePortConnectionOperationalState(changes, existing);
     }
 
     if (req.resourceName === 'devices') {

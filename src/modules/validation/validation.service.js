@@ -1330,10 +1330,229 @@ async function deleteDevicePortById(portId) {
   return data.item;
 }
 
+async function syncDevicePortUsage(deviceId) {
+  if (!deviceId) return null;
+
+  const query = `
+    query DevicePortUsage($deviceId: uuid!, $usedWhere: device_ports_bool_exp!) {
+      total_ports: device_ports_aggregate(where: { device_id: { _eq: $deviceId }, deleted_at: { _is_null: true } }) {
+        aggregate { count }
+      }
+      used_ports: device_ports_aggregate(where: $usedWhere) {
+        aggregate { count }
+      }
+      device: devices_by_pk(id: $deviceId) {
+        id
+      }
+    }
+  `;
+
+  const usedWhere = {
+    device_id: { _eq: deviceId },
+    deleted_at: { _is_null: true },
+    _or: [
+      { status: { _eq: 'used' } },
+      { customer_id: { _is_null: false } },
+      { ont_device_id: { _is_null: false } },
+    ],
+  };
+
+  const data = await executeHasura(query, { deviceId, usedWhere });
+  if (!data.device?.id) return null;
+
+  const totalPorts = Number(data.total_ports?.aggregate?.count || 0);
+  const usedPorts = Number(data.used_ports?.aggregate?.count || 0);
+
+  await updateDeviceById(deviceId, {
+    total_ports: totalPorts,
+    used_ports: usedPorts,
+    updated_at: new Date().toISOString(),
+  });
+
+  return { total_ports: totalPorts, used_ports: usedPorts };
+}
+
+async function applyProvisionDevicePortsRequest({ request }) {
+  const payload = request.payload_snapshot || {};
+  const requestedPorts = Array.isArray(payload.port_objects) ? payload.port_objects : [];
+  const before = await loadDeviceSnapshot(request.entity_id);
+  if (!before.device) {
+    throw createHttpError(404, 'Target device for port provisioning apply not found');
+  }
+
+  const currentPortByIndex = new Map(before.ports.map((port) => [Number(port.port_index), port]));
+  const createdPorts = [];
+
+  for (const port of requestedPorts) {
+    const portIndex = Number(port.port_index);
+    if (!Number.isInteger(portIndex) || portIndex <= 0 || currentPortByIndex.has(portIndex)) continue;
+
+    const created = await createDevicePort({
+      region_id: request.region_id,
+      device_id: request.entity_id,
+      port_index: portIndex,
+      port_label: port.port_label || `#${portIndex}`,
+      port_type: port.port_type || 'fiber',
+      direction: port.direction || 'bidirectional',
+      status: port.status || 'idle',
+      speed_profile: port.speed_profile || null,
+      core_capacity: port.core_capacity ?? null,
+      core_used: port.core_used ?? 0,
+      is_active: port.is_active !== false,
+      notes: port.notes || null,
+    });
+    createdPorts.push({ id: created.id, port_index: portIndex });
+    currentPortByIndex.set(portIndex, created);
+  }
+
+  const usage = await syncDevicePortUsage(request.entity_id);
+  const after = await loadDeviceSnapshot(request.entity_id);
+  return {
+    before,
+    after: {
+      ...after,
+      provision_ports: {
+        profile_name: payload.profile_name || 'default',
+        created_count: createdPorts.length,
+        created_ports: createdPorts,
+        usage,
+      },
+    },
+  };
+}
+
+async function loadConnectionPortEndpoint(portId) {
+  if (!portId) return null;
+  const query = `
+    query LoadConnectionPortEndpoint($id: uuid!) {
+      item: device_ports_by_pk(id: $id) {
+        id
+        region_id
+        deleted_at
+      }
+    }
+  `;
+  const data = await executeHasura(query, { id: portId });
+  return data.item || null;
+}
+
+async function findActiveConnectionByPort(portId, excludeConnectionId = null) {
+  if (!portId) return null;
+  const where = {
+    status: { _in: ['active', 'planned', 'cutover'] },
+    _or: [
+      { from_port_id: { _eq: portId } },
+      { to_port_id: { _eq: portId } },
+    ],
+  };
+  if (excludeConnectionId) {
+    where.id = { _neq: excludeConnectionId };
+  }
+
+  const query = `
+    query FindActiveConnectionByPort($where: port_connections_bool_exp!) {
+      items: port_connections(where: $where, limit: 1) {
+        id
+        connection_id
+      }
+    }
+  `;
+  const data = await executeHasura(query, { where });
+  return data.items?.[0] || null;
+}
+
+async function validatePortConnectionApplyPayload(payload, existing = null) {
+  const fromPortId = payload.from_port_id || existing?.from_port_id;
+  const toPortId = payload.to_port_id || existing?.to_port_id;
+  const regionId = payload.region_id || existing?.region_id;
+  if (!fromPortId || !toPortId) return;
+
+  const [fromPort, toPort] = await Promise.all([
+    loadConnectionPortEndpoint(fromPortId),
+    loadConnectionPortEndpoint(toPortId),
+  ]);
+  if (!fromPort || !toPort) throw createHttpError(404, 'Connection port endpoint not found');
+  if (fromPort.deleted_at || toPort.deleted_at) throw createHttpError(400, 'Cannot connect deleted port');
+  if (fromPort.region_id && toPort.region_id && fromPort.region_id !== toPort.region_id) {
+    throw createHttpError(400, 'Connection ports must be in the same region');
+  }
+  if (regionId && fromPort.region_id && regionId !== fromPort.region_id) {
+    throw createHttpError(400, 'Connection region must match port region');
+  }
+
+  const [fromActive, toActive] = await Promise.all([
+    findActiveConnectionByPort(fromPort.id, existing?.id),
+    findActiveConnectionByPort(toPort.id, existing?.id),
+  ]);
+  if (fromActive) throw createHttpError(400, 'from_port_id is already used by an active/planned connection');
+  if (toActive) throw createHttpError(400, 'to_port_id is already used by an active/planned connection');
+}
+
+async function findActiveDevicePortAssignment(fieldName, value, excludePortId = null) {
+  if (!value) return null;
+  const where = {
+    deleted_at: { _is_null: true },
+    [fieldName]: { _eq: value },
+    _or: [
+      { status: { _neq: 'idle' } },
+      { status: { _is_null: true } },
+    ],
+  };
+  if (excludePortId) {
+    where.id = { _neq: excludePortId };
+  }
+
+  const query = `
+    query FindActiveDevicePortAssignment($where: device_ports_bool_exp!) {
+      items: device_ports(where: $where, limit: 1) {
+        id
+        port_id
+        customer_id
+        ont_device_id
+        status
+      }
+    }
+  `;
+  const data = await executeHasura(query, { where });
+  return data.items?.[0] || null;
+}
+
+async function validateDevicePortAssignmentApplyPayload(payload, existing = null) {
+  if (!existing) return;
+
+  const assignmentKeys = ['status', 'customer_id', 'ont_device_id', 'occupied_at'];
+  const changesAssignment = assignmentKeys.some((key) => payload[key] !== undefined);
+  if (!changesAssignment) return;
+  if (existing.deleted_at) throw createHttpError(400, 'Cannot update assignment for deleted port');
+
+  const effectiveStatus = String(payload.status ?? existing.status ?? '').toLowerCase();
+  const effectiveCustomerId = payload.customer_id !== undefined ? payload.customer_id : existing.customer_id;
+  const effectiveOntDeviceId = payload.ont_device_id !== undefined ? payload.ont_device_id : existing.ont_device_id;
+
+  if (effectiveStatus === 'used' && !effectiveCustomerId && !effectiveOntDeviceId) {
+    throw createHttpError(400, 'status=used requires customer_id or ont_device_id');
+  }
+
+  const [customerAssignment, ontAssignment] = await Promise.all([
+    effectiveCustomerId
+      ? findActiveDevicePortAssignment('customer_id', effectiveCustomerId, existing.id)
+      : Promise.resolve(null),
+    effectiveOntDeviceId
+      ? findActiveDevicePortAssignment('ont_device_id', effectiveOntDeviceId, existing.id)
+      : Promise.resolve(null),
+  ]);
+  if (customerAssignment) throw createHttpError(400, 'Customer is already assigned to another active port');
+  if (ontAssignment) throw createHttpError(400, 'ONT device is already assigned to another active port');
+}
+
 async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
   const payload = request.payload_snapshot || {};
   if (payload.source === 'adminregion-create-device') {
     return applyAdminRegionCreateDeviceRequest({ request });
+  }
+
+  if (payload.source === 'adminregion-provision-device-ports') {
+    return applyProvisionDevicePortsRequest({ request });
   }
 
   if (
@@ -1540,6 +1759,9 @@ async function applyResourceChangeRequest({ request, actorUserId = null }) {
       id: request.entity_id,
       region_id: request.region_id,
     };
+    if (resourceName === 'portConnections') {
+      await validatePortConnectionApplyPayload(object);
+    }
     const item = await createResource(config, object);
     return { before: null, after: item };
   }
@@ -1550,6 +1772,12 @@ async function applyResourceChangeRequest({ request, actorUserId = null }) {
   }
 
   if (payload.operation === 'update') {
+    if (resourceName === 'portConnections') {
+      await validatePortConnectionApplyPayload(resourcePayload, before);
+    }
+    if (resourceName === 'devicePorts') {
+      await validateDevicePortAssignmentApplyPayload(resourcePayload, before);
+    }
     const item = await updateResource(config, request.entity_id, resourcePayload);
     return { before, after: item };
   }

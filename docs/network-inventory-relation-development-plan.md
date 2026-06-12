@@ -4,6 +4,8 @@ Rencana ini menjelaskan pengembangan relasi inventory jaringan Syntrix dari leve
 
 Dokumen ini dibuat sebagai acuan implementasi bertahap agar pengembangan topology tidak mengganggu flow yang sudah berjalan: master data, validation request, approval adminregion/superadmin, audit trail, frontend, dan Syntrix-One.
 
+Companion plan untuk detail device dan form validasi per device type ada di `docs/generic-device-detail-and-validation-workflow-plan.md`.
+
 ---
 
 ## 1. Tujuan
@@ -154,6 +156,34 @@ Tujuan:
 
 - menghindari visual map yang terlihat benar tetapi relasi port/core salah;
 - menjaga implementasi tetap bertahap dan bisa diuji.
+
+### 2.9 Route dan Cable Tidak Disatukan
+
+`Route` dan `Cable` harus dipertahankan sebagai konsep berbeda karena keduanya menjawab kebutuhan data yang berbeda.
+
+Keputusan:
+
+- `network_routes` adalah jalur/path/topologi antar titik.
+- `devices.device_type_key = 'CABLE'` adalah asset fisik kabel.
+- Route tidak punya QR sebagai device karena route bukan asset fisik yang ditempel label.
+- Cable bisa punya QR, detail device, status, project, kapasitas core, dan gallery.
+- `port_connections.route_id` menunjukkan jalur yang dilewati koneksi.
+- `port_connections.cable_device_id` menunjukkan kabel fisik yang dipakai koneksi.
+- `fiber_cores.cable_device_id` menyimpan core inventory per kabel fisik.
+
+Aturan UX:
+
+- Form Route dipakai untuk membuat jalur, bukan membuat kabel.
+- Form Device dengan type `CABLE` dipakai untuk membuat kabel fisik.
+- Detail Route harus bisa menampilkan cable devices yang memakai route tersebut.
+- Detail Cable harus bisa menampilkan route/core/connection yang terkait.
+- Maps menampilkan route sebagai garis, sedangkan cable tampil sebagai asset/metadata pada jalur tersebut.
+
+Tujuan:
+
+- menghindari data route dibuat sebagai cable atau cable dibuat sebagai route;
+- menjaga trace port/core tetap akurat;
+- membuat As-Built bisa menampilkan jalur dan asset kabel secara terpisah namun saling terkait.
 
 ---
 
@@ -414,19 +444,19 @@ Membuat pembuatan port konsisten untuk setiap device type.
 
 Todo:
 
-- [ ] Review `device_port_templates` untuk OLT, ODC, ODP, ONT, SWITCH, ROUTER, CABLE.
-- [ ] Pastikan default ODP 1:8/1:16 bisa dipilih dari `total_ports` atau template.
-- [ ] Pastikan create device dapat provision port otomatis atau manual sesuai mode.
-- [ ] Tambahkan dry-run provisioning untuk melihat port yang akan dibuat.
-- [ ] Pastikan provision port tercatat di audit trail.
-- [ ] Pastikan adminregion provisioning masuk approval jika mengubah inventory final.
+- [x] Review `device_port_templates` untuk OLT, ODC, ODP, ONT, SWITCH, ROUTER, CABLE.
+- [x] Pastikan default ODP 1:8/1:16 bisa dipilih dari `total_ports` atau template.
+- [x] Pastikan create device dapat provision port otomatis atau manual sesuai mode.
+- [x] Tambahkan dry-run provisioning untuk melihat port yang akan dibuat.
+- [x] Pastikan provision port tercatat di audit trail.
+- [x] Pastikan adminregion provisioning masuk approval jika mengubah inventory final.
 
 Checker:
 
-- [ ] Create ODP 16 port menghasilkan 16 row `device_ports`.
-- [ ] Re-run provision tidak membuat duplicate port.
-- [ ] Port usage di `devices.total_ports` dan `devices.used_ports` sinkron.
-- [ ] Audit trail menampilkan nama device dan jumlah port yang dibuat.
+- [x] Create ODP 16 port menghasilkan 16 row `device_ports`.
+- [x] Re-run provision tidak membuat duplicate port.
+- [x] Port usage di `devices.total_ports` dan `devices.used_ports` sinkron.
+- [x] Audit trail menampilkan nama device dan jumlah port yang dibuat.
 
 ---
 
@@ -437,14 +467,14 @@ Membuat koneksi port-to-port sebagai workflow utama topology.
 
 Todo:
 
-- [ ] API create/update/delete `port_connections`.
-- [ ] Validasi from/to port aktif.
-- [ ] Validasi region consistency.
-- [ ] Validasi port tidak terkoneksi ganda jika jenis port tidak mengizinkan.
-- [ ] Validasi cable/core range.
-- [ ] Approval flow untuk adminregion.
-- [ ] Audit trail action spesifik.
-- [ ] Response Relation-Ready untuk connection detail.
+- [x] API create/update/delete `port_connections`.
+- [x] Validasi from/to port aktif.
+- [x] Validasi region consistency.
+- [x] Validasi port tidak terkoneksi ganda jika jenis port tidak mengizinkan.
+- [x] Validasi cable/core range.
+- [x] Approval flow untuk adminregion.
+- [x] Audit trail action spesifik.
+- [x] Response Relation-Ready untuk connection detail.
 
 Checker:
 
@@ -463,13 +493,13 @@ Mengunci customer/ONT ke port ODP secara akurat.
 
 Todo:
 
-- [ ] API assign customer ke port.
-- [ ] API release customer dari port.
-- [ ] API attach ONT device ke port.
-- [ ] Validasi port harus idle/reserved sesuai policy.
-- [ ] Validasi customer tidak aktif di dua port berbeda tanpa policy migrasi.
-- [ ] Approval flow untuk adminregion.
-- [ ] Audit trail dengan customer name/CID dan device name.
+- [x] API assign customer ke port.
+- [x] API release customer dari port.
+- [x] API attach ONT device ke port.
+- [x] Validasi port harus idle/reserved sesuai policy.
+- [x] Validasi customer tidak aktif di dua port berbeda tanpa policy migrasi.
+- [x] Approval flow untuk adminregion.
+- [x] Audit trail dengan customer name/CID dan device name.
 
 Checker:
 

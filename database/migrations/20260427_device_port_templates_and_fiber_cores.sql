@@ -78,7 +78,8 @@ values
   ('OTB', 'default', 12, 1, 'fiber', 'bidirectional', 1, '{"hint":"Default OTB splice profile"}'::jsonb),
   ('ONT', 'default', 4, 1, 'ethernet', 'out', null, '{"hint":"Default ONT LAN profile"}'::jsonb),
   ('SWITCH', 'default', 24, 1, 'ethernet', 'bidirectional', null, '{"hint":"Default switch profile"}'::jsonb),
-  ('ROUTER', 'default', 8, 1, 'ethernet', 'bidirectional', null, '{"hint":"Default router profile"}'::jsonb)
+  ('ROUTER', 'default', 8, 1, 'ethernet', 'bidirectional', null, '{"hint":"Default router profile"}'::jsonb),
+  ('CABLE', 'default', 12, 1, 'fiber', 'bidirectional', 1, '{"hint":"Default cable core endpoint profile"}'::jsonb)
 on conflict (device_type_key, profile_name) do update
 set
   total_ports = excluded.total_ports,
