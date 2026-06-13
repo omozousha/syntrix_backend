@@ -518,13 +518,13 @@ Menyediakan tracing topology untuk troubleshooting dan impact analysis.
 
 Todo:
 
-- [ ] Standardisasi endpoint `GET /topology/trace`.
-- [ ] Input mendukung `device_id`, `port_id`, dan `customer_id`.
-- [ ] Direction: `upstream`, `downstream`, `both`.
-- [ ] Output: nodes, edges, path, warnings, depth, relation labels.
-- [ ] Batasi hasil berdasarkan role/region.
-- [ ] Tambahkan loop protection dan max depth.
-- [ ] Tambahkan trace summary untuk device detail.
+- [x] Standardisasi endpoint `GET /topology/trace`.
+- [x] Input mendukung `device_id`, `port_id`, dan `customer_id`.
+- [x] Direction: `upstream`, `downstream`, `both`.
+- [x] Output: nodes, edges, path, warnings, depth, relation labels.
+- [x] Batasi hasil berdasarkan role/region.
+- [x] Tambahkan loop protection dan max depth.
+- [x] Tambahkan trace summary untuk device detail.
 
 Checker:
 
@@ -543,20 +543,20 @@ Mendeteksi data topology yang tidak sehat.
 
 Todo:
 
-- [ ] Report orphan `port_connections`.
-- [ ] Report port over-capacity.
-- [ ] Report connection same-device invalid.
-- [ ] Report cross-region connection.
-- [ ] Report customer assigned ke port tidak used.
-- [ ] Report ONT assigned lebih dari satu port aktif.
-- [ ] Report route tanpa start/end asset.
-- [ ] Tambahkan severity: info, warning, critical.
+- [x] Report orphan `port_connections`.
+- [x] Report port over-capacity.
+- [x] Report connection same-device invalid.
+- [x] Report cross-region connection.
+- [x] Report customer assigned ke port tidak used.
+- [x] Report ONT assigned lebih dari satu port aktif.
+- [x] Report route tanpa start/end asset.
+- [x] Tambahkan severity: info, warning, critical.
 
 Checker:
 
-- [ ] Endpoint integrity mengembalikan issue list dan summary.
+- [x] Endpoint integrity mengembalikan issue list dan summary.
 - [ ] UI bisa filter issue by severity.
-- [ ] Issue punya action hint.
+- [x] Issue punya action hint.
 - [ ] Tidak ada false positive untuk data valid.
 
 ---

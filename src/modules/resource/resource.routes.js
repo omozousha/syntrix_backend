@@ -772,6 +772,36 @@ async function loadRoutesByIds(routeIds) {
   return data.items || [];
 }
 
+async function loadRoutesByRegion({ allowedRegionIds = [], requestedRegionId = null }) {
+  const regionFilters = [];
+  if (requestedRegionId) {
+    regionFilters.push({ region_id: { _eq: requestedRegionId } });
+  } else if (allowedRegionIds.length) {
+    regionFilters.push({ region_id: { _in: allowedRegionIds } });
+  }
+  const where = regionFilters.length ? { _and: regionFilters } : {};
+
+  const query = `
+    query LoadRoutesByRegion($where: network_routes_bool_exp!) {
+      items: network_routes(where: $where, order_by: [{ updated_at: desc }]) {
+        id
+        route_id
+        route_code
+        route_name
+        route_type
+        status
+        region_id
+        pop_id
+        project_id
+        start_asset_id
+        end_asset_id
+      }
+    }
+  `;
+  const data = await executeHasura(query, { where });
+  return data.items || [];
+}
+
 function buildPortConnectionLabel(connection, fromPort, toPort, cableDevice, route) {
   const fromDeviceName = fromPort?.device?.device_name || fromPort?.device?.device_id || 'Unknown device';
   const toDeviceName = toPort?.device?.device_name || toPort?.device?.device_id || 'Unknown device';
@@ -948,6 +978,98 @@ async function loadCustomerById(customerId) {
   return data.item || null;
 }
 
+async function loadActivePortByCustomerId(customerId) {
+  if (!customerId) return null;
+  const query = `
+    query LoadActivePortByCustomerId($customerId: uuid!) {
+      items: device_ports(
+        where: {
+          customer_id: { _eq: $customerId }
+          deleted_at: { _is_null: true }
+          _or: [
+            { status: { _neq: "idle" } }
+            { status: { _is_null: true } }
+          ]
+        }
+        order_by: [{ occupied_at: desc_nulls_last }, { updated_at: desc }]
+        limit: 1
+      ) {
+        id
+        port_id
+        region_id
+        device_id
+        port_index
+        port_label
+        port_type
+        direction
+        status
+        customer_id
+        ont_device_id
+        occupied_at
+        notes
+        deleted_at
+      }
+    }
+  `;
+  const data = await executeHasura(query, { customerId });
+  return data.items?.[0] || null;
+}
+
+async function resolveTraceEndpoint({ deviceId, portId, customerId, label }) {
+  if (deviceId) {
+    const device = await loadDeviceById(deviceId);
+    if (!device) throw createHttpError(404, `${label} device not found`);
+    return {
+      type: 'device',
+      device,
+      port: null,
+      customer: null,
+      warnings: [],
+    };
+  }
+
+  if (portId) {
+    const port = await loadPortById(portId);
+    if (!port) throw createHttpError(404, `${label} port not found`);
+    if (port.deleted_at) throw createHttpError(400, `${label} port is deleted`);
+    const device = await loadDeviceById(port.device_id);
+    if (!device) throw createHttpError(404, `${label} port device not found`);
+    return {
+      type: 'port',
+      device,
+      port,
+      customer: null,
+      warnings: [],
+    };
+  }
+
+  if (customerId) {
+    const customer = await loadCustomerById(customerId);
+    if (!customer) throw createHttpError(404, `${label} customer not found`);
+    const port = await loadActivePortByCustomerId(customerId);
+    if (!port) {
+      return {
+        type: 'customer',
+        device: null,
+        port: null,
+        customer,
+        warnings: ['Customer has no active port assignment'],
+      };
+    }
+    const device = await loadDeviceById(port.device_id);
+    if (!device) throw createHttpError(404, `${label} customer port device not found`);
+    return {
+      type: 'customer',
+      device,
+      port,
+      customer,
+      warnings: [],
+    };
+  }
+
+  return null;
+}
+
 async function findActivePortAssignmentByField(fieldName, value, excludePortId = null) {
   if (!value) return null;
   const where = {
@@ -1065,7 +1187,10 @@ async function loadPortsByDeviceIds(deviceIds) {
         status
         core_capacity
         core_used
+        customer_id
+        ont_device_id
         is_active
+        deleted_at
       }
     }
   `;
@@ -3051,35 +3176,184 @@ resourceRouter.get('/topology/integrity', authenticate, requireRole('admin', 'us
     }
 
     const allowedRegionIds = req.auth.role === 'user_region' ? req.auth.regions : [];
-    const [connections, ports, fiberCores, deviceLinks] = await Promise.all([
+    const [connections, ports, fiberCores, deviceLinks, routes] = await Promise.all([
       loadPortConnections({ allowedRegionIds, requestedRegionId }),
       loadPortsByRegion({ allowedRegionIds, requestedRegionId }),
       loadFiberCoresByRegion({ allowedRegionIds, requestedRegionId }),
       loadDeviceLinksByRegion({ allowedRegionIds, requestedRegionId, limit: 5000 }),
+      loadRoutesByRegion({ allowedRegionIds, requestedRegionId }),
     ]);
 
-    const portIdSet = new Set(ports.map((item) => item.id));
+    const connectionPortIds = Array.from(
+      new Set(connections.flatMap((item) => [item.from_port_id, item.to_port_id]).filter(Boolean)),
+    );
+    const connectionPorts = await loadPortsByIds(connectionPortIds);
+    const connectionPortMap = new Map(connectionPorts.map((port) => [port.id, port]));
+    const portIdSet = new Set(connectionPorts.map((item) => item.id));
     const connectionIdSet = new Set(connections.map((item) => item.id));
 
     const orphanConnections = connections.filter((conn) => !portIdSet.has(conn.from_port_id) || !portIdSet.has(conn.to_port_id));
     const sameDeviceConnections = connections.filter((conn) => {
-      const fromPort = ports.find((port) => port.id === conn.from_port_id);
-      const toPort = ports.find((port) => port.id === conn.to_port_id);
+      const fromPort = connectionPortMap.get(conn.from_port_id);
+      const toPort = connectionPortMap.get(conn.to_port_id);
       return fromPort && toPort && fromPort.device_id === toPort.device_id;
+    });
+    const crossRegionConnections = connections.filter((conn) => {
+      const fromPort = connectionPortMap.get(conn.from_port_id);
+      const toPort = connectionPortMap.get(conn.to_port_id);
+      if (!fromPort || !toPort) return false;
+      return fromPort.region_id !== toPort.region_id || conn.region_id !== fromPort.region_id || conn.region_id !== toPort.region_id;
     });
     const overlapConflicts = detectCoreOverlapConflicts(connections);
     const orphanFiberCores = fiberCores.filter((core) => core.connection_id && !connectionIdSet.has(core.connection_id));
     const overCapacityPorts = ports.filter((port) => {
+      if (port.deleted_at) return false;
       const capacity = Number(port.core_capacity);
       const used = Number(port.core_used);
       if (!Number.isFinite(capacity) || capacity < 0) return false;
       if (!Number.isFinite(used) || used < 0) return false;
       return used > capacity;
     });
+    const customerAssignedToNotUsedPorts = ports.filter((port) => (
+      !port.deleted_at
+      && port.customer_id
+      && String(port.status || '').toLowerCase() !== 'used'
+    ));
+    const ontAssignments = ports.filter((port) => (
+      !port.deleted_at
+      && port.ont_device_id
+      && !['idle', 'down'].includes(String(port.status || '').toLowerCase())
+    ));
+    const ontAssignmentCounts = ontAssignments.reduce((acc, port) => {
+      acc[port.ont_device_id] = (acc[port.ont_device_id] || 0) + 1;
+      return acc;
+    }, {});
+    const duplicateOntAssignments = ontAssignments.filter((port) => ontAssignmentCounts[port.ont_device_id] > 1);
+    const routeWithoutEndpointAssets = routes.filter((route) => !route.start_asset_id || !route.end_asset_id);
 
     const transitioned = await loadDeviceLinkTransitionMapByLinkIds(deviceLinks.map((item) => item.id));
     const transitionedLinkIdSet = new Set(transitioned.map((item) => item.link_id));
     const pendingLegacyLinks = deviceLinks.filter((item) => !transitionedLinkIdSet.has(item.id));
+    const issues = [];
+    const addIssue = (type, severity, entityType, entityId, title, message, actionHint, extra = {}) => {
+      issues.push({
+        type,
+        severity,
+        entity_type: entityType,
+        entity_id: entityId,
+        title,
+        message,
+        action_hint: actionHint,
+        ...extra,
+      });
+    };
+
+    orphanConnections.forEach((item) => addIssue(
+      'orphan_port_connection',
+      'critical',
+      'port_connection',
+      item.id,
+      'Port connection endpoint missing',
+      'Connection references a from/to port that is not available in port inventory.',
+      'Review the connection endpoints or archive the broken connection.',
+      { connection_id: item.connection_id, from_port_id: item.from_port_id, to_port_id: item.to_port_id },
+    ));
+    sameDeviceConnections.forEach((item) => addIssue(
+      'same_device_connection',
+      'warning',
+      'port_connection',
+      item.id,
+      'Connection uses ports on the same device',
+      'The from/to ports belong to the same device, which is usually not a network topology edge.',
+      'Check whether this should be an internal patch record or archive the connection.',
+      { connection_id: item.connection_id, from_port_id: item.from_port_id, to_port_id: item.to_port_id },
+    ));
+    crossRegionConnections.forEach((item) => addIssue(
+      'cross_region_connection',
+      'critical',
+      'port_connection',
+      item.id,
+      'Connection crosses region boundaries',
+      'Connection region does not match one or both endpoint port regions.',
+      'Move the connection to the correct region or recreate it with same-region ports.',
+      { connection_id: item.connection_id, region_id: item.region_id, from_port_id: item.from_port_id, to_port_id: item.to_port_id },
+    ));
+    overlapConflicts.forEach((item) => addIssue(
+      'overlap_core_conflict',
+      'critical',
+      'port_connection',
+      item.connection_id || item.id || null,
+      'Cable core range overlaps',
+      'Two or more connections use an overlapping core range on the same cable.',
+      'Adjust the cable core range so every connection owns a unique core span.',
+      item,
+    ));
+    orphanFiberCores.forEach((item) => addIssue(
+      'orphan_fiber_core',
+      'warning',
+      'fiber_core',
+      item.id,
+      'Fiber core points to missing connection',
+      'Fiber core has a connection_id that is not found in active port connections.',
+      'Clear the connection_id or restore the related port connection.',
+      { cable_device_id: item.cable_device_id, core_no: item.core_no, connection_id: item.connection_id },
+    ));
+    overCapacityPorts.forEach((item) => addIssue(
+      'port_over_capacity',
+      'critical',
+      'device_port',
+      item.id,
+      'Port core usage exceeds capacity',
+      'Port core_used is greater than core_capacity.',
+      'Review core usage calculation or reduce assigned connections.',
+      { device_id: item.device_id, port_index: item.port_index, core_capacity: item.core_capacity, core_used: item.core_used },
+    ));
+    customerAssignedToNotUsedPorts.forEach((item) => addIssue(
+      'customer_assigned_to_not_used_port',
+      'warning',
+      'device_port',
+      item.id,
+      'Customer assigned to non-used port',
+      'Port has customer_id but status is not used.',
+      'Set port status to used or release the customer assignment.',
+      { device_id: item.device_id, port_index: item.port_index, status: item.status, customer_id: item.customer_id },
+    ));
+    duplicateOntAssignments.forEach((item) => addIssue(
+      'duplicate_ont_assignment',
+      'critical',
+      'device_port',
+      item.id,
+      'ONT assigned to multiple active ports',
+      'The same ONT device appears on more than one active port.',
+      'Keep the ONT on one active port and release the duplicate assignment.',
+      { device_id: item.device_id, port_index: item.port_index, ont_device_id: item.ont_device_id },
+    ));
+    routeWithoutEndpointAssets.forEach((item) => addIssue(
+      'route_missing_endpoint_asset',
+      'info',
+      'network_route',
+      item.id,
+      'Route has missing start/end asset',
+      'Route does not have both start_asset_id and end_asset_id filled.',
+      'Complete route endpoints before using it for topology visualization.',
+      { route_id: item.route_id, route_name: item.route_name, start_asset_id: item.start_asset_id, end_asset_id: item.end_asset_id },
+    ));
+    pendingLegacyLinks.forEach((item) => addIssue(
+      'pending_legacy_device_link',
+      'info',
+      'device_link',
+      item.id,
+      'Legacy device link not migrated',
+      'Legacy device_links row has not been mapped into port_connections yet.',
+      'Run transition dry-run/apply after confirming source and target ports.',
+      { from_device_id: item.from_device_id, to_device_id: item.to_device_id, link_type: item.link_type },
+    ));
+    const issueSummary = issues.reduce((acc, issue) => {
+      acc.total += 1;
+      acc.by_severity[issue.severity] = (acc.by_severity[issue.severity] || 0) + 1;
+      acc.by_type[issue.type] = (acc.by_type[issue.type] || 0) + 1;
+      return acc;
+    }, { total: 0, by_severity: {}, by_type: {} });
 
     return sendSuccess(
       res,
@@ -3093,10 +3367,16 @@ resourceRouter.get('/topology/integrity', authenticate, requireRole('admin', 'us
           overlap_core_conflicts: overlapConflicts.length,
           orphan_port_connections: orphanConnections.length,
           same_device_connections: sameDeviceConnections.length,
+          cross_region_connections: crossRegionConnections.length,
           orphan_fiber_cores: orphanFiberCores.length,
           over_capacity_ports: overCapacityPorts.length,
+          customer_assigned_to_not_used_ports: customerAssignedToNotUsedPorts.length,
+          duplicate_ont_assignments: duplicateOntAssignments.length,
+          routes_missing_endpoint_assets: routeWithoutEndpointAssets.length,
           pending_legacy_device_links: pendingLegacyLinks.length,
         },
+        issue_summary: issueSummary,
+        issues,
         samples: {
           overlap_core_conflicts: overlapConflicts.slice(0, 25),
           orphan_port_connections: orphanConnections.slice(0, 25).map((item) => ({
@@ -3107,11 +3387,39 @@ resourceRouter.get('/topology/integrity', authenticate, requireRole('admin', 'us
             core_start: item.core_start,
             core_end: item.core_end,
           })),
+          cross_region_connections: crossRegionConnections.slice(0, 25).map((item) => ({
+            id: item.id,
+            connection_id: item.connection_id,
+            region_id: item.region_id,
+            from_port_id: item.from_port_id,
+            to_port_id: item.to_port_id,
+          })),
           orphan_fiber_cores: orphanFiberCores.slice(0, 25).map((item) => ({
             id: item.id,
             cable_device_id: item.cable_device_id,
             core_no: item.core_no,
             connection_id: item.connection_id,
+          })),
+          customer_assigned_to_not_used_ports: customerAssignedToNotUsedPorts.slice(0, 25).map((item) => ({
+            id: item.id,
+            device_id: item.device_id,
+            port_index: item.port_index,
+            status: item.status,
+            customer_id: item.customer_id,
+          })),
+          duplicate_ont_assignments: duplicateOntAssignments.slice(0, 25).map((item) => ({
+            id: item.id,
+            device_id: item.device_id,
+            port_index: item.port_index,
+            status: item.status,
+            ont_device_id: item.ont_device_id,
+          })),
+          routes_missing_endpoint_assets: routeWithoutEndpointAssets.slice(0, 25).map((item) => ({
+            id: item.id,
+            route_id: item.route_id,
+            route_name: item.route_name,
+            start_asset_id: item.start_asset_id,
+            end_asset_id: item.end_asset_id,
           })),
           pending_legacy_device_links: pendingLegacyLinks.slice(0, 25).map((item) => ({
             id: item.id,
@@ -3301,35 +3609,80 @@ resourceRouter.post('/topology/transition/device-links', authenticate, requireRo
 
 resourceRouter.get('/topology/trace', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
   try {
-    const startDeviceId = String(req.query.start_device_id || req.query.from_device_id || '').trim();
+    const startDeviceId = String(req.query.start_device_id || req.query.from_device_id || req.query.device_id || '').trim();
+    const startPortId = String(req.query.start_port_id || req.query.from_port_id || req.query.port_id || '').trim();
+    const startCustomerId = String(req.query.start_customer_id || req.query.from_customer_id || req.query.customer_id || '').trim();
     const endDeviceId = String(req.query.end_device_id || req.query.to_device_id || '').trim();
+    const endPortId = String(req.query.end_port_id || req.query.to_port_id || '').trim();
+    const endCustomerId = String(req.query.end_customer_id || req.query.to_customer_id || '').trim();
     const requestedRegionId = req.query.region_id ? String(req.query.region_id) : null;
     const maxDepth = Math.min(Math.max(Number(req.query.max_depth) || 12, 1), 64);
+    const direction = ['upstream', 'downstream', 'both'].includes(String(req.query.direction || '').toLowerCase())
+      ? String(req.query.direction).toLowerCase()
+      : 'both';
+    const targetRequested = Boolean(endDeviceId || endPortId || endCustomerId);
 
-    if (!startDeviceId) {
-      throw createHttpError(400, 'start_device_id is required');
+    if (!startDeviceId && !startPortId && !startCustomerId) {
+      throw createHttpError(400, 'device_id, port_id, or customer_id is required');
     }
 
-    const startDevice = await loadDeviceById(startDeviceId);
-    if (!startDevice) throw createHttpError(404, 'Start device not found');
-
-    if (endDeviceId) {
-      const targetDevice = await loadDeviceById(endDeviceId);
-      if (!targetDevice) throw createHttpError(404, 'End device not found');
-    }
+    const [startEndpoint, endEndpoint] = await Promise.all([
+      resolveTraceEndpoint({
+        deviceId: startDeviceId,
+        portId: startDeviceId ? null : startPortId,
+        customerId: startDeviceId || startPortId ? null : startCustomerId,
+        label: 'Start',
+      }),
+      resolveTraceEndpoint({
+        deviceId: endDeviceId,
+        portId: endDeviceId ? null : endPortId,
+        customerId: endDeviceId || endPortId ? null : endCustomerId,
+        label: 'End',
+      }),
+    ]);
+    const startDevice = startEndpoint?.device || null;
+    const endDevice = endEndpoint?.device || null;
+    const resolvedStartDeviceId = startDevice?.id || null;
+    const resolvedEndDeviceId = endDevice?.id || null;
 
     if (req.auth.role === 'user_region') {
       if (!req.auth.regions.length) {
         throw createHttpError(403, 'This regional user does not have any assigned region');
       }
 
-      if (!req.auth.regions.includes(startDevice.region_id)) {
+      if (startDevice && !req.auth.regions.includes(startDevice.region_id)) {
         throw createHttpError(403, 'You do not have access to the start device region');
+      }
+      if (endDevice && !req.auth.regions.includes(endDevice.region_id)) {
+        throw createHttpError(403, 'You do not have access to the end device region');
       }
 
       if (requestedRegionId && !req.auth.regions.includes(requestedRegionId)) {
         throw createHttpError(403, 'You do not have access to this region');
       }
+    }
+
+    if (!startDevice) {
+      return sendSuccess(
+        res,
+        {
+          request: {
+            start: startEndpoint,
+            end: endEndpoint,
+            direction,
+            region_id: requestedRegionId,
+            max_depth: maxDepth,
+          },
+          graph: { nodes: [], edges: [] },
+          trace: {
+            found: false,
+            hop_count: 0,
+            path: [],
+            warnings: startEndpoint?.warnings || ['Start endpoint cannot be traced'],
+          },
+        },
+        'Topology trace fetched successfully',
+      );
     }
 
     const allowedRegionIds = req.auth.role === 'user_region' ? req.auth.regions : [];
@@ -3345,7 +3698,9 @@ resourceRouter.get('/topology/trace', authenticate, requireRole('admin', 'user_r
     const portMap = new Map(ports.map((port) => [port.id, port]));
 
     const graphEdges = [];
-    const adjacency = new Map();
+    const undirectedAdjacency = new Map();
+    const upstreamAdjacency = new Map();
+    const downstreamAdjacency = new Map();
 
     for (const connection of connections) {
       const fromPort = portMap.get(connection.from_port_id);
@@ -3376,16 +3731,26 @@ resourceRouter.get('/topology/trace', authenticate, requireRole('admin', 'user_r
       };
       graphEdges.push(edge);
 
-      if (!adjacency.has(fromDeviceId)) adjacency.set(fromDeviceId, []);
-      if (!adjacency.has(toDeviceId)) adjacency.set(toDeviceId, []);
-      adjacency.get(fromDeviceId).push({ next: toDeviceId, edgeId: edge.id });
-      adjacency.get(toDeviceId).push({ next: fromDeviceId, edgeId: edge.id });
+      if (!undirectedAdjacency.has(fromDeviceId)) undirectedAdjacency.set(fromDeviceId, []);
+      if (!undirectedAdjacency.has(toDeviceId)) undirectedAdjacency.set(toDeviceId, []);
+      undirectedAdjacency.get(fromDeviceId).push({ next: toDeviceId, edgeId: edge.id });
+      undirectedAdjacency.get(toDeviceId).push({ next: fromDeviceId, edgeId: edge.id });
+
+      if (!downstreamAdjacency.has(fromDeviceId)) downstreamAdjacency.set(fromDeviceId, []);
+      if (!upstreamAdjacency.has(toDeviceId)) upstreamAdjacency.set(toDeviceId, []);
+      downstreamAdjacency.get(fromDeviceId).push({ next: toDeviceId, edgeId: edge.id });
+      upstreamAdjacency.get(toDeviceId).push({ next: fromDeviceId, edgeId: edge.id });
     }
 
-    const visited = new Set([startDeviceId]);
-    const queue = [{ id: startDeviceId, depth: 0 }];
+    const adjacency = direction === 'upstream'
+      ? upstreamAdjacency
+      : direction === 'downstream'
+        ? downstreamAdjacency
+        : undirectedAdjacency;
+    const visited = new Set([resolvedStartDeviceId]);
+    const queue = [{ id: resolvedStartDeviceId, depth: 0 }];
     const parent = new Map();
-    let endFound = !endDeviceId;
+    let endFound = targetRequested ? false : true;
 
     while (queue.length) {
       const current = queue.shift();
@@ -3396,7 +3761,7 @@ resourceRouter.get('/topology/trace', authenticate, requireRole('admin', 'user_r
         if (visited.has(neighbor.next)) continue;
         visited.add(neighbor.next);
         parent.set(neighbor.next, { prev: current.id, edgeId: neighbor.edgeId });
-        if (endDeviceId && neighbor.next === endDeviceId) {
+        if (resolvedEndDeviceId && neighbor.next === resolvedEndDeviceId) {
           endFound = true;
           queue.length = 0;
           break;
@@ -3410,9 +3775,9 @@ resourceRouter.get('/topology/trace', authenticate, requireRole('admin', 'user_r
     const devicesMap = new Map(devices.map((device) => [device.id, device]));
 
     const relevantEdgeIds = new Set();
-    if (endDeviceId && endFound) {
-      let cursor = endDeviceId;
-      while (cursor !== startDeviceId) {
+    if (resolvedEndDeviceId && endFound) {
+      let cursor = resolvedEndDeviceId;
+      while (cursor !== resolvedStartDeviceId) {
         const info = parent.get(cursor);
         if (!info) break;
         relevantEdgeIds.add(info.edgeId);
@@ -3428,6 +3793,14 @@ resourceRouter.get('/topology/trace', authenticate, requireRole('admin', 'user_r
 
     const filteredEdges = graphEdges.filter((edge) => relevantEdgeIds.has(edge.id));
     const fiberCores = await loadFiberCoresByConnectionIds(filteredEdges.map((edge) => edge.id));
+    const routeIds = Array.from(new Set(filteredEdges.map((edge) => edge.route_id).filter(Boolean)));
+    const cableDeviceIds = Array.from(new Set(filteredEdges.map((edge) => edge.cable_device_id).filter(Boolean)));
+    const [routes, cableDevices] = await Promise.all([
+      loadRoutesByIds(routeIds),
+      loadDevicesByIds(cableDeviceIds),
+    ]);
+    const routeMap = new Map(routes.map((route) => [route.id, route]));
+    const cableDeviceMap = new Map(cableDevices.map((device) => [device.id, device]));
     const fiberByConnection = fiberCores.reduce((acc, item) => {
       const key = item.connection_id;
       if (!key) return acc;
@@ -3443,22 +3816,37 @@ resourceRouter.get('/topology/trace', authenticate, requireRole('admin', 'user_r
       return acc;
     }, {});
 
-    const edges = filteredEdges.map((edge) => ({
-      ...edge,
-      fiber_cores: fiberByConnection[edge.id] || { total: 0, used: 0, statuses: {}, colors: {} },
-    }));
+    const edges = filteredEdges.map((edge) => {
+      const fromPort = portMap.get(edge.from_port_id) || null;
+      const toPort = portMap.get(edge.to_port_id) || null;
+      const fromDevice = devicesMap.get(edge.from_device_id) || null;
+      const toDevice = devicesMap.get(edge.to_device_id) || null;
+      const route = routeMap.get(edge.route_id) || null;
+      const cableDevice = cableDeviceMap.get(edge.cable_device_id) || null;
+      return {
+        ...edge,
+        from_port: fromPort ? { ...fromPort, device: fromDevice } : null,
+        to_port: toPort ? { ...toPort, device: toDevice } : null,
+        from_device: fromDevice,
+        to_device: toDevice,
+        route,
+        cable_device: cableDevice,
+        labels: buildPortConnectionLabel(edge, fromPort ? { ...fromPort, device: fromDevice } : null, toPort ? { ...toPort, device: toDevice } : null, cableDevice, route),
+        fiber_cores: fiberByConnection[edge.id] || { total: 0, used: 0, statuses: {}, colors: {} },
+      };
+    });
 
     const nodes = Array.from(
-      new Set(edges.flatMap((edge) => [edge.from_device_id, edge.to_device_id]).filter(Boolean)),
+      new Set([resolvedStartDeviceId, ...edges.flatMap((edge) => [edge.from_device_id, edge.to_device_id]).filter(Boolean)]),
     )
       .map((id) => devicesMap.get(id))
       .filter(Boolean);
 
     const path = [];
-    if (endDeviceId && endFound) {
-      let cursor = endDeviceId;
+    if (resolvedEndDeviceId && endFound) {
+      let cursor = resolvedEndDeviceId;
       const reversed = [cursor];
-      while (cursor !== startDeviceId) {
+      while (cursor !== resolvedStartDeviceId) {
         const info = parent.get(cursor);
         if (!info) break;
         cursor = info.prev;
@@ -3479,8 +3867,21 @@ resourceRouter.get('/topology/trace', authenticate, requireRole('admin', 'user_r
       res,
       {
         request: {
-          start_device_id: startDeviceId,
-          end_device_id: endDeviceId || null,
+          start: {
+            type: startEndpoint.type,
+            device_id: resolvedStartDeviceId,
+            port_id: startEndpoint.port?.id || null,
+            customer_id: startEndpoint.customer?.id || null,
+          },
+          end: endEndpoint
+            ? {
+              type: endEndpoint.type,
+              device_id: resolvedEndDeviceId,
+              port_id: endEndpoint.port?.id || null,
+              customer_id: endEndpoint.customer?.id || null,
+            }
+            : null,
+          direction,
           region_id: requestedRegionId,
           max_depth: maxDepth,
         },
@@ -3492,6 +3893,10 @@ resourceRouter.get('/topology/trace', authenticate, requireRole('admin', 'user_r
           found: endFound,
           hop_count: path.length ? Math.max(0, path.length - 1) : 0,
           path,
+          warnings: [
+            ...(startEndpoint.warnings || []),
+            ...(endEndpoint?.warnings || []),
+          ],
         },
       },
       'Topology trace fetched successfully',
