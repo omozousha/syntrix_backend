@@ -17,6 +17,7 @@ const { buildOdpCoreChainSummary, buildOdpCoreChainDraft } = require('../device/
 const { createRedirectToNotAllowedError, isRedirectToNotAllowed } = require('../auth/auth.service');
 const { getPagination } = require('../../utils/pagination');
 const { normalizeRoleName, isSuperAdminRole, isRegionalRole } = require('../../utils/roles');
+const { parseSplitterRatioPorts } = require('../../utils/splitterRatio');
 const {
   STATUS: VALIDATION_STATUS,
   ACTION: VALIDATION_ACTION,
@@ -560,6 +561,42 @@ async function loadDevicesByIds(ids) {
   `;
 
   const data = await executeHasura(query, { ids });
+  return data.items || [];
+}
+
+async function loadDevicesByRegion({ allowedRegionIds = [], requestedRegionId = null }) {
+  const regionFilters = [];
+  if (requestedRegionId) {
+    regionFilters.push({ region_id: { _eq: requestedRegionId } });
+  } else if (allowedRegionIds.length) {
+    regionFilters.push({ region_id: { _in: allowedRegionIds } });
+  }
+  const where = {
+    _and: [
+      { deleted_at: { _is_null: true } },
+      ...regionFilters,
+    ],
+  };
+
+  const query = `
+    query LoadDevicesByRegion($where: devices_bool_exp!) {
+      items: devices(where: $where, order_by: [{ device_type_key: asc }, { device_name: asc }]) {
+        id
+        device_id
+        device_name
+        device_type_key
+        region_id
+        pop_id
+        project_id
+        splitter_ratio
+        total_ports
+        used_ports
+        capacity_core
+        used_core
+      }
+    }
+  `;
+  const data = await executeHasura(query, { where });
   return data.items || [];
 }
 
@@ -2636,6 +2673,15 @@ resourceRouter.post('/devices/:id/provision-ports', authenticate, requireRole('a
     const totalPorts = Number.isInteger(requestedTotalPorts) && requestedTotalPorts > 0
       ? requestedTotalPorts
       : (Number(template.total_ports) || 0);
+    const splitterPortCount = parseSplitterRatioPorts(device.splitter_ratio);
+    if (String(device.device_type_key || '').toUpperCase() === 'ODP' && device.splitter_ratio) {
+      if (!splitterPortCount) {
+        throw createHttpError(400, 'ODP splitter_ratio must use format 1:8, 1:16, or 1/16 before provisioning ports');
+      }
+      if (totalPorts !== splitterPortCount) {
+        throw createHttpError(400, 'ODP total_ports must match splitter_ratio output capacity before provisioning ports');
+      }
+    }
     const startPortIndex = Number(template.start_port_index) || 1;
 
     const missingIndexes = [];
@@ -2686,6 +2732,7 @@ resourceRouter.post('/devices/:id/provision-ports', authenticate, requireRole('a
       speed_profile: template.default_speed_profile || null,
       core_capacity: template.default_core_capacity ?? null,
       core_used: 0,
+      splitter_ratio: String(device.device_type_key || '').toUpperCase() === 'ODP' ? device.splitter_ratio || null : null,
       is_active: true,
     }));
 
@@ -3176,12 +3223,13 @@ resourceRouter.get('/topology/integrity', authenticate, requireRole('admin', 'us
     }
 
     const allowedRegionIds = req.auth.role === 'user_region' ? req.auth.regions : [];
-    const [connections, ports, fiberCores, deviceLinks, routes] = await Promise.all([
+    const [connections, ports, fiberCores, deviceLinks, routes, devices] = await Promise.all([
       loadPortConnections({ allowedRegionIds, requestedRegionId }),
       loadPortsByRegion({ allowedRegionIds, requestedRegionId }),
       loadFiberCoresByRegion({ allowedRegionIds, requestedRegionId }),
       loadDeviceLinksByRegion({ allowedRegionIds, requestedRegionId, limit: 5000 }),
       loadRoutesByRegion({ allowedRegionIds, requestedRegionId }),
+      loadDevicesByRegion({ allowedRegionIds, requestedRegionId }),
     ]);
 
     const connectionPortIds = Array.from(
@@ -3230,6 +3278,23 @@ resourceRouter.get('/topology/integrity', authenticate, requireRole('admin', 'us
     }, {});
     const duplicateOntAssignments = ontAssignments.filter((port) => ontAssignmentCounts[port.ont_device_id] > 1);
     const routeWithoutEndpointAssets = routes.filter((route) => !route.start_asset_id || !route.end_asset_id);
+    const portsByDevice = ports.reduce((acc, port) => {
+      if (port.deleted_at) return acc;
+      acc[port.device_id] = (acc[port.device_id] || 0) + 1;
+      return acc;
+    }, {});
+    const odpDevices = devices.filter((device) => String(device.device_type_key || '').toUpperCase() === 'ODP');
+    const odpInvalidSplitterRatios = odpDevices.filter((device) => device.splitter_ratio && !parseSplitterRatioPorts(device.splitter_ratio));
+    const odpSplitterTotalPortMismatches = odpDevices.filter((device) => {
+      const splitterPorts = parseSplitterRatioPorts(device.splitter_ratio);
+      if (!splitterPorts || device.total_ports == null) return false;
+      return Number(device.total_ports) !== splitterPorts;
+    });
+    const deviceActualPortMismatches = devices.filter((device) => {
+      if (device.total_ports == null) return false;
+      const actual = Number(portsByDevice[device.id] || 0);
+      return actual !== Number(device.total_ports);
+    });
 
     const transitioned = await loadDeviceLinkTransitionMapByLinkIds(deviceLinks.map((item) => item.id));
     const transitionedLinkIdSet = new Set(transitioned.map((item) => item.link_id));
@@ -3338,6 +3403,48 @@ resourceRouter.get('/topology/integrity', authenticate, requireRole('admin', 'us
       'Complete route endpoints before using it for topology visualization.',
       { route_id: item.route_id, route_name: item.route_name, start_asset_id: item.start_asset_id, end_asset_id: item.end_asset_id },
     ));
+    odpInvalidSplitterRatios.forEach((item) => addIssue(
+      'odp_invalid_splitter_ratio',
+      'warning',
+      'device',
+      item.id,
+      'ODP splitter ratio format invalid',
+      'ODP splitter_ratio cannot be parsed into output port capacity.',
+      'Use splitter_ratio format like 1:8, 1:16, or 1/16.',
+      { device_id: item.device_id, device_name: item.device_name, splitter_ratio: item.splitter_ratio },
+    ));
+    odpSplitterTotalPortMismatches.forEach((item) => addIssue(
+      'odp_splitter_total_ports_mismatch',
+      'critical',
+      'device',
+      item.id,
+      'ODP splitter ratio does not match total ports',
+      'The ODP splitter output capacity differs from devices.total_ports.',
+      'Align total_ports with splitter_ratio before provisioning or validating the ODP.',
+      {
+        device_id: item.device_id,
+        device_name: item.device_name,
+        splitter_ratio: item.splitter_ratio,
+        expected_total_ports: parseSplitterRatioPorts(item.splitter_ratio),
+        total_ports: item.total_ports,
+      },
+    ));
+    deviceActualPortMismatches.forEach((item) => addIssue(
+      'device_actual_port_count_mismatch',
+      'warning',
+      'device',
+      item.id,
+      'Device port inventory does not match total_ports',
+      'The actual active device_ports count differs from devices.total_ports.',
+      'Run port provisioning or adjust total_ports after confirming device capacity.',
+      {
+        device_id: item.device_id,
+        device_name: item.device_name,
+        device_type_key: item.device_type_key,
+        expected_total_ports: item.total_ports,
+        actual_port_count: Number(portsByDevice[item.id] || 0),
+      },
+    ));
     pendingLegacyLinks.forEach((item) => addIssue(
       'pending_legacy_device_link',
       'info',
@@ -3373,6 +3480,9 @@ resourceRouter.get('/topology/integrity', authenticate, requireRole('admin', 'us
           customer_assigned_to_not_used_ports: customerAssignedToNotUsedPorts.length,
           duplicate_ont_assignments: duplicateOntAssignments.length,
           routes_missing_endpoint_assets: routeWithoutEndpointAssets.length,
+          odp_invalid_splitter_ratios: odpInvalidSplitterRatios.length,
+          odp_splitter_total_port_mismatches: odpSplitterTotalPortMismatches.length,
+          device_actual_port_count_mismatches: deviceActualPortMismatches.length,
           pending_legacy_device_links: pendingLegacyLinks.length,
         },
         issue_summary: issueSummary,
@@ -3420,6 +3530,28 @@ resourceRouter.get('/topology/integrity', authenticate, requireRole('admin', 'us
             route_name: item.route_name,
             start_asset_id: item.start_asset_id,
             end_asset_id: item.end_asset_id,
+          })),
+          odp_invalid_splitter_ratios: odpInvalidSplitterRatios.slice(0, 25).map((item) => ({
+            id: item.id,
+            device_id: item.device_id,
+            device_name: item.device_name,
+            splitter_ratio: item.splitter_ratio,
+          })),
+          odp_splitter_total_port_mismatches: odpSplitterTotalPortMismatches.slice(0, 25).map((item) => ({
+            id: item.id,
+            device_id: item.device_id,
+            device_name: item.device_name,
+            splitter_ratio: item.splitter_ratio,
+            expected_total_ports: parseSplitterRatioPorts(item.splitter_ratio),
+            total_ports: item.total_ports,
+          })),
+          device_actual_port_count_mismatches: deviceActualPortMismatches.slice(0, 25).map((item) => ({
+            id: item.id,
+            device_id: item.device_id,
+            device_name: item.device_name,
+            device_type_key: item.device_type_key,
+            expected_total_ports: item.total_ports,
+            actual_port_count: Number(portsByDevice[item.id] || 0),
           })),
           pending_legacy_device_links: pendingLegacyLinks.slice(0, 25).map((item) => ({
             id: item.id,

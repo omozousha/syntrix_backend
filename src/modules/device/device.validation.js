@@ -1,4 +1,5 @@
 const { createHttpError } = require('../../utils/httpError');
+const { parseSplitterRatioPorts } = require('../../utils/splitterRatio');
 
 const VALIDATION_STATUS_VALUES = ['unvalidated', 'valid', 'warning', 'invalid'];
 const DEVICE_TYPE_CORE_REQUIRED = new Set(['OTB', 'ODC', 'JC', 'CABLE']);
@@ -42,6 +43,19 @@ function validateDevicePayload(payload, mode = 'create') {
     payload.device_type_key = String(payload.device_type_key).trim().toUpperCase();
   }
 
+  const typeKey = String(payload.device_type_key || '').toUpperCase();
+  const splitterPortCount = parseSplitterRatioPorts(payload.splitter_ratio);
+  if (typeKey === 'ODP' && payload.splitter_ratio && !splitterPortCount) {
+    throw createHttpError(400, 'splitter_ratio must use format 1:8, 1:16, or 1/16');
+  }
+  if (typeKey === 'ODP' && splitterPortCount) {
+    if (payload.total_ports == null || payload.total_ports === '') {
+      payload.total_ports = splitterPortCount;
+    } else if (Number(payload.total_ports) !== splitterPortCount) {
+      throw createHttpError(400, 'total_ports must match splitter_ratio output capacity');
+    }
+  }
+
   ensureNonNegativeInteger(payload.capacity_core, 'capacity_core');
   ensureNonNegativeInteger(payload.used_core, 'used_core');
   ensureNonNegativeInteger(payload.total_ports, 'total_ports');
@@ -66,8 +80,6 @@ function validateDevicePayload(payload, mode = 'create') {
   if (payload.validation_status && payload.validation_status !== 'unvalidated' && !payload.validation_date) {
     throw createHttpError(400, 'validation_date is required when validation_status is not unvalidated');
   }
-
-  const typeKey = String(payload.device_type_key || '').toUpperCase();
 
   if (DEVICE_TYPE_CORE_REQUIRED.has(typeKey) || DEVICE_TYPE_CORE_AND_PORT_REQUIRED.has(typeKey)) {
     if (mode === 'create' && payload.capacity_core == null) {

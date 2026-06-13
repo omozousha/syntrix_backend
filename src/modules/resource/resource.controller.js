@@ -91,7 +91,7 @@ async function provisionPortsFromTemplate(device) {
 
   const objects = Array.from({ length: totalPorts }, (_, index) => {
     const portIndex = startPortIndex + index;
-    return {
+    const object = {
       region_id: device.region_id,
       device_id: device.id,
       port_index: portIndex,
@@ -104,6 +104,10 @@ async function provisionPortsFromTemplate(device) {
       core_used: 0,
       is_active: true,
     };
+    if (String(device.device_type_key || '').toUpperCase() === 'ODP' && device.splitter_ratio) {
+      object.splitter_ratio = device.splitter_ratio;
+    }
+    return object;
   });
 
   const mutation = `

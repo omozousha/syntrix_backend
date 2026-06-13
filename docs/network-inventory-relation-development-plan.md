@@ -185,6 +185,83 @@ Tujuan:
 - menjaga trace port/core tetap akurat;
 - membuat As-Built bisa menampilkan jalur dan asset kabel secara terpisah namun saling terkait.
 
+### 2.10 Tray, Tube, dan Kode Warna Fiber
+
+Core Management harus mendukung struktur fisik kabel, bukan hanya nomor core.
+
+Keputusan:
+
+- `fiber_cores` tetap menjadi source of truth per core kabel.
+- `core_management` boleh dipakai sebagai summary/range, tetapi tidak menggantikan data per core.
+- Setiap core perlu bisa diketahui posisi fisiknya: tray, tube, nomor core, warna tube, dan warna core.
+- Kode warna default memakai siklus internasional 12 warna yang umum dipakai untuk fiber optic: Blue, Orange, Green, Brown, Slate, White, Red, Black, Yellow, Violet, Rose, Aqua.
+- Warna core sudah tersedia melalui `core_color_profiles` dan `core_color_map`, tetapi tube/tray belum menjadi relasi operasional yang lengkap.
+- Untuk kabel multi-tube, `tube_no` dihitung dari jumlah core per tube, dan warna tube mengikuti siklus warna yang sama.
+- `tray_no` dipakai untuk closure/ODC/OTB/splice tray, terutama saat As-Built dan pekerjaan penyambungan perlu detail fisik.
+
+Aturan target:
+
+- Cable device wajib punya `capacity_core`.
+- Provision fiber core harus mengisi `core_no`, `core_color`, `tube_no`, `tube_color`, dan optional `tray_no`.
+- Default `cores_per_tube` adalah 12, tetapi harus bisa dikonfigurasi per cable profile bila nanti ada kabel 6-core tube atau struktur vendor-specific.
+- Integrity report harus bisa mendeteksi core tanpa warna, tube tanpa warna, core di luar kapasitas kabel, dan overlap core connection.
+- Topology/Core Management harus bisa menampilkan matrix tray/tube/core agar teknisi tidak hanya melihat list angka.
+
+Tujuan:
+
+- As-Built dapat menunjukkan warna tube/core yang benar;
+- teknisi lapangan bisa mencocokkan data Syntrix dengan fisik kabel;
+- trace core lebih akurat dari ODC sampai ODP/customer;
+- data core siap dipakai untuk label, splicing plan, dan maps/topology view.
+
+### 2.11 Core Management sebagai Splice Matrix
+
+Core Management bukan hanya tabel core. Fitur ini harus menjadi pusat akurasi ODN untuk melihat, menyambung, menelusuri, dan memonitor core fisik.
+
+Keputusan:
+
+- Tampilan utama Core Management perlu berkembang menjadi `Splice Matrix` atau `Splice Tray View`.
+- Matrix menampilkan dua sisi koneksi, misalnya kabel input backbone di kiri dan kabel output distribusi atau splitter port di kanan.
+- User memilih atau menghubungkan core input ke core output/splitter input/output.
+- Untuk tahap awal, implementasi boleh berupa selection-based mapping yang aman; drag-and-drop visual bisa menjadi iterasi UI setelah data contract stabil.
+- Setiap mapping tetap disimpan sebagai data terstruktur di `port_connections`, `fiber_cores`, dan metadata splice.
+
+Aturan visual:
+
+- Urutan core dan tube harus mengikuti profile warna standar yang dipilih.
+- Gunakan istilah fiber color standard, bukan `T-568B`, karena T-568B lebih tepat untuk twisted-pair Ethernet.
+- Default standar warna adalah 12-color cycle:
+  Blue, Orange, Green, Brown, Slate, White, Red, Black, Yellow, Violet, Rose, Aqua.
+- Bila tim operasional memakai istilah lokal:
+  Biru, Orange, Hijau, Cokelat, Abu-abu, Putih, Merah, Hitam, Kuning, Ungu, Pink, Toska.
+
+Status core:
+
+| Status | Warna UI | Arti |
+| --- | --- | --- |
+| available | Green | Core kosong/idle dan siap digunakan. |
+| used | Blue | Core aktif membawa layanan atau koneksi topology. |
+| reserved | Yellow | Core dipesan untuk project, backup, atau pekerjaan terjadwal. |
+| damaged | Red | Core putus, redaman tinggi, atau tidak layak pakai. |
+| inactive | Gray | Core tidak aktif atau tidak dipakai dalam inventory aktif. |
+
+Capability target:
+
+- Core occupancy per cable, tube, tray, route, POP, project, dan region.
+- Health tracker untuk status fisik core.
+- Splice mapping dari OLT/ODC/OTB/ODP/cable endpoint ke core lain atau splitter port.
+- End-to-end optical path trace dari OLT port sampai customer/ONT.
+- Impact analysis saat fiber cut atau core damaged.
+- Attenuation log per core dan per splice.
+- Warning otomatis jika loss melebihi threshold operasional.
+
+Tujuan:
+
+- NOC bisa melihat dampak gangguan dari satu core/kabel ke ODP/customer terdampak.
+- Teknisi lapangan bisa mencocokkan warna, tray, tube, dan core dengan kondisi fisik.
+- Superadmin/adminregion bisa review perubahan core mapping sebelum masuk inventory final.
+- As-Built dapat menyajikan splice matrix dan core path sebagai dokumen final.
+
 ---
 
 ## 3. Kondisi Saat Ini
@@ -212,6 +289,8 @@ Gap utama:
 - Project relation perlu konsisten di create/edit/detail/request/approval/filter.
 - Fungsi As-Built Documents perlu diposisikan ulang sebagai output dari Topology/Core Management.
 - Maps belum diimplementasikan dan sebaiknya menjadi fase akhir.
+- Tray/tube/core color coding belum lengkap; saat ini warna core ada, tetapi tube/tray belum menjadi model operasional per fiber core.
+- Splice Matrix, core occupancy, health tracker, attenuation log, dan fiber-cut impact analysis belum tersedia sebagai workflow operasional.
 - UI topology/port management belum sepenuhnya menjadi workflow utama.
 - Mutasi `port_connections` dan customer assignment perlu dipastikan approval-safe.
 - Trace upstream/downstream perlu distandardisasi outputnya untuk frontend dan mobile.
@@ -373,6 +452,72 @@ As-Built Documents berfungsi sebagai:
 
 As-Built Documents bukan tempat utama untuk membuat relasi port/core. Input relasi tetap melalui Topology Management dan approval flow.
 
+### 5.9 fiber tray/tube color model
+
+Model target untuk core fisik:
+
+- `core_color_profiles` dan `core_color_map` menyimpan profil warna standar.
+- `fiber_cores` menyimpan core individual per cable device.
+- Field target pada `fiber_cores`:
+  - `tray_no`;
+  - `tube_no`;
+  - `tube_color_name`;
+  - `tube_color_hex`;
+  - `color_profile_id`;
+  - `color_name`;
+  - `color_hex`.
+- Field konfigurasi target pada cable profile atau `devices.specifications`:
+  - `cores_per_tube`, default 12;
+  - `tray_capacity_core`, optional;
+  - `color_standard`, default `TIA_EIA_598_12_COLOR`.
+
+Formula default:
+
+- `core_cycle_no = ((core_no - 1) % 12) + 1`
+- `tube_no = floor((core_no - 1) / cores_per_tube) + 1`
+- `tube_cycle_no = ((tube_no - 1) % 12) + 1`
+
+Catatan:
+
+- Schema saat ini sudah punya `core_management.tray_no` dan `core_management.tube_no`, tetapi belum cukup untuk operasi per-core.
+- Implementasi berikutnya perlu migration idempotent untuk menambah field tube/tray pada `fiber_cores` atau menormalisasi ke tabel `fiber_tubes` bila dibutuhkan.
+
+### 5.10 splice matrix dan attenuation log
+
+Model data target untuk splice matrix:
+
+- `fiber_cores` menyimpan core individual dan status fisiknya.
+- `port_connections` menyimpan koneksi topology antar port/core endpoint.
+- `core_management.splice_info` atau tabel splice detail menyimpan metadata penyambungan:
+  - splice location;
+  - tray number;
+  - input cable/core;
+  - output cable/core atau splitter port;
+  - splice method;
+  - technician/user;
+  - approved request;
+  - notes.
+
+Model data target untuk attenuation:
+
+- Setiap core mapping perlu bisa menyimpan `loss_db`.
+- Setiap splice point perlu bisa menyimpan `splice_loss_db`.
+- Setiap test perlu menyimpan metadata:
+  - test method: OTDR, power meter, manual;
+  - measured_at;
+  - measured_by;
+  - wavelength_nm jika tersedia;
+  - attachment evidence jika ada.
+- Threshold default:
+  - warning jika splice loss lebih besar dari 0.2 dB;
+  - critical jika core ditandai damaged atau path putus.
+
+Catatan implementasi:
+
+- Untuk tahap awal, attenuation dapat disimpan di `splice_info` JSONB agar tidak memperbesar schema terlalu cepat.
+- Jika data OTDR mulai aktif dipakai, pisahkan ke tabel `fiber_core_measurements` agar histori pengukuran tidak menumpuk di JSONB.
+- Semua perubahan status core, splice mapping, dan attenuation harus mengikuti approval-safe mutation.
+
 ---
 
 ## 6. Phase Implementasi
@@ -391,6 +536,8 @@ Todo:
 - [ ] Pastikan semua FK dan index yang dibutuhkan trace sudah ada.
 - [ ] Pastikan `device_ports` mendukung customer/ONT assignment.
 - [ ] Pastikan `port_connections` mendukung route, cable, core range, status.
+- [ ] Audit kebutuhan tray/tube/core color coding pada `fiber_cores` dan `core_management`.
+- [ ] Audit kebutuhan Splice Matrix, core occupancy, attenuation log, dan fiber-cut impact analysis.
 - [ ] Buat response contract topology untuk frontend dan Syntrix-One.
 - [ ] Tentukan field wajib untuk port create/update.
 - [ ] Tentukan field wajib untuk connection create/update.
@@ -446,6 +593,7 @@ Todo:
 
 - [x] Review `device_port_templates` untuk OLT, ODC, ODP, ONT, SWITCH, ROUTER, CABLE.
 - [x] Pastikan default ODP 1:8/1:16 bisa dipilih dari `total_ports` atau template.
+- [x] Pastikan ODP `splitter_ratio` menurunkan/mengunci `total_ports`.
 - [x] Pastikan create device dapat provision port otomatis atau manual sesuai mode.
 - [x] Tambahkan dry-run provisioning untuk melihat port yang akan dibuat.
 - [x] Pastikan provision port tercatat di audit trail.
@@ -472,6 +620,9 @@ Todo:
 - [x] Validasi region consistency.
 - [x] Validasi port tidak terkoneksi ganda jika jenis port tidak mengizinkan.
 - [x] Validasi cable/core range.
+- [ ] Validasi core status tidak damaged/inactive saat dipakai connection baru.
+- [ ] Validasi core reserved hanya bisa dipakai sesuai policy/project.
+- [ ] Validasi splice matrix tidak membuat overlap mapping core.
 - [x] Approval flow untuk adminregion.
 - [x] Audit trail action spesifik.
 - [x] Response Relation-Ready untuk connection detail.
@@ -550,6 +701,11 @@ Todo:
 - [x] Report customer assigned ke port tidak used.
 - [x] Report ONT assigned lebih dari satu port aktif.
 - [x] Report route tanpa start/end asset.
+- [x] Report mismatch ODP splitter ratio, total ports, dan actual port count.
+- [ ] Report core tanpa tray/tube/color setelah fitur tray/tube aktif.
+- [ ] Report tube/core color mismatch dari standar warna yang dipilih.
+- [ ] Report core damaged yang masih dipakai connection aktif.
+- [ ] Report attenuation warning/critical setelah attenuation log aktif.
 - [x] Tambahkan severity: info, warning, critical.
 
 Checker:
@@ -576,6 +732,11 @@ Todo:
 - [ ] UI occupancy per ODP/ODC/OLT.
 - [ ] UI integrity report.
 - [ ] UI Topology Management menampilkan relasi device, port, core, route, dan customer/ONT assignment.
+- [ ] UI Core Management menampilkan matrix tray/tube/core color.
+- [ ] UI Splice Matrix menampilkan input cable/core dan output cable/core atau splitter port.
+- [ ] UI core occupancy menampilkan status available/used/reserved/damaged/inactive.
+- [ ] UI attenuation log menampilkan loss per core/splice bila data tersedia.
+- [ ] UI impact analysis menampilkan ODP/customer terdampak dari fiber cut.
 - [ ] As-Built Documents diarahkan menjadi output/export dari data topology yang approved.
 - [ ] Semua komponen memakai Relation-Ready Rendering.
 - [ ] Komponen form/tabs/drawer/select/date picker memakai shadcn UI bila tersedia.
@@ -603,6 +764,7 @@ Todo:
 - [ ] Generate As-Built berdasarkan project, route, POP, atau selected device path.
 - [ ] Simpan snapshot metadata: project, region, route, generated_by, generated_at.
 - [ ] Tampilkan visual topology/core summary yang read-only.
+- [ ] Tampilkan Splice Matrix dan color-coded core path pada As-Built jika data tersedia.
 - [ ] Tambahkan export PDF/CSV/JSON bila dibutuhkan.
 - [ ] Pastikan dokumen hanya memakai data approved.
 
@@ -650,6 +812,7 @@ Todo:
 - [ ] Tampilkan device berdasarkan longitude/latitude.
 - [ ] Tampilkan route berdasarkan `network_routes.path_geojson`.
 - [ ] Tampilkan connection/path dari hasil trace.
+- [ ] Tampilkan fiber-cut impact layer setelah core path dan route stabil.
 - [ ] Tampilkan marker status validation/health/occupancy.
 - [ ] Filter by region, project, POP, device type, dan tenant.
 - [ ] Pastikan map membaca data approved, bukan staged request.
@@ -678,6 +841,9 @@ Todo:
 - [ ] Backfill basic `device_links` ke `port_connections` jika memungkinkan.
 - [ ] Backfill customer assignment ke port jika data tersedia.
 - [ ] Backfill route/core relation jika data tersedia.
+- [ ] Backfill tray/tube/core color dari `fiber_cores.core_no` dan default 12-color cycle.
+- [ ] Backfill status core dari connection aktif: used jika punya active connection, available jika kosong.
+- [ ] Backfill attenuation kosong sebagai null, bukan 0, agar tidak dianggap hasil pengukuran.
 - [ ] Buat script manual SQL yang safe to run more than once.
 - [ ] Tambahkan verification query di setiap script.
 
@@ -711,6 +877,11 @@ UAT scenario:
 - [ ] Trace ODC downstream untuk impact analysis.
 - [ ] Integrity report mendeteksi orphan/cross-region test data.
 - [ ] Topology Management menampilkan port, connection, route, core, dan assignment.
+- [ ] Core Management menampilkan tray/tube/core color sesuai standar internasional.
+- [ ] Splice Matrix bisa menunjukkan mapping core input ke output/splitter.
+- [ ] Core occupancy dan health status bisa dibaca per cable.
+- [ ] Fiber cut simulation menampilkan device/customer terdampak jika relasi tersedia.
+- [ ] Attenuation warning muncul jika loss melebihi threshold.
 - [ ] As-Built Documents dapat dibuat dari project/topology approved.
 - [ ] Maps menampilkan data jika relasi dan koordinat sudah tersedia.
 - [ ] Audit trail menampilkan action, actor, entity label, before/after.
@@ -803,6 +974,9 @@ Pengembangan dianggap selesai jika:
 - create/update topology mengikuti approval flow;
 - trace upstream/downstream berjalan untuk device dan customer;
 - occupancy port akurat;
+- tray/tube/core color coding tersedia untuk fiber core;
+- Core Management memiliki Splice Matrix, occupancy, health tracker, dan attenuation log dasar;
+- trace dapat dipakai untuk impact analysis fiber cut;
 - integrity report tersedia;
 - Topology Management menjadi pusat visual relasi, port, core, route, dan assignment;
 - As-Built Documents menjadi output/snapshot dari topology approved;
