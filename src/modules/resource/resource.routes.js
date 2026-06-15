@@ -14,6 +14,7 @@ const { sendSuccess } = require('../../utils/response');
 const { buildWhereClause, listResources } = require('../../shared/resource.service');
 const { createAuditLog } = require('../../shared/audit.service');
 const { buildOdpCoreChainSummary, buildOdpCoreChainDraft } = require('../device/odp-chain.service');
+const { validateFiberCoreRangeForConnection } = require('../device/fiber-core-policy.service');
 const { createRedirectToNotAllowedError, isRedirectToNotAllowed } = require('../auth/auth.service');
 const { getPagination } = require('../../utils/pagination');
 const { normalizeRoleName, isSuperAdminRole, isRegionalRole } = require('../../utils/roles');
@@ -2495,6 +2496,12 @@ resourceRouter.post('/devices/:id/core-chain-draft-link', authenticate, requireR
         throw createHttpError(400, 'Cable device region must match ODP region');
       }
     }
+
+    await validateFiberCoreRangeForConnection({
+      cable_device_id: cableDeviceId,
+      core_start: coreStart,
+      core_end: coreEnd,
+    });
 
     const existing = await loadConnectionByPortPair(upstreamPort.id, odpPort.id);
     if (existing) {

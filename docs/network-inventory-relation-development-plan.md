@@ -642,9 +642,9 @@ Todo:
 - [x] Validasi region consistency.
 - [x] Validasi port tidak terkoneksi ganda jika jenis port tidak mengizinkan.
 - [x] Validasi cable/core range.
-- [ ] Validasi core status tidak damaged/inactive saat dipakai connection baru.
-- [ ] Validasi core reserved hanya bisa dipakai sesuai policy/project.
-- [ ] Validasi splice matrix tidak membuat overlap mapping core.
+- [x] Validasi core status tidak damaged/inactive saat dipakai connection baru.
+- [x] Validasi core reserved hanya bisa dipakai sesuai policy/project.
+- [x] Validasi splice matrix tidak membuat overlap mapping core.
 - [x] Approval flow untuk adminregion.
 - [x] Audit trail action spesifik.
 - [x] Response Relation-Ready untuk connection detail.
