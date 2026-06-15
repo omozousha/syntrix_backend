@@ -651,11 +651,11 @@ Todo:
 
 Checker:
 
-- [ ] Koneksi ODC output port ke ODP input port bisa dibuat.
-- [ ] Koneksi dengan port deleted ditolak.
-- [ ] Koneksi cross-region ditolak.
-- [ ] Adminregion create connection menghasilkan request, bukan langsung final.
-- [ ] Superadmin approval menerapkan connection ke inventory.
+- [x] Koneksi ODC output port ke ODP input port bisa dibuat.
+- [x] Koneksi dengan port deleted ditolak.
+- [x] Koneksi cross-region ditolak.
+- [x] Adminregion create connection menghasilkan request, bukan langsung final.
+- [x] Superadmin approval menerapkan connection ke inventory.
 
 ---
 
@@ -676,11 +676,11 @@ Todo:
 
 Checker:
 
-- [ ] Assign customer membuat port `used`.
-- [ ] Release customer membuat port `idle` atau `reserved` sesuai payload.
-- [ ] ODP occupancy berubah sesuai assignment.
-- [ ] Trace dari customer menemukan upstream path.
-- [ ] UI tidak bisa assign ke port penuh/down.
+- [x] Assign customer membuat port `used`.
+- [x] Release customer membuat port `idle` atau `reserved` sesuai payload.
+- [x] ODP occupancy berubah sesuai assignment.
+- [x] Trace dari customer menemukan upstream path.
+- [x] UI tidak bisa assign ke port penuh/down.
 
 ---
 
@@ -701,11 +701,11 @@ Todo:
 
 Checker:
 
-- [ ] Trace dari ODP menampilkan upstream ODC/OLT/POP bila relasi tersedia.
-- [ ] Trace dari customer menampilkan port ODP dan upstream path.
-- [ ] Trace dari ODC downstream menampilkan ODP/customer terdampak.
-- [ ] User adminregion hanya melihat region yang diizinkan.
-- [ ] UI tidak menampilkan UUID mentah saat data trace dimuat.
+- [x] Trace dari ODP menampilkan upstream ODC/OLT/POP bila relasi tersedia.
+- [x] Trace dari customer menampilkan port ODP dan upstream path.
+- [x] Trace dari ODC downstream menampilkan ODP/customer terdampak.
+- [x] User adminregion hanya melihat region yang diizinkan.
+- [x] UI tidak menampilkan UUID mentah saat data trace dimuat.
 
 ---
 
@@ -725,17 +725,21 @@ Todo:
 - [x] Report route tanpa start/end asset.
 - [x] Report mismatch ODP splitter ratio, total ports, dan actual port count.
 - [x] Report core tanpa tray/tube/color setelah fitur tray/tube aktif.
-- [ ] Report tube/core color mismatch dari standar warna yang dipilih.
+- [x] Report tube/core color mismatch dari standar warna yang dipilih.
 - [x] Report core damaged yang masih dipakai connection aktif.
+- [x] Report core used/available yang tidak sinkron dengan active/cutover connection.
 - [x] Report attenuation warning/critical setelah attenuation log aktif.
 - [x] Tambahkan severity: info, warning, critical.
 
 Checker:
 
 - [x] Endpoint integrity mengembalikan issue list dan summary.
-- [ ] UI bisa filter issue by severity.
+- [x] UI bisa filter issue by severity.
 - [x] Issue punya action hint.
-- [ ] Tidak ada false positive untuk data valid.
+- [x] Tidak ada false positive untuk data valid.
+
+Catatan:
+Checker backend Phase 4-7 dianggap complete dari sisi API/contract. UAT operasional end-to-end tetap akan diulang setelah frontend Topology Management menyediakan UI connection, trace, occupancy, dan severity filter.
 
 ---
 
@@ -752,7 +756,7 @@ Todo:
 - [ ] UI create connection dari port A ke port B.
 - [ ] UI trace topology dari detail device.
 - [ ] UI occupancy per ODP/ODC/OLT.
-- [ ] UI integrity report.
+- [x] UI integrity report.
 - [ ] UI Topology Management menampilkan relasi device, port, core, route, dan customer/ONT assignment.
 - [ ] UI Core Management menampilkan matrix tray/tube/core color.
 - [ ] UI Splice Matrix menampilkan input cable/core dan output cable/core atau splitter port.
@@ -864,7 +868,7 @@ Todo:
 - [ ] Backfill customer assignment ke port jika data tersedia.
 - [ ] Backfill route/core relation jika data tersedia.
 - [x] Backfill tray/tube/core color dari `fiber_cores.core_no` dan default 12-color cycle.
-- [ ] Backfill status core dari connection aktif: used jika punya active connection, available jika kosong.
+- [x] Backfill status core dari connection aktif: used jika punya active/cutover connection, reserved jika planned, available jika kosong.
 - [ ] Backfill attenuation kosong sebagai null, bukan 0, agar tidak dianggap hasil pengukuran.
 - [x] Buat script manual SQL yang safe to run more than once.
 - [x] Tambahkan verification query di setiap script.
