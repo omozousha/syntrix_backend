@@ -387,6 +387,35 @@ Aturan:
 - ONT assignment mengisi `ont_device_id`.
 - Port yang sudah used tidak bisa dipakai ulang.
 
+### 5.2.1 capacity-driven provisioning
+
+Port dan core harus diprovision dari kapasitas device yang sudah approved. Ini mencegah setiap device dibuat sebagai data umum tanpa struktur topology.
+
+Prinsip:
+
+- `device_port_templates` menjadi blueprint default per `device_type_key`.
+- Kapasitas final berasal dari data device approved seperti `total_ports`, `capacity_core`, `splitter_ratio`, atau field teknis sejenis.
+- Provisioning membuat data turunan di `device_ports` atau `fiber_cores`.
+- Re-run provisioning harus idempotent dan tidak membuat duplikasi.
+- Jika kapasitas naik, sistem menambahkan port/core yang belum ada.
+- Jika kapasitas turun, sistem tidak menghapus port/core yang sudah `used`, `reserved`, punya assignment, punya connection, atau punya evidence; perubahan seperti ini harus masuk review/approval.
+- Adminregion boleh mengajukan perubahan kapasitas, tetapi inventory final hanya berubah setelah approval.
+- Audit trail harus mencatat nama device, tipe device, kapasitas asal, kapasitas baru, jumlah port/core dibuat, dan request approval jika ada.
+
+Target per device type:
+
+| Device type | Source kapasitas | Output provisioning |
+| --- | --- | --- |
+| ODP | `splitter_ratio`, `total_ports` | Customer/drop ports sesuai kapasitas splitter. |
+| ODC | splitter profile 1:4/1:8 atau konfigurasi tray | Splitter input/output ports dan/atau splice endpoint ports. |
+| Cable | `capacity_core`, `cores_per_tube` | `fiber_cores` lengkap dengan core number, tube, tube color, core color, dan status awal. |
+| OLT | OLT/PON template | PON/uplink ports sesuai profile. |
+| OTB/ODF/FDT | patch/splice template | Patch/splice endpoint ports. |
+| Switch/Router | interface template | Ethernet/uplink ports sesuai model/profile jika tersedia. |
+| ONT | service/uplink template | Uplink/service port minimum untuk relasi customer. |
+
+Data Quality wajib melaporkan mismatch antara kapasitas device, jumlah `device_ports`, dan jumlah `fiber_cores`.
+
 ### 5.3 port_connections
 
 Digunakan untuk graph edge.
@@ -600,7 +629,7 @@ Checker:
 
 - [x] Detail ODP, ODC, OLT, ONT, dan device lain memiliki QR panel konsisten.
 - [x] Download QR detail dan bulk memakai template global yang sama.
-- [ ] Device baru dari adminregion membawa project context ke request.
+- [x] Device baru dari adminregion membawa project context ke request.
 - [ ] Superadmin bisa melihat Project saat approve create/update device.
 - [x] UI tidak menampilkan raw `project_id`.
 
@@ -617,7 +646,12 @@ Todo:
 - [x] Pastikan default ODP 1:8/1:16 bisa dipilih dari `total_ports` atau template.
 - [x] Pastikan ODP `splitter_ratio` menurunkan/mengunci `total_ports`.
 - [x] Pastikan create device dapat provision port otomatis atau manual sesuai mode.
+- [x] Pastikan provisioning mengikuti kapasitas device approved untuk semua device type, bukan hanya ODP.
+- [x] Pastikan ODC mendukung splitter profile umum 1:4 dan 1:8 sebagai dasar port/splitter endpoint.
+- [x] Pastikan Cable membuat `fiber_cores` dari `capacity_core` dan `cores_per_tube`.
+- [x] Pastikan OLT/OTB/ODF/FDT/Switch/Router/ONT punya template minimal yang bisa dipakai create/provision.
 - [x] Tambahkan dry-run provisioning untuk melihat port yang akan dibuat.
+- [x] Tambahkan conflict handling jika kapasitas turun tetapi port/core sudah dipakai.
 - [x] Pastikan provision port tercatat di audit trail.
 - [x] Pastikan adminregion provisioning masuk approval jika mengubah inventory final.
 
@@ -626,6 +660,9 @@ Checker:
 - [x] Create ODP 16 port menghasilkan 16 row `device_ports`.
 - [x] Re-run provision tidak membuat duplicate port.
 - [x] Port usage di `devices.total_ports` dan `devices.used_ports` sinkron.
+- [x] Re-run provision non-ODP tidak membuat duplicate port/core.
+- [x] Penurunan kapasitas tidak menghapus port/core used/reserved/connected.
+- [x] Data Quality melaporkan mismatch kapasitas vs port/core aktual.
 - [x] Audit trail menampilkan nama device dan jumlah port yang dibuat.
 
 ---
@@ -645,6 +682,7 @@ Todo:
 - [x] Validasi core status tidak damaged/inactive saat dipakai connection baru.
 - [x] Validasi core reserved hanya bisa dipakai sesuai policy/project.
 - [x] Validasi splice matrix tidak membuat overlap mapping core.
+- [x] Sinkronkan `fiber_cores` dari create/update/delete `port_connections`.
 - [x] Approval flow untuk adminregion.
 - [x] Audit trail action spesifik.
 - [x] Response Relation-Ready untuk connection detail.
@@ -750,11 +788,11 @@ Membuat topology dan core relation bisa dikelola dari web admin.
 
 Todo:
 
-- [ ] Device detail menampilkan port list ringkas.
-- [ ] Device detail menampilkan Project dan QR panel generik.
-- [ ] Drawer port detail menampilkan connection dan assignment.
+- [x] Device detail menampilkan port list ringkas.
+- [x] Device detail menampilkan Project dan QR panel generik.
+- [x] Drawer port detail menampilkan connection dan assignment.
 - [ ] UI create connection dari port A ke port B.
-- [ ] UI trace topology dari detail device.
+- [x] UI trace topology dari detail device.
 - [ ] UI occupancy per ODP/ODC/OLT.
 - [x] UI integrity report.
 - [ ] UI Topology Management menampilkan relasi device, port, core, route, dan customer/ONT assignment.
@@ -862,7 +900,10 @@ Todo:
 - [ ] Audit device non-POP yang belum punya QR display eligibility.
 - [ ] Audit device yang belum punya `project_id`.
 - [ ] Audit device yang punya `total_ports` tapi belum punya `device_ports`.
+- [ ] Audit cable device yang punya `capacity_core` tapi belum punya `fiber_cores`.
 - [ ] Backfill port ODP berdasarkan `total_ports`.
+- [ ] Backfill port non-ODP berdasarkan `device_port_templates` dan kapasitas approved.
+- [ ] Backfill `fiber_cores` untuk Cable berdasarkan `capacity_core`, `cores_per_tube`, dan color profile.
 - [ ] Backfill project relation bila bisa diturunkan dari import, request, POP, route, atau dokumen lama.
 - [ ] Backfill basic `device_links` ke `port_connections` jika memungkinkan.
 - [ ] Backfill customer assignment ke port jika data tersedia.

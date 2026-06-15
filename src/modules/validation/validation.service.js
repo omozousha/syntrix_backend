@@ -1491,6 +1491,105 @@ async function validatePortConnectionApplyPayload(payload, existing = null) {
   await validateFiberCoreRangeForConnection(payload, existing);
 }
 
+function hasConnectionCoreRange(connection = {}) {
+  return Boolean(
+    connection.cable_device_id
+    && connection.core_start != null
+    && connection.core_end != null
+    && Number(connection.core_end) >= Number(connection.core_start)
+  );
+}
+
+async function releaseFiberCoresForPortConnection(connection) {
+  if (!connection?.id) {
+    return { enabled: false, released_count: 0, reason: 'connection_not_found' };
+  }
+
+  const mutation = `
+    mutation ReleaseFiberCoresForConnection($connectionId: uuid!) {
+      updated: update_fiber_cores(
+        where: {
+          connection_id: { _eq: $connectionId }
+          status: { _nin: ["damaged", "inactive"] }
+        }
+        _set: {
+          status: "available"
+          connection_id: null
+          from_port_id: null
+          to_port_id: null
+        }
+      ) {
+        affected_rows
+      }
+    }
+  `;
+
+  const result = await executeHasura(mutation, { connectionId: connection.id });
+  return {
+    enabled: true,
+    released_count: result.updated?.affected_rows || 0,
+  };
+}
+
+async function applyFiberCoresForPortConnection(connection) {
+  if (!hasConnectionCoreRange(connection)) {
+    return { enabled: false, affected_count: 0, reason: 'core_range_not_provided' };
+  }
+
+  const status = String(connection.status || '').toLowerCase();
+  if (!['active', 'cutover', 'planned'].includes(status)) {
+    return { enabled: false, affected_count: 0, reason: 'connection_status_not_occupying_core' };
+  }
+
+  const nextStatus = status === 'planned' ? 'reserved' : 'used';
+  const mutation = `
+    mutation ApplyFiberCoresForConnection(
+      $cableDeviceId: uuid!
+      $coreStart: Int!
+      $coreEnd: Int!
+      $set: fiber_cores_set_input!
+    ) {
+      updated: update_fiber_cores(
+        where: {
+          cable_device_id: { _eq: $cableDeviceId }
+          core_no: { _gte: $coreStart, _lte: $coreEnd }
+          status: { _nin: ["damaged", "inactive"] }
+        }
+        _set: $set
+      ) {
+        affected_rows
+      }
+    }
+  `;
+
+  const result = await executeHasura(mutation, {
+    cableDeviceId: connection.cable_device_id,
+    coreStart: Number(connection.core_start),
+    coreEnd: Number(connection.core_end),
+    set: {
+      status: nextStatus,
+      connection_id: connection.id,
+      from_port_id: connection.from_port_id,
+      to_port_id: connection.to_port_id,
+    },
+  });
+
+  return {
+    enabled: true,
+    status: nextStatus,
+    expected_count: Number(connection.core_end) - Number(connection.core_start) + 1,
+    affected_count: result.updated?.affected_rows || 0,
+  };
+}
+
+async function syncFiberCoresForPortConnection(connection, previousConnection = null) {
+  const released = previousConnection
+    ? await releaseFiberCoresForPortConnection(previousConnection)
+    : { enabled: false, released_count: 0 };
+  const applied = await applyFiberCoresForPortConnection(connection);
+  return { enabled: true, released, applied };
+}
+
 async function findActiveDevicePortAssignment(fieldName, value, excludePortId = null) {
   if (!value) return null;
   const where = {
@@ -1766,6 +1865,10 @@ async function applyResourceChangeRequest({ request, actorUserId = null }) {
       await validatePortConnectionApplyPayload(object);
     }
     const item = await createResource(config, object);
+    if (resourceName === 'portConnections') {
+      const fiberCoreSync = await syncFiberCoresForPortConnection(item);
+      return { before: null, after: { ...item, fiber_core_sync: fiberCoreSync } };
+    }
     return { before: null, after: item };
   }
 
@@ -1782,19 +1885,32 @@ async function applyResourceChangeRequest({ request, actorUserId = null }) {
       await validateDevicePortAssignmentApplyPayload(resourcePayload, before);
     }
     const item = await updateResource(config, request.entity_id, resourcePayload);
+    if (resourceName === 'portConnections') {
+      const fiberCoreSync = await syncFiberCoresForPortConnection(item, before);
+      return { before, after: { ...item, fiber_core_sync: fiberCoreSync } };
+    }
     return { before, after: item };
   }
 
   if (payload.operation === 'archive' || payload.operation === 'delete') {
+    const fiberCoreSync = resourceName === 'portConnections'
+      ? await releaseFiberCoresForPortConnection(before)
+      : null;
     if (config.softDelete) {
       const item = await updateResource(config, request.entity_id, {
         deleted_at: new Date().toISOString(),
         deleted_by_user_id: actorUserId,
       });
-      return { before, after: item };
+      return {
+        before,
+        after: fiberCoreSync ? { ...item, fiber_core_sync: fiberCoreSync } : item,
+      };
     }
     await deleteResource(config, request.entity_id);
-    return { before, after: null };
+    return {
+      before,
+      after: fiberCoreSync ? { fiber_core_sync: fiberCoreSync } : null,
+    };
   }
 
   throw createHttpError(400, `Unsupported request operation: ${payload.operation || '-'}`);

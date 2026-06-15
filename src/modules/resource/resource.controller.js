@@ -80,6 +80,26 @@ async function loadDevicePortTemplate(deviceTypeKey, profileName = 'default') {
   return data.items?.[0] || null;
 }
 
+async function loadDevicePortsByDeviceId(deviceId) {
+  const query = `
+    query LoadDevicePortsByDeviceId($deviceId: uuid!) {
+      items: device_ports(
+        where: { device_id: { _eq: $deviceId }, deleted_at: { _is_null: true } }
+        order_by: [{ port_index: asc }]
+      ) {
+        id
+        port_index
+        status
+        customer_id
+        ont_device_id
+      }
+    }
+  `;
+
+  const data = await executeHasura(query, { deviceId });
+  return data.items || [];
+}
+
 async function provisionPortsFromTemplate(device) {
   const template = await loadDevicePortTemplate(device.device_type_key, 'default');
   if (!template) {
@@ -95,8 +115,38 @@ async function provisionPortsFromTemplate(device) {
     return { enabled: false, createdCount: 0, reason: 'invalid_template_total_ports' };
   }
 
-  const objects = Array.from({ length: totalPorts }, (_, index) => {
+  const existingPorts = await loadDevicePortsByDeviceId(device.id);
+  const existingIndexes = new Set(existingPorts.map((item) => Number(item.port_index)));
+  const missingIndexes = [];
+  for (let index = 0; index < totalPorts; index += 1) {
     const portIndex = startPortIndex + index;
+    if (!existingIndexes.has(portIndex)) {
+      missingIndexes.push(portIndex);
+    }
+  }
+
+  const desiredMaxPortIndex = startPortIndex + totalPorts - 1;
+  const overCapacityPorts = existingPorts.filter((item) => Number(item.port_index) > desiredMaxPortIndex);
+  const protectedOverCapacityCount = overCapacityPorts.filter((item) => (
+    String(item.status || '').toLowerCase() !== 'idle'
+    || item.customer_id
+    || item.ont_device_id
+  )).length;
+
+  if (!missingIndexes.length) {
+    return {
+      enabled: true,
+      templateId: template.id,
+      profileName: template.profile_name,
+      requestedTotalPorts: totalPorts,
+      existingCount: existingPorts.length,
+      createdCount: 0,
+      overCapacityCount: overCapacityPorts.length,
+      protectedOverCapacityCount,
+    };
+  }
+
+  const objects = missingIndexes.map((portIndex) => {
     const object = {
       region_id: device.region_id,
       device_id: device.id,
@@ -129,7 +179,12 @@ async function provisionPortsFromTemplate(device) {
     enabled: true,
     templateId: template.id,
     profileName: template.profile_name,
+    requestedTotalPorts: totalPorts,
+    existingCount: existingPorts.length,
     createdCount: result.inserted?.affected_rows || 0,
+    missingIndexes,
+    overCapacityCount: overCapacityPorts.length,
+    protectedOverCapacityCount,
   };
 }
 
@@ -337,6 +392,105 @@ async function syncFiberCoresForCableDevice(device) {
   };
 }
 
+function hasConnectionCoreRange(connection = {}) {
+  return Boolean(
+    connection.cable_device_id
+    && connection.core_start != null
+    && connection.core_end != null
+    && Number(connection.core_end) >= Number(connection.core_start)
+  );
+}
+
+async function releaseFiberCoresForPortConnection(connection) {
+  if (!connection?.id) {
+    return { enabled: false, released_count: 0, reason: 'connection_not_found' };
+  }
+
+  const mutation = `
+    mutation ReleaseFiberCoresForConnection($connectionId: uuid!) {
+      updated: update_fiber_cores(
+        where: {
+          connection_id: { _eq: $connectionId }
+          status: { _nin: ["damaged", "inactive"] }
+        }
+        _set: {
+          status: "available"
+          connection_id: null
+          from_port_id: null
+          to_port_id: null
+        }
+      ) {
+        affected_rows
+      }
+    }
+  `;
+
+  const result = await executeHasura(mutation, { connectionId: connection.id });
+  return {
+    enabled: true,
+    released_count: result.updated?.affected_rows || 0,
+  };
+}
+
+async function applyFiberCoresForPortConnection(connection) {
+  if (!hasConnectionCoreRange(connection)) {
+    return { enabled: false, affected_count: 0, reason: 'core_range_not_provided' };
+  }
+
+  const status = String(connection.status || '').toLowerCase();
+  if (!['active', 'cutover', 'planned'].includes(status)) {
+    return { enabled: false, affected_count: 0, reason: 'connection_status_not_occupying_core' };
+  }
+
+  const nextStatus = status === 'planned' ? 'reserved' : 'used';
+  const mutation = `
+    mutation ApplyFiberCoresForConnection(
+      $cableDeviceId: uuid!
+      $coreStart: Int!
+      $coreEnd: Int!
+      $set: fiber_cores_set_input!
+    ) {
+      updated: update_fiber_cores(
+        where: {
+          cable_device_id: { _eq: $cableDeviceId }
+          core_no: { _gte: $coreStart, _lte: $coreEnd }
+          status: { _nin: ["damaged", "inactive"] }
+        }
+        _set: $set
+      ) {
+        affected_rows
+      }
+    }
+  `;
+
+  const result = await executeHasura(mutation, {
+    cableDeviceId: connection.cable_device_id,
+    coreStart: Number(connection.core_start),
+    coreEnd: Number(connection.core_end),
+    set: {
+      status: nextStatus,
+      connection_id: connection.id,
+      from_port_id: connection.from_port_id,
+      to_port_id: connection.to_port_id,
+    },
+  });
+
+  return {
+    enabled: true,
+    status: nextStatus,
+    expected_count: Number(connection.core_end) - Number(connection.core_start) + 1,
+    affected_count: result.updated?.affected_rows || 0,
+  };
+}
+
+async function syncFiberCoresForPortConnection(connection, previousConnection = null) {
+  const released = previousConnection
+    ? await releaseFiberCoresForPortConnection(previousConnection)
+    : { enabled: false, released_count: 0 };
+  const applied = await applyFiberCoresForPortConnection(connection);
+  return { enabled: true, released, applied };
+}
+
 function validatePayloadByResource(resourceName, payload, mode = 'create') {
   if (resourceName === 'devices') {
     validateDevicePayload(payload, mode);
@@ -464,7 +618,65 @@ function shouldNotifyValidatorsForDirectDeviceCreate(req, item, approvalRequest)
   return String(item.validation_status || '').toLowerCase() !== 'valid';
 }
 
-function buildAdminRegionCreateRequestPayload(device) {
+async function loadAssetReferenceContext(payload = {}) {
+  const variables = {
+    regionIds: payload.region_id ? [payload.region_id] : [],
+    popIds: payload.pop_id ? [payload.pop_id] : [],
+    projectIds: payload.project_id ? [payload.project_id] : [],
+    tenantIds: payload.tenant_id ? [payload.tenant_id] : [],
+  };
+
+  const query = `
+    query LoadAssetReferenceContext(
+      $regionIds: [uuid!]!
+      $popIds: [uuid!]!
+      $projectIds: [uuid!]!
+      $tenantIds: [uuid!]!
+    ) {
+      regions(where: { id: { _in: $regionIds } }, limit: 1) {
+        id
+        region_id
+        region_name
+      }
+      pops(where: { id: { _in: $popIds } }, limit: 1) {
+        id
+        pop_id
+        pop_name
+        pop_code
+      }
+      projects(where: { id: { _in: $projectIds } }, limit: 1) {
+        id
+        project_id
+        project_code
+        project_name
+      }
+      tenants(where: { id: { _in: $tenantIds } }, limit: 1) {
+        id
+        tenant_code
+        tenant_name
+      }
+    }
+  `;
+
+  try {
+    const data = await executeHasura(query, variables);
+    return {
+      region: data.regions?.[0] || null,
+      pop: data.pops?.[0] || null,
+      project: data.projects?.[0] || null,
+      tenant: data.tenants?.[0] || null,
+    };
+  } catch {
+    return {
+      region: null,
+      pop: null,
+      project: null,
+      tenant: null,
+    };
+  }
+}
+
+function buildAdminRegionCreateRequestPayload(device, relationContext = null) {
   return {
     source: 'adminregion-create-device',
     device: {
@@ -472,6 +684,7 @@ function buildAdminRegionCreateRequestPayload(device) {
       region_id: device.region_id || null,
       pop_id: device.pop_id || null,
       project_id: device.project_id || null,
+      tenant_id: device.tenant_id || null,
       device_type_key: device.device_type_key || null,
       device_name: device.device_name || null,
       status: device.status || null,
@@ -492,11 +705,12 @@ function buildAdminRegionCreateRequestPayload(device) {
       longitude: device.longitude ?? null,
       latitude: device.latitude ?? null,
     },
+    relation_context: relationContext,
     device_ports: [],
   };
 }
 
-function buildAdminRegionCreateResourcePayload(resourceName, entityId, object) {
+function buildAdminRegionCreateResourcePayload(resourceName, entityId, object, relationContext = null) {
   const resourceLabel = REQUEST_LABEL_BY_RESOURCE[resourceName] || resourceName;
   return {
     source: 'adminregion-create-resource',
@@ -508,6 +722,7 @@ function buildAdminRegionCreateResourcePayload(resourceName, entityId, object) {
       ...object,
     },
     resource_payload: object,
+    relation_context: relationContext,
   };
 }
 
@@ -611,7 +826,7 @@ async function findActiveCreateApprovalRequest(req, object) {
   return data.items?.[0] || null;
 }
 
-function buildAdminRegionChangeResourcePayload(resourceName, operation, existing, changes = {}) {
+function buildAdminRegionChangeResourcePayload(resourceName, operation, existing, changes = {}, relationContext = null) {
   const entityType = REQUEST_ENTITY_TYPE_BY_RESOURCE[resourceName] || 'resource';
   const resourceLabel = REQUEST_LABEL_BY_RESOURCE[resourceName] || resourceName;
   const payload = operation === 'update' ? { ...existing, ...changes } : existing;
@@ -623,6 +838,7 @@ function buildAdminRegionChangeResourcePayload(resourceName, operation, existing
     [entityType]: payload,
     before: existing,
     resource_payload: changes,
+    relation_context: relationContext,
   };
 }
 
@@ -758,7 +974,8 @@ async function create(req, res, next) {
       }
 
       const pendingEntityId = randomUUID();
-      const payloadSnapshot = buildAdminRegionCreateResourcePayload(req.resourceName, pendingEntityId, object);
+      const relationContext = await loadAssetReferenceContext(object);
+      const payloadSnapshot = buildAdminRegionCreateResourcePayload(req.resourceName, pendingEntityId, object, relationContext);
       const approvalRequest = await submitAdminRegionAssetRequest({
         req,
         entityId: pendingEntityId,
@@ -819,6 +1036,10 @@ async function create(req, res, next) {
     if (req.resourceName === 'devicePorts') {
       await syncDevicePortUsage(item.device_id);
     }
+    let portConnectionFiberSyncResult = null;
+    if (req.resourceName === 'portConnections') {
+      portConnectionFiberSyncResult = await syncFiberCoresForPortConnection(item);
+    }
 
     let approvalRequest = null;
     if (shouldHoldDeviceForSuperadminApproval(req, object)) {
@@ -827,12 +1048,14 @@ async function create(req, res, next) {
           deleted_at: new Date().toISOString(),
           deleted_by_user_id: req.auth.appUser.id,
         });
+        const relationContext = await loadAssetReferenceContext(item);
+        const payloadSnapshot = buildAdminRegionCreateRequestPayload(item, relationContext);
         approvalRequest = await createValidationRequest({
           entityId: item.id,
           regionId: item.region_id,
           submittedByUserId: req.auth.appUser.id,
           currentStatus: VALIDATION_STATUS.PENDING_ASYNC,
-          payloadSnapshot: buildAdminRegionCreateRequestPayload(item),
+          payloadSnapshot,
           checklist: {},
           findingNote: 'Create device request by adminregion.',
         });
@@ -844,7 +1067,7 @@ async function create(req, res, next) {
           beforeStatus: VALIDATION_STATUS.UNVALIDATED,
           afterStatus: VALIDATION_STATUS.PENDING_ASYNC,
           note: 'Create device request submitted to superadmin.',
-          payloadPatch: buildAdminRegionCreateRequestPayload(item),
+          payloadPatch: payloadSnapshot,
         });
         await createAuditLog({
           actorUserId: req.auth.appUser.id,
@@ -880,14 +1103,23 @@ async function create(req, res, next) {
       entityType: req.resourceName,
       entityId: item.id,
       beforeData: null,
-      afterData: req.resourceName === 'devices'
-        ? {
+      afterData: (() => {
+        if (req.resourceName === 'devices') {
+          return {
           ...item,
           auto_provision: provisioningResult || { enabled: false, createdCount: 0 },
           fiber_core_sync: fiberSyncResult || { enabled: false },
           ...(approvalRequest ? { approval_request_id: approvalRequest.request_id || approvalRequest.id } : {}),
+          };
         }
-        : item,
+        if (req.resourceName === 'portConnections') {
+          return {
+            ...item,
+            fiber_core_sync: portConnectionFiberSyncResult || { enabled: false },
+          };
+        }
+        return item;
+      })(),
       ipAddress: req.ip,
       userAgent: req.get('user-agent'),
     });
@@ -972,7 +1204,8 @@ async function update(req, res, next) {
     }
 
     if (shouldHoldCreateForSuperadminApproval(req, { region_id: existing.region_id })) {
-      const payloadSnapshot = buildAdminRegionChangeResourcePayload(req.resourceName, 'update', existing, changes);
+      const relationContext = await loadAssetReferenceContext({ ...existing, ...changes });
+      const payloadSnapshot = buildAdminRegionChangeResourcePayload(req.resourceName, 'update', existing, changes, relationContext);
       const approvalRequest = await submitAdminRegionAssetRequest({
         req,
         entityId: existing.id,
@@ -989,17 +1222,26 @@ async function update(req, res, next) {
     }
 
     const item = await updateResource(req.resourceConfig, req.params.id, changes);
+    let provisioningResult = null;
     let fiberSyncResult = null;
     let fiberSyncError = null;
     if (req.resourceName === 'devices') {
       try {
+        provisioningResult = await provisionPortsFromTemplate(item);
+        if (provisioningResult?.enabled) {
+          await syncDevicePortUsage(item.id);
+        }
         fiberSyncResult = await syncFiberCoresForCableDevice(item);
       } catch (syncError) {
-        fiberSyncError = syncError.message || 'fiber core sync failed';
+        fiberSyncError = syncError.message || 'device topology sync failed';
       }
     }
     if (req.resourceName === 'devicePorts') {
       await syncDevicePortUsage(item.device_id);
+    }
+    let portConnectionFiberSyncResult = null;
+    if (req.resourceName === 'portConnections') {
+      portConnectionFiberSyncResult = await syncFiberCoresForPortConnection(item, existing);
     }
     await createAuditLog({
       actorUserId: req.auth.appUser.id,
@@ -1007,13 +1249,23 @@ async function update(req, res, next) {
       entityType: req.resourceName,
       entityId: item.id,
       beforeData: existing,
-      afterData: req.resourceName === 'devices'
-        ? {
+      afterData: (() => {
+        if (req.resourceName === 'devices') {
+          return {
           ...item,
+          auto_provision: provisioningResult || { enabled: false },
           fiber_core_sync: fiberSyncResult || { enabled: false },
           ...(fiberSyncError ? { fiber_core_sync_error: fiberSyncError } : {}),
+          };
         }
-        : item,
+        if (req.resourceName === 'portConnections') {
+          return {
+            ...item,
+            fiber_core_sync: portConnectionFiberSyncResult || { enabled: false },
+          };
+        }
+        return item;
+      })(),
       ipAddress: req.ip,
       userAgent: req.get('user-agent'),
     });
@@ -1076,7 +1328,8 @@ async function remove(req, res, next) {
 
     if (shouldHoldCreateForSuperadminApproval(req, { region_id: existing.region_id })) {
       const operation = req.resourceConfig.softDelete ? 'archive' : 'delete';
-      const payloadSnapshot = buildAdminRegionChangeResourcePayload(req.resourceName, operation, existing, {});
+      const relationContext = await loadAssetReferenceContext(existing);
+      const payloadSnapshot = buildAdminRegionChangeResourcePayload(req.resourceName, operation, existing, {}, relationContext);
       const approvalRequest = await submitAdminRegionAssetRequest({
         req,
         entityId: existing.id,
@@ -1090,6 +1343,11 @@ async function remove(req, res, next) {
         { id: existing.id, mode: operation, approval_request: approvalRequest },
         `${req.resourceName} ${operation} request sent to superadmin approval`,
       );
+    }
+
+    let portConnectionFiberSyncResult = null;
+    if (req.resourceName === 'portConnections') {
+      portConnectionFiberSyncResult = await releaseFiberCoresForPortConnection(existing);
     }
 
     if (req.resourceConfig.softDelete) {
@@ -1110,7 +1368,9 @@ async function remove(req, res, next) {
       entityType: req.resourceName,
       entityId: existing.id,
       beforeData: existing,
-      afterData: null,
+      afterData: req.resourceName === 'portConnections'
+        ? { fiber_core_sync: portConnectionFiberSyncResult || { enabled: false } }
+        : null,
       ipAddress: req.ip,
       userAgent: req.get('user-agent'),
     });
