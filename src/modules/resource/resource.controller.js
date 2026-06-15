@@ -7,6 +7,11 @@ const { executeHasura } = require('../../config/hasura');
 const { createAuditLog } = require('../../shared/audit.service');
 const { applyResourceNameNormalization } = require('../../utils/nameNormalization');
 const {
+  buildFiberCorePhysicalFields,
+  getDeviceCoresPerTube,
+  needsFiberCorePhysicalRepair,
+} = require('../../utils/fiberColor');
+const {
   buildWhereClause,
   sanitizePayload,
   listResources,
@@ -192,6 +197,13 @@ async function loadFiberCoresByCableDeviceId(cableDeviceId) {
         from_port_id
         to_port_id
         connection_id
+        color_name
+        color_hex
+        color_standard
+        cores_per_tube
+        tube_no
+        tube_color_name
+        tube_color_hex
       }
     }
   `;
@@ -206,17 +218,32 @@ async function syncFiberCoresForCableDevice(device) {
   }
 
   const desired = Math.max(0, Number(device.capacity_core) || 0);
+  const coresPerTube = getDeviceCoresPerTube(device);
   const existing = await loadFiberCoresByCableDeviceId(device.id);
   const byCoreNo = new Map(existing.map((row) => [Number(row.core_no), row]));
 
   const createObjects = [];
+  const repairObjects = [];
   for (let coreNo = 1; coreNo <= desired; coreNo += 1) {
-    if (!byCoreNo.has(coreNo)) {
+    const physicalFields = buildFiberCorePhysicalFields(coreNo, { coresPerTube });
+    const existingCore = byCoreNo.get(coreNo);
+    if (!existingCore) {
       createObjects.push({
         region_id: device.region_id,
         cable_device_id: device.id,
         core_no: coreNo,
         status: 'available',
+        ...physicalFields,
+      });
+    } else if (needsFiberCorePhysicalRepair(existingCore, physicalFields)) {
+      repairObjects.push({
+        id: existingCore.id,
+        region_id: device.region_id,
+        cable_device_id: device.id,
+        core_no: coreNo,
+        status: existingCore.status || 'available',
+        updated_at: new Date().toISOString(),
+        ...physicalFields,
       });
     }
   }
@@ -230,6 +257,32 @@ async function syncFiberCoresForCableDevice(device) {
       }
     `;
     await executeHasura(mutation, { objects: createObjects });
+  }
+
+  if (repairObjects.length) {
+    const mutation = `
+      mutation RepairFiberCorePhysicalFields($objects: [fiber_cores_insert_input!]!) {
+        repaired: insert_fiber_cores(
+          objects: $objects
+          on_conflict: {
+            constraint: fiber_cores_pkey
+            update_columns: [
+              color_name
+              color_hex
+              color_standard
+              cores_per_tube
+              tube_no
+              tube_color_name
+              tube_color_hex
+              updated_at
+            ]
+          }
+        ) {
+          affected_rows
+        }
+      }
+    `;
+    await executeHasura(mutation, { objects: repairObjects });
   }
 
   const overCapacity = existing.filter((row) => Number(row.core_no) > desired);
@@ -276,6 +329,7 @@ async function syncFiberCoresForCableDevice(device) {
     desired_core_count: desired,
     existing_core_count: existing.length,
     created_count: createObjects.length,
+    repaired_count: repairObjects.length,
     deactivated_over_capacity_count: unassignedOverCapacityIds.length,
     reactivated_count: restorableInactiveIds.length,
     assigned_over_capacity_count: assignedOverCapacityCount,

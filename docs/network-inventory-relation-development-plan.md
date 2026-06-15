@@ -216,7 +216,7 @@ Tujuan:
 
 ### 2.11 Core Management sebagai Splice Matrix
 
-Core Management bukan hanya tabel core. Fitur ini harus menjadi pusat akurasi ODN untuk melihat, menyambung, menelusuri, dan memonitor core fisik.
+Core Management bukan hanya tabel core. Fitur ini harus menjadi pusat akurasi ODN untuk melihat, menyambung, menelusuri, dan mencatat kondisi inventaris core fisik.
 
 Keputusan:
 
@@ -248,19 +248,37 @@ Status core:
 Capability target:
 
 - Core occupancy per cable, tube, tray, route, POP, project, dan region.
-- Health tracker untuk status fisik core.
+- Health tracker berbasis status inventaris dan evidence lapangan, bukan telemetry langsung dari perangkat aktif.
 - Splice mapping dari OLT/ODC/OTB/ODP/cable endpoint ke core lain atau splitter port.
 - End-to-end optical path trace dari OLT port sampai customer/ONT.
-- Impact analysis saat fiber cut atau core damaged.
-- Attenuation log per core dan per splice.
-- Warning otomatis jika loss melebihi threshold operasional.
+- Impact analysis saat fiber cut atau core damaged berdasarkan relasi inventory yang sudah approved.
+- Attenuation log per core dan per splice berdasarkan input manual, evidence lapangan, atau catatan OTDR.
+- Warning otomatis jika nilai loss yang dicatat melebihi threshold operasional.
 
 Tujuan:
 
-- NOC bisa melihat dampak gangguan dari satu core/kabel ke ODP/customer terdampak.
+- NOC/operasional bisa melihat estimasi dampak gangguan dari satu core/kabel ke ODP/customer terdampak berdasarkan data inventory.
 - Teknisi lapangan bisa mencocokkan warna, tray, tube, dan core dengan kondisi fisik.
 - Superadmin/adminregion bisa review perubahan core mapping sebelum masuk inventory final.
 - As-Built dapat menyajikan splice matrix dan core path sebagai dokumen final.
+
+### 2.12 Inventory-Driven, Bukan Live Monitoring
+
+Syntrix adalah sistem asset inventory jaringan. Core Management tidak boleh diasumsikan membaca status langsung dari perangkat aktif.
+
+Keputusan:
+
+- Status core adalah `inventory-driven` dan `approval-based`.
+- Perubahan status core berasal dari create/update inventory, approval request, validasi lapangan, evidence teknisi, atau input manual operator.
+- Attenuation log berasal dari catatan pengukuran manual, upload evidence, atau hasil OTDR yang diinput/dilampirkan.
+- Fiber cut impact analysis menghitung dampak dari relasi inventory yang sudah approved, bukan dari alarm live perangkat.
+- Integrasi live device, telemetry, SNMP, OLT command, atau monitoring NMS adalah modul masa depan dan tidak menjadi asumsi Core Management tahap ini.
+
+Tujuan:
+
+- menjaga produk tetap sesuai domain Syntrix sebagai inventory dan validation platform;
+- menghindari desain backend/frontend yang bergantung pada perangkat aktif;
+- tetap memungkinkan impact analysis yang berguna berdasarkan data topology yang rapi.
 
 ---
 
@@ -291,6 +309,7 @@ Gap utama:
 - Maps belum diimplementasikan dan sebaiknya menjadi fase akhir.
 - Tray/tube/core color coding belum lengkap; saat ini warna core ada, tetapi tube/tray belum menjadi model operasional per fiber core.
 - Splice Matrix, core occupancy, health tracker, attenuation log, dan fiber-cut impact analysis belum tersedia sebagai workflow operasional.
+- Wording dan workflow Core Management harus konsisten sebagai inventory-driven, bukan live monitoring/NMS.
 - UI topology/port management belum sepenuhnya menjadi workflow utama.
 - Mutasi `port_connections` dan customer assignment perlu dipastikan approval-safe.
 - Trace upstream/downstream perlu distandardisasi outputnya untuk frontend dan mobile.
@@ -325,6 +344,7 @@ Gap utama:
 - real-time network monitoring;
 - auto discovery dari perangkat jaringan;
 - integration OLT live command;
+- telemetry/SNMP/NMS live status integration;
 - full GIS route drawing editor;
 - link budget advanced dengan semua vendor-specific loss parameter;
 - multi-template project-specific QR label;
@@ -502,7 +522,7 @@ Model data target untuk attenuation:
 
 - Setiap core mapping perlu bisa menyimpan `loss_db`.
 - Setiap splice point perlu bisa menyimpan `splice_loss_db`.
-- Setiap test perlu menyimpan metadata:
+- Setiap catatan pengukuran perlu menyimpan metadata:
   - test method: OTDR, power meter, manual;
   - measured_at;
   - measured_by;
@@ -515,7 +535,7 @@ Model data target untuk attenuation:
 Catatan implementasi:
 
 - Untuk tahap awal, attenuation dapat disimpan di `splice_info` JSONB agar tidak memperbesar schema terlalu cepat.
-- Jika data OTDR mulai aktif dipakai, pisahkan ke tabel `fiber_core_measurements` agar histori pengukuran tidak menumpuk di JSONB.
+- Jika catatan OTDR/evidence pengukuran mulai aktif dipakai, pisahkan ke tabel `fiber_core_measurements` agar histori pengukuran tidak menumpuk di JSONB.
 - Semua perubahan status core, splice mapping, dan attenuation harus mengikuti approval-safe mutation.
 
 ---
@@ -538,7 +558,9 @@ Todo:
 - [ ] Pastikan `port_connections` mendukung route, cable, core range, status.
 - [ ] Audit kebutuhan tray/tube/core color coding pada `fiber_cores` dan `core_management`.
 - [ ] Audit kebutuhan Splice Matrix, core occupancy, attenuation log, dan fiber-cut impact analysis.
-- [ ] Buat response contract topology untuk frontend dan Syntrix-One.
+- [x] Siapkan migration idempotent untuk field tray/tube/core color foundation.
+- [x] Expose field tray/tube/core color dan attenuation dasar di backend resource.
+- [x] Buat response contract topology untuk frontend dan Syntrix-One.
 - [ ] Tentukan field wajib untuk port create/update.
 - [ ] Tentukan field wajib untuk connection create/update.
 
@@ -702,10 +724,10 @@ Todo:
 - [x] Report ONT assigned lebih dari satu port aktif.
 - [x] Report route tanpa start/end asset.
 - [x] Report mismatch ODP splitter ratio, total ports, dan actual port count.
-- [ ] Report core tanpa tray/tube/color setelah fitur tray/tube aktif.
+- [x] Report core tanpa tray/tube/color setelah fitur tray/tube aktif.
 - [ ] Report tube/core color mismatch dari standar warna yang dipilih.
-- [ ] Report core damaged yang masih dipakai connection aktif.
-- [ ] Report attenuation warning/critical setelah attenuation log aktif.
+- [x] Report core damaged yang masih dipakai connection aktif.
+- [x] Report attenuation warning/critical setelah attenuation log aktif.
 - [x] Tambahkan severity: info, warning, critical.
 
 Checker:
@@ -841,11 +863,11 @@ Todo:
 - [ ] Backfill basic `device_links` ke `port_connections` jika memungkinkan.
 - [ ] Backfill customer assignment ke port jika data tersedia.
 - [ ] Backfill route/core relation jika data tersedia.
-- [ ] Backfill tray/tube/core color dari `fiber_cores.core_no` dan default 12-color cycle.
+- [x] Backfill tray/tube/core color dari `fiber_cores.core_no` dan default 12-color cycle.
 - [ ] Backfill status core dari connection aktif: used jika punya active connection, available jika kosong.
 - [ ] Backfill attenuation kosong sebagai null, bukan 0, agar tidak dianggap hasil pengukuran.
-- [ ] Buat script manual SQL yang safe to run more than once.
-- [ ] Tambahkan verification query di setiap script.
+- [x] Buat script manual SQL yang safe to run more than once.
+- [x] Tambahkan verification query di setiap script.
 
 Checker:
 

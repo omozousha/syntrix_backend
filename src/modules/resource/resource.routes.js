@@ -276,9 +276,15 @@ async function loadRegionById(regionId) {
   return data.item || null;
 }
 
-async function loadPopById(popId) {
+function isMissingPopDeletedAtFieldError(error) {
+  const message = String(error?.message || error?.response?.data?.message || '').toLowerCase();
+  return message.includes('deleted_at') && message.includes('pops');
+}
+
+async function loadPopById(popId, options = {}) {
   if (!popId) return null;
-  const query = `
+  const includeDeletedAt = options.includeDeletedAt !== false;
+  const query = includeDeletedAt ? `
     query LoadPopById($id: uuid!) {
       item: pops_by_pk(id: $id) {
         id
@@ -288,37 +294,36 @@ async function loadPopById(popId) {
         deleted_at
       }
     }
-  `;
-
-  const data = await executeHasura(query, { id: popId });
-  return data.item && !data.item.deleted_at ? data.item : null;
-}
-
-async function loadProjectById(projectId) {
-  if (!projectId) return null;
-  const query = `
-    query LoadProjectById($id: uuid!) {
-      item: projects_by_pk(id: $id) {
+  ` : `
+    query LoadPopById($id: uuid!) {
+      item: pops_by_pk(id: $id) {
         id
-        project_id
-        project_code
-        project_name
+        pop_id
+        pop_code
+        pop_name
       }
     }
   `;
 
-  const data = await executeHasura(query, { id: projectId });
-  return data.item || null;
+  let data;
+  try {
+    data = await executeHasura(query, { id: popId });
+  } catch (error) {
+    if (includeDeletedAt && isMissingPopDeletedAtFieldError(error)) {
+      return loadPopById(popId, { includeDeletedAt: false });
+    }
+    throw error;
+  }
+  return data.item && !data.item.deleted_at ? data.item : null;
 }
 
 async function loadPublicQrDeviceContext(deviceId) {
   const device = await loadDeviceById(deviceId);
   if (!device || device.deleted_at) return null;
-  const [tenant, region, pop, project] = await Promise.all([
+  const [tenant, region, pop] = await Promise.all([
     loadTenantById(device.tenant_id).catch(() => null),
     loadRegionById(device.region_id).catch(() => null),
     loadPopById(device.pop_id).catch(() => null),
-    loadProjectById(device.project_id).catch(() => null),
   ]);
 
   return {
@@ -339,14 +344,6 @@ async function loadPublicQrDeviceContext(deviceId) {
           pop_id: pop.pop_id || null,
           pop_code: pop.pop_code || null,
           pop_name: pop.pop_name || null,
-        }
-      : null,
-    project: project
-      ? {
-          id: project.id,
-          project_id: project.project_id || null,
-          project_code: project.project_code || null,
-          project_name: project.project_name || null,
         }
       : null,
     tenant: tenant
@@ -1198,8 +1195,14 @@ async function loadFiberCoresByConnectionIds(connectionIds) {
         connection_id
         status
         core_no
+        tube_no
+        tube_color_name
+        tube_color_hex
         color_name
         color_hex
+        color_standard
+        cores_per_tube
+        last_loss_db
       }
     }
   `;
@@ -1277,11 +1280,23 @@ async function loadFiberCoresByRegion({ allowedRegionIds = [], requestedRegionId
         id
         region_id
         cable_device_id
+        tray_no
+        tube_no
+        tube_color_name
+        tube_color_hex
         core_no
         status
         connection_id
         from_port_id
         to_port_id
+        color_name
+        color_hex
+        color_standard
+        cores_per_tube
+        last_loss_db
+        last_loss_measured_at
+        last_loss_method
+        health_notes
       }
     }
   `;
@@ -2308,7 +2323,7 @@ resourceRouter.get('/devices/:id/trace', authenticate, requireRole('admin', 'use
       const key = item.connection_id;
       if (!key) return acc;
       if (!acc[key]) {
-        acc[key] = { total: 0, used: 0, statuses: {}, colors: {} };
+        acc[key] = { total: 0, used: 0, statuses: {}, colors: {}, tube_colors: {}, loss_warnings: 0 };
       }
       acc[key].total += 1;
       if (item.status === 'used') acc[key].used += 1;
@@ -2316,12 +2331,16 @@ resourceRouter.get('/devices/:id/trace', authenticate, requireRole('admin', 'use
       if (item.color_name) {
         acc[key].colors[item.color_name] = (acc[key].colors[item.color_name] || 0) + 1;
       }
+      if (item.tube_color_name) {
+        acc[key].tube_colors[item.tube_color_name] = (acc[key].tube_colors[item.tube_color_name] || 0) + 1;
+      }
+      if (Number(item.last_loss_db) > 0.2) acc[key].loss_warnings += 1;
       return acc;
     }, {});
 
     const edges = filteredEdges.map((edge) => ({
       ...edge,
-      fiber_cores: fiberByConnection[edge.id] || { total: 0, used: 0, statuses: {}, colors: {} },
+      fiber_cores: fiberByConnection[edge.id] || { total: 0, used: 0, statuses: {}, colors: {}, tube_colors: {}, loss_warnings: 0 },
     }));
 
     const upstreamByType = collectByDirection({
@@ -3295,6 +3314,40 @@ resourceRouter.get('/topology/integrity', authenticate, requireRole('admin', 'us
       const actual = Number(portsByDevice[device.id] || 0);
       return actual !== Number(device.total_ports);
     });
+    const fiberCoresByCable = fiberCores.reduce((acc, core) => {
+      acc[core.cable_device_id] = (acc[core.cable_device_id] || 0) + 1;
+      return acc;
+    }, {});
+    const cableDevices = devices.filter((device) => String(device.device_type_key || '').toUpperCase() === 'CABLE');
+    const cableFiberCoreCountMismatches = cableDevices.filter((device) => {
+      if (device.capacity_core == null) return false;
+      const expected = Number(device.capacity_core);
+      if (!Number.isInteger(expected) || expected < 0) return false;
+      return Number(fiberCoresByCable[device.id] || 0) !== expected;
+    });
+    const fiberCoresMissingTubeColor = fiberCores.filter((core) => (
+      core.tube_no == null
+      || !core.tube_color_name
+      || !core.tube_color_hex
+    ));
+    const fiberCoresMissingCoreColor = fiberCores.filter((core) => !core.color_name || !core.color_hex);
+    const fiberCoresLossWarnings = fiberCores.filter((core) => Number(core.last_loss_db) > 0.2);
+    const damagedActiveFiberCores = fiberCores.filter((core) => (
+      String(core.status || '').toLowerCase() === 'damaged'
+      && (core.connection_id || core.from_port_id || core.to_port_id)
+    ));
+    const cableCapacityById = cableDevices.reduce((acc, device) => {
+      const capacity = Number(device.capacity_core);
+      if (Number.isInteger(capacity) && capacity >= 0) {
+        acc[device.id] = capacity;
+      }
+      return acc;
+    }, {});
+    const fiberCoresOutOfCableCapacity = fiberCores.filter((core) => {
+      const capacity = cableCapacityById[core.cable_device_id];
+      if (capacity == null) return false;
+      return Number(core.core_no) > capacity;
+    });
 
     const transitioned = await loadDeviceLinkTransitionMapByLinkIds(deviceLinks.map((item) => item.id));
     const transitionedLinkIdSet = new Set(transitioned.map((item) => item.link_id));
@@ -3445,6 +3498,96 @@ resourceRouter.get('/topology/integrity', authenticate, requireRole('admin', 'us
         actual_port_count: Number(portsByDevice[item.id] || 0),
       },
     ));
+    cableFiberCoreCountMismatches.forEach((item) => addIssue(
+      'cable_fiber_core_count_mismatch',
+      'warning',
+      'device',
+      item.id,
+      'Cable fiber core inventory does not match capacity_core',
+      'The actual fiber_cores count differs from the cable device capacity_core.',
+      'Run fiber core sync or adjust capacity_core after confirming physical cable capacity.',
+      {
+        device_id: item.device_id,
+        device_name: item.device_name,
+        expected_capacity_core: item.capacity_core,
+        actual_fiber_core_count: Number(fiberCoresByCable[item.id] || 0),
+      },
+    ));
+    fiberCoresMissingTubeColor.forEach((item) => addIssue(
+      'fiber_core_missing_tube_color',
+      'warning',
+      'fiber_core',
+      item.id,
+      'Fiber core missing tube/color data',
+      'Fiber core does not have complete tube number and tube color metadata.',
+      'Run tray/tube/color backfill or resync the related cable device.',
+      {
+        cable_device_id: item.cable_device_id,
+        core_no: item.core_no,
+        tube_no: item.tube_no,
+        tube_color_name: item.tube_color_name,
+      },
+    ));
+    fiberCoresMissingCoreColor.forEach((item) => addIssue(
+      'fiber_core_missing_core_color',
+      'warning',
+      'fiber_core',
+      item.id,
+      'Fiber core missing core color data',
+      'Fiber core does not have complete core color metadata.',
+      'Run core color backfill or resync the related cable device.',
+      {
+        cable_device_id: item.cable_device_id,
+        core_no: item.core_no,
+        color_name: item.color_name,
+      },
+    ));
+    fiberCoresLossWarnings.forEach((item) => addIssue(
+      'fiber_core_loss_warning',
+      'warning',
+      'fiber_core',
+      item.id,
+      'Fiber core attenuation exceeds threshold',
+      'The last recorded loss is greater than the operational warning threshold.',
+      'Review the measurement evidence and schedule field recheck if needed.',
+      {
+        cable_device_id: item.cable_device_id,
+        core_no: item.core_no,
+        last_loss_db: item.last_loss_db,
+        last_loss_measured_at: item.last_loss_measured_at,
+        last_loss_method: item.last_loss_method,
+      },
+    ));
+    damagedActiveFiberCores.forEach((item) => addIssue(
+      'damaged_fiber_core_active_connection',
+      'critical',
+      'fiber_core',
+      item.id,
+      'Damaged fiber core is still connected',
+      'A fiber core marked damaged still has an active connection or endpoint mapping.',
+      'Move traffic to another core or clear the active mapping after approval.',
+      {
+        cable_device_id: item.cable_device_id,
+        core_no: item.core_no,
+        connection_id: item.connection_id,
+        from_port_id: item.from_port_id,
+        to_port_id: item.to_port_id,
+      },
+    ));
+    fiberCoresOutOfCableCapacity.forEach((item) => addIssue(
+      'fiber_core_out_of_cable_capacity',
+      'critical',
+      'fiber_core',
+      item.id,
+      'Fiber core number exceeds cable capacity',
+      'Fiber core core_no is greater than the related cable device capacity_core.',
+      'Adjust capacity_core or archive the over-capacity core after confirming the physical cable.',
+      {
+        cable_device_id: item.cable_device_id,
+        core_no: item.core_no,
+        capacity_core: cableCapacityById[item.cable_device_id],
+      },
+    ));
     pendingLegacyLinks.forEach((item) => addIssue(
       'pending_legacy_device_link',
       'info',
@@ -3483,6 +3626,12 @@ resourceRouter.get('/topology/integrity', authenticate, requireRole('admin', 'us
           odp_invalid_splitter_ratios: odpInvalidSplitterRatios.length,
           odp_splitter_total_port_mismatches: odpSplitterTotalPortMismatches.length,
           device_actual_port_count_mismatches: deviceActualPortMismatches.length,
+          cable_fiber_core_count_mismatches: cableFiberCoreCountMismatches.length,
+          fiber_cores_missing_tube_color: fiberCoresMissingTubeColor.length,
+          fiber_cores_missing_core_color: fiberCoresMissingCoreColor.length,
+          fiber_cores_loss_warnings: fiberCoresLossWarnings.length,
+          damaged_active_fiber_cores: damagedActiveFiberCores.length,
+          fiber_cores_out_of_cable_capacity: fiberCoresOutOfCableCapacity.length,
           pending_legacy_device_links: pendingLegacyLinks.length,
         },
         issue_summary: issueSummary,
@@ -3552,6 +3701,45 @@ resourceRouter.get('/topology/integrity', authenticate, requireRole('admin', 'us
             device_type_key: item.device_type_key,
             expected_total_ports: item.total_ports,
             actual_port_count: Number(portsByDevice[item.id] || 0),
+          })),
+          cable_fiber_core_count_mismatches: cableFiberCoreCountMismatches.slice(0, 25).map((item) => ({
+            id: item.id,
+            device_id: item.device_id,
+            device_name: item.device_name,
+            expected_capacity_core: item.capacity_core,
+            actual_fiber_core_count: Number(fiberCoresByCable[item.id] || 0),
+          })),
+          fiber_cores_missing_tube_color: fiberCoresMissingTubeColor.slice(0, 25).map((item) => ({
+            id: item.id,
+            cable_device_id: item.cable_device_id,
+            core_no: item.core_no,
+            tube_no: item.tube_no,
+            tube_color_name: item.tube_color_name,
+          })),
+          fiber_cores_missing_core_color: fiberCoresMissingCoreColor.slice(0, 25).map((item) => ({
+            id: item.id,
+            cable_device_id: item.cable_device_id,
+            core_no: item.core_no,
+            color_name: item.color_name,
+          })),
+          fiber_cores_loss_warnings: fiberCoresLossWarnings.slice(0, 25).map((item) => ({
+            id: item.id,
+            cable_device_id: item.cable_device_id,
+            core_no: item.core_no,
+            last_loss_db: item.last_loss_db,
+            last_loss_measured_at: item.last_loss_measured_at,
+          })),
+          damaged_active_fiber_cores: damagedActiveFiberCores.slice(0, 25).map((item) => ({
+            id: item.id,
+            cable_device_id: item.cable_device_id,
+            core_no: item.core_no,
+            connection_id: item.connection_id,
+          })),
+          fiber_cores_out_of_cable_capacity: fiberCoresOutOfCableCapacity.slice(0, 25).map((item) => ({
+            id: item.id,
+            cable_device_id: item.cable_device_id,
+            core_no: item.core_no,
+            capacity_core: cableCapacityById[item.cable_device_id],
           })),
           pending_legacy_device_links: pendingLegacyLinks.slice(0, 25).map((item) => ({
             id: item.id,
@@ -3937,7 +4125,7 @@ resourceRouter.get('/topology/trace', authenticate, requireRole('admin', 'user_r
       const key = item.connection_id;
       if (!key) return acc;
       if (!acc[key]) {
-        acc[key] = { total: 0, used: 0, statuses: {}, colors: {} };
+        acc[key] = { total: 0, used: 0, statuses: {}, colors: {}, tube_colors: {}, loss_warnings: 0 };
       }
       acc[key].total += 1;
       if (item.status === 'used') acc[key].used += 1;
@@ -3945,6 +4133,10 @@ resourceRouter.get('/topology/trace', authenticate, requireRole('admin', 'user_r
       if (item.color_name) {
         acc[key].colors[item.color_name] = (acc[key].colors[item.color_name] || 0) + 1;
       }
+      if (item.tube_color_name) {
+        acc[key].tube_colors[item.tube_color_name] = (acc[key].tube_colors[item.tube_color_name] || 0) + 1;
+      }
+      if (Number(item.last_loss_db) > 0.2) acc[key].loss_warnings += 1;
       return acc;
     }, {});
 
@@ -3964,7 +4156,7 @@ resourceRouter.get('/topology/trace', authenticate, requireRole('admin', 'user_r
         route,
         cable_device: cableDevice,
         labels: buildPortConnectionLabel(edge, fromPort ? { ...fromPort, device: fromDevice } : null, toPort ? { ...toPort, device: toDevice } : null, cableDevice, route),
-        fiber_cores: fiberByConnection[edge.id] || { total: 0, used: 0, statuses: {}, colors: {} },
+        fiber_cores: fiberByConnection[edge.id] || { total: 0, used: 0, statuses: {}, colors: {}, tube_colors: {}, loss_warnings: 0 },
       };
     });
 
