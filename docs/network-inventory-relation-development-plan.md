@@ -791,7 +791,7 @@ Todo:
 - [x] Device detail menampilkan port list ringkas.
 - [x] Device detail menampilkan Project dan QR panel generik.
 - [x] Drawer port detail menampilkan connection dan assignment.
-- [ ] UI create connection dari port A ke port B.
+- [x] UI create connection dari port A ke port B.
 - [x] UI trace topology dari detail device.
 - [ ] UI occupancy per ODP/ODC/OLT.
 - [x] UI integrity report.
@@ -820,6 +820,9 @@ Catatan implementasi 2026-06-17:
 - Detail device membaca topology summary backend dan menampilkan readiness port, connection, core summary, dan fiber core.
 - Topology workspace memiliki read-only cable core matrix dasar dengan warna tube/core, status occupancy, dan indikator loss warning.
 - Topology workspace memiliki impact summary berbasis trace direction untuk estimasi device/ODP/ONT, connection, core link, dan warning loss terdampak.
+- Topology workspace memiliki Connection Wizard dengan preview port-to-port, region/cable/core context, dan guard input sebelum create connection.
+- Topology workspace mulai mendukung lifecycle connection dari device awal: lihat existing connection, edit connection ke wizard, dan archive/delete connection lewat endpoint resource yang sama.
+- Detail device memiliki entry point `Create Connection` yang membuka Topology Workspace langsung pada Connection Wizard dengan start device terisi.
 - Splice Matrix operasional penuh masih belum selesai karena mapping input cable/core ke output cable/core atau splitter port perlu workflow tersendiri.
 
 ---
