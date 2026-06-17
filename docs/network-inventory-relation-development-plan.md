@@ -796,11 +796,11 @@ Todo:
 - [ ] UI occupancy per ODP/ODC/OLT.
 - [x] UI integrity report.
 - [ ] UI Topology Management menampilkan relasi device, port, core, route, dan customer/ONT assignment.
-- [ ] UI Core Management menampilkan matrix tray/tube/core color.
+- [x] UI Core Management menampilkan matrix tray/tube/core color.
 - [ ] UI Splice Matrix menampilkan input cable/core dan output cable/core atau splitter port.
-- [ ] UI core occupancy menampilkan status available/used/reserved/damaged/inactive.
-- [ ] UI attenuation log menampilkan loss per core/splice bila data tersedia.
-- [ ] UI impact analysis menampilkan ODP/customer terdampak dari fiber cut.
+- [x] UI core occupancy menampilkan status available/used/reserved/damaged/inactive.
+- [x] UI attenuation log menampilkan loss per core/splice bila data tersedia.
+- [x] UI impact analysis menampilkan ODP/customer terdampak dari fiber cut.
 - [ ] As-Built Documents diarahkan menjadi output/export dari data topology yang approved.
 - [ ] Semua komponen memakai Relation-Ready Rendering.
 - [ ] Komponen form/tabs/drawer/select/date picker memakai shadcn UI bila tersedia.
@@ -814,6 +814,13 @@ Checker:
 - [ ] Mutasi adminregion masuk approval.
 - [ ] Superadmin bisa review before/after topology.
 - [ ] Nama halaman/menu tidak membingungkan antara topology editor dan dokumen As-Built.
+
+Catatan implementasi 2026-06-17:
+
+- Detail device membaca topology summary backend dan menampilkan readiness port, connection, core summary, dan fiber core.
+- Topology workspace memiliki read-only cable core matrix dasar dengan warna tube/core, status occupancy, dan indikator loss warning.
+- Topology workspace memiliki impact summary berbasis trace direction untuk estimasi device/ODP/ONT, connection, core link, dan warning loss terdampak.
+- Splice Matrix operasional penuh masih belum selesai karena mapping input cable/core ke output cable/core atau splitter port perlu workflow tersendiri.
 
 ---
 
