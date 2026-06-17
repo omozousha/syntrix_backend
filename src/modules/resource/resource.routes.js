@@ -554,12 +554,99 @@ async function loadDevicesByIds(ids) {
         device_type_key
         region_id
         pop_id
+        project_id
         status
+        splitter_ratio
+        total_ports
+        used_ports
+        capacity_core
+        used_core
       }
     }
   `;
 
   const data = await executeHasura(query, { ids });
+  return data.items || [];
+}
+
+async function loadCoreManagementByDeviceId(deviceId, limit = 100) {
+  const query = `
+    query LoadCoreManagementByDeviceId($deviceId: uuid!, $limit: Int!) {
+      items: core_management(
+        where: {
+          _or: [
+            { cable_device_id: { _eq: $deviceId } }
+            { from_device_id: { _eq: $deviceId } }
+            { to_device_id: { _eq: $deviceId } }
+          ]
+        }
+        limit: $limit
+        order_by: [{ updated_at: desc }]
+      ) {
+        id
+        core_id
+        core_code
+        cable_device_id
+        route_id
+        project_id
+        region_id
+        pop_id
+        from_device_id
+        to_device_id
+        tray_no
+        tube_no
+        core_no_start
+        core_no_end
+        core_count
+        used_count
+        reserved_count
+        status
+        splice_info
+        notes
+        tags
+        created_at
+        updated_at
+      }
+    }
+  `;
+  const data = await executeHasura(query, { deviceId, limit });
+  return data.items || [];
+}
+
+async function loadFiberCoresByCableDeviceIds(cableDeviceIds, limit = 500) {
+  if (!cableDeviceIds.length) return [];
+  const query = `
+    query LoadFiberCoresByCableDeviceIds($cableDeviceIds: [uuid!]!, $limit: Int!) {
+      items: fiber_cores(
+        where: { cable_device_id: { _in: $cableDeviceIds } }
+        limit: $limit
+        order_by: [{ cable_device_id: asc }, { tube_no: asc_nulls_last }, { core_no: asc }]
+      ) {
+        id
+        core_id
+        region_id
+        cable_device_id
+        tray_no
+        tube_no
+        tube_color_name
+        tube_color_hex
+        core_no
+        status
+        from_port_id
+        to_port_id
+        connection_id
+        color_name
+        color_hex
+        color_standard
+        cores_per_tube
+        last_loss_db
+        last_loss_measured_at
+        last_loss_method
+        health_notes
+      }
+    }
+  `;
+  const data = await executeHasura(query, { cableDeviceIds, limit });
   return data.items || [];
 }
 
@@ -906,6 +993,107 @@ async function enrichPortConnections(connections) {
   });
 }
 
+async function enrichCoreManagementRows(rows) {
+  if (!rows.length) return [];
+
+  const deviceIds = Array.from(
+    new Set(
+      rows
+        .flatMap((item) => [item.cable_device_id, item.from_device_id, item.to_device_id])
+        .filter(Boolean),
+    ),
+  );
+  const devices = await loadDevicesByIds(deviceIds);
+  const deviceMap = new Map(devices.map((device) => [device.id, device]));
+
+  const routeIds = Array.from(new Set(rows.map((item) => item.route_id).filter(Boolean)));
+  const routes = await loadRoutesByIds(routeIds);
+  const routeMap = new Map(routes.map((route) => [route.id, route]));
+
+  return rows.map((item) => {
+    const cableDevice = item.cable_device_id ? deviceMap.get(item.cable_device_id) || null : null;
+    const fromDevice = item.from_device_id ? deviceMap.get(item.from_device_id) || null : null;
+    const toDevice = item.to_device_id ? deviceMap.get(item.to_device_id) || null : null;
+    const route = item.route_id ? routeMap.get(item.route_id) || null : null;
+    const coreRange = item.core_no_start && item.core_no_end
+      ? `${item.core_no_start}-${item.core_no_end}`
+      : null;
+
+    return {
+      ...item,
+      cable_device: cableDevice,
+      from_device: fromDevice,
+      to_device: toDevice,
+      route,
+      labels: {
+        title: [
+          cableDevice?.device_name || cableDevice?.device_id || 'Cable',
+          coreRange ? `Core ${coreRange}` : null,
+        ].filter(Boolean).join(' / '),
+        cable: cableDevice?.device_name || cableDevice?.device_id || null,
+        from: fromDevice?.device_name || fromDevice?.device_id || null,
+        to: toDevice?.device_name || toDevice?.device_id || null,
+        route: route?.route_name || route?.route_code || route?.route_id || null,
+        core_range: coreRange,
+      },
+    };
+  });
+}
+
+function buildPortSummary(ports) {
+  const activePorts = ports.filter((port) => port.is_active !== false && !port.deleted_at);
+  const statusCounts = countBy(activePorts, 'status');
+  return {
+    total: ports.length,
+    active: activePorts.length,
+    inactive_or_deleted: ports.length - activePorts.length,
+    by_status: statusCounts,
+    assigned_customers: activePorts.filter((port) => port.customer_id).length,
+    assigned_onts: activePorts.filter((port) => port.ont_device_id).length,
+    used_capacity: sumNumber(activePorts, 'core_used'),
+    total_capacity: sumNumber(activePorts, 'core_capacity'),
+  };
+}
+
+function buildConnectionSummary(connections) {
+  return {
+    total: connections.length,
+    by_status: countBy(connections, 'status'),
+    by_type: countBy(connections, 'connection_type'),
+    with_cable: connections.filter((item) => item.cable_device_id).length,
+    with_core_range: connections.filter((item) => item.core_start != null && item.core_end != null).length,
+  };
+}
+
+function buildFiberCoreSummary(fiberCores) {
+  return {
+    total: fiberCores.length,
+    by_status: countBy(fiberCores, 'status'),
+    by_tube_color: fiberCores.reduce((acc, item) => {
+      if (!item.tube_color_name) return acc;
+      acc[item.tube_color_name] = (acc[item.tube_color_name] || 0) + 1;
+      return acc;
+    }, {}),
+    by_core_color: fiberCores.reduce((acc, item) => {
+      if (!item.color_name) return acc;
+      acc[item.color_name] = (acc[item.color_name] || 0) + 1;
+      return acc;
+    }, {}),
+    loss_warnings: fiberCores.filter((item) => Number(item.last_loss_db) > 0.2).length,
+    damaged: fiberCores.filter((item) => String(item.status || '').toLowerCase() === 'damaged').length,
+  };
+}
+
+function buildCoreManagementSummary(rows) {
+  return {
+    total: rows.length,
+    by_status: countBy(rows, 'status'),
+    core_count: sumNumber(rows, 'core_count'),
+    used_count: sumNumber(rows, 'used_count'),
+    reserved_count: sumNumber(rows, 'reserved_count'),
+  };
+}
+
 async function submitDevicePortAssignmentRequest({ req, port, changes, operation, context }) {
   const payloadSnapshot = {
     source: 'adminregion-update-resource',
@@ -1225,19 +1413,40 @@ async function loadPortsByDeviceIds(deviceIds) {
         region_id
         port_index
         port_label
+        port_id
         port_type
+        direction
         status
+        speed_profile
         core_capacity
         core_used
+        splitter_ratio
         customer_id
         ont_device_id
+        occupied_at
         is_active
         deleted_at
+        notes
       }
     }
   `;
   const data = await executeHasura(query, { deviceIds });
   return data.items || [];
+}
+
+function countBy(items, key) {
+  return items.reduce((acc, item) => {
+    const value = String(item?.[key] || 'unknown').toLowerCase();
+    acc[value] = (acc[value] || 0) + 1;
+    return acc;
+  }, {});
+}
+
+function sumNumber(items, key) {
+  return items.reduce((total, item) => {
+    const value = Number(item?.[key]);
+    return Number.isFinite(value) ? total + value : total;
+  }, 0);
 }
 
 async function loadPortsByRegion({ allowedRegionIds = [], requestedRegionId = null }) {
@@ -3175,6 +3384,97 @@ resourceRouter.get('/topology/port-connections/:id', authenticate, requireRole('
     }
 
     return sendSuccess(res, item, 'Port connection fetched successfully');
+  } catch (error) {
+    return next(error);
+  }
+});
+
+resourceRouter.get('/topology/devices/:id/summary', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const device = await loadDeviceById(req.params.id);
+    if (!device) {
+      throw createHttpError(404, 'Device not found');
+    }
+
+    if (req.auth.role === 'user_region') {
+      if (!req.auth.regions.length) {
+        throw createHttpError(403, 'This regional user does not have any assigned region');
+      }
+      if (!req.auth.regions.includes(device.region_id)) {
+        throw createHttpError(403, 'You do not have access to this device region');
+      }
+    }
+
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 200);
+    const ports = await loadPortsByDeviceIds([device.id]);
+    const portIds = ports.map((port) => port.id).filter(Boolean);
+    const connectionConditions = [
+      { cable_device_id: { _eq: device.id } },
+    ];
+    if (portIds.length) {
+      connectionConditions.push(
+        { from_port_id: { _in: portIds } },
+        { to_port_id: { _in: portIds } },
+      );
+    }
+
+    const connectionFilters = [
+      { region_id: { _eq: device.region_id } },
+      { _or: connectionConditions },
+      {
+        _or: [
+          { status: { _neq: 'inactive' } },
+          { status: { _is_null: true } },
+        ],
+      },
+    ];
+    const connections = await loadPortConnectionsByWhere({ _and: connectionFilters }, limit);
+    const enrichedConnections = await enrichPortConnections(connections);
+    const coreManagementRows = await loadCoreManagementByDeviceId(device.id, limit);
+    const enrichedCoreManagement = await enrichCoreManagementRows(coreManagementRows);
+
+    const cableDeviceIds = Array.from(new Set([
+      String(device.device_type_key || '').toUpperCase() === 'CABLE' ? device.id : null,
+      ...connections.map((item) => item.cable_device_id),
+      ...coreManagementRows.map((item) => item.cable_device_id),
+    ].filter(Boolean)));
+    const fiberCores = await loadFiberCoresByCableDeviceIds(cableDeviceIds, Math.min(limit * 10, 1000));
+
+    const payload = {
+      scope: {
+        role: req.auth.role,
+        region_id: device.region_id,
+        device_id: device.id,
+        limit,
+      },
+      device,
+      ports: {
+        summary: buildPortSummary(ports),
+        items: ports,
+      },
+      connections: {
+        summary: buildConnectionSummary(connections),
+        items: enrichedConnections,
+      },
+      core_management: {
+        summary: buildCoreManagementSummary(coreManagementRows),
+        items: enrichedCoreManagement,
+      },
+      fiber_cores: {
+        summary: buildFiberCoreSummary(fiberCores),
+        cable_device_ids: cableDeviceIds,
+        items: fiberCores,
+      },
+      readiness: {
+        has_ports: ports.length > 0,
+        has_connections: connections.length > 0,
+        has_core_summary: coreManagementRows.length > 0,
+        has_fiber_core_inventory: fiberCores.length > 0,
+        trace_endpoint: `/api/v1/devices/${device.id}/trace`,
+      },
+    };
+
+    return sendSuccess(res, payload, 'Device topology summary fetched successfully');
   } catch (error) {
     return next(error);
   }
