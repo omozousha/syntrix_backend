@@ -17,7 +17,7 @@ Membangun source of truth relasi antar asset jaringan yang:
 - menjadikan project sebagai relasi bisnis utama setiap device;
 - mendukung trace upstream/downstream dari customer/ONT sampai POP;
 - menjaga akurasi port, core, kabel, route, dan customer assignment;
-- menjadikan Topology/Core Management sebagai sumber visual relasi jaringan;
+- menjadikan Topology Management sebagai sumber visual relasi jaringan;
 - menjadikan As-Built Documents sebagai output/dokumentasi final dari topology yang sudah approved;
 - tetap mengikuti approval flow Syntrix;
 - bisa dipakai konsisten oleh backend, frontend, dan Syntrix-One;
@@ -130,10 +130,10 @@ As-Built Documents tidak boleh menjadi source of truth relasi jaringan.
 Keputusan:
 
 - Source of truth tetap `devices`, `device_ports`, `port_connections`, `network_routes`, dan core data.
-- Halaman relasi teknis sebaiknya berkembang menjadi `Topology Management` atau `Topology & Core Management`.
+- Halaman relasi teknis memakai nama final `Topology Management`.
 - As-Built Documents menjadi output/dokumen final dari topology yang sudah approved.
 - Nama halaman `As-Built Documents` bisa dipertahankan sementara, tetapi arah produk perlu dipisahkan:
-  - `Topology Management`: input, koreksi, trace, dan visual relasi.
+  - `Topology Management`: input, koreksi, trace, visual relasi, dan akses ke Core Management.
   - `As-Built Documents`: arsip, export, dan dokumentasi final.
 
 Tujuan:
@@ -205,7 +205,7 @@ Aturan target:
 - Provision fiber core harus mengisi `core_no`, `core_color`, `tube_no`, `tube_color`, dan optional `tray_no`.
 - Default `cores_per_tube` adalah 12, tetapi harus bisa dikonfigurasi per cable profile bila nanti ada kabel 6-core tube atau struktur vendor-specific.
 - Integrity report harus bisa mendeteksi core tanpa warna, tube tanpa warna, core di luar kapasitas kabel, dan overlap core connection.
-- Topology/Core Management harus bisa menampilkan matrix tray/tube/core agar teknisi tidak hanya melihat list angka.
+- Topology Management harus bisa menampilkan matrix tray/tube/core agar teknisi tidak hanya melihat list angka.
 
 Tujuan:
 
@@ -305,7 +305,7 @@ Gap utama:
 
 - QR detail masih perlu menjadi generic device capability, bukan hanya ODP.
 - Project relation perlu konsisten di create/edit/detail/request/approval/filter.
-- Fungsi As-Built Documents perlu diposisikan ulang sebagai output dari Topology/Core Management.
+- Fungsi As-Built Documents perlu diposisikan ulang sebagai output dari Topology Management.
 - Maps belum diimplementasikan dan sebaiknya menjadi fase akhir.
 - Tray/tube/core color coding belum lengkap; saat ini warna core ada, tetapi tube/tray belum menjadi model operasional per fiber core.
 - Splice Matrix, core occupancy, health tracker, attenuation log, dan fiber-cut impact analysis belum tersedia sebagai workflow operasional.
@@ -331,7 +331,7 @@ Gap utama:
 - customer/ONT assignment ke port;
 - trace upstream/downstream;
 - topology integrity report;
-- Topology/Core Management sebagai visual operasional relasi perangkat;
+- Topology Management sebagai visual operasional relasi perangkat;
 - As-Built Documents sebagai output/export/arsip dari topology approved;
 - frontend views untuk topology/port/connection;
 - Syntrix-One read-only topology summary sesuai role;
@@ -581,7 +581,7 @@ Todo:
 - [ ] Audit `devices`, `device_ports`, `port_connections`, `device_links`, `network_routes`, `fiber_cores`, `core_management`.
 - [ ] Audit QR label component agar bisa dipakai semua device type.
 - [ ] Audit penggunaan `project_id` di create/edit/detail/request/approval/filter.
-- [ ] Tetapkan keputusan nama produk: `Topology Management` sebagai pusat relasi, `As-Built Documents` sebagai output.
+- [x] Tetapkan keputusan nama produk: `Topology Management` sebagai pusat relasi, `As-Built Documents` sebagai output.
 - [ ] Pastikan semua FK dan index yang dibutuhkan trace sudah ada.
 - [ ] Pastikan `device_ports` mendukung customer/ONT assignment.
 - [ ] Pastikan `port_connections` mendukung route, cable, core range, status.
@@ -793,15 +793,15 @@ Todo:
 - [x] Drawer port detail menampilkan connection dan assignment.
 - [x] UI create connection dari port A ke port B.
 - [x] UI trace topology dari detail device.
-- [ ] UI occupancy per ODP/ODC/OLT.
+- [x] UI occupancy per ODP/ODC/OLT.
 - [x] UI integrity report.
 - [x] UI Topology Management menampilkan relasi device, port, core, route, dan customer/ONT assignment.
 - [x] UI Core Management menampilkan matrix tray/tube/core color.
-- [ ] UI Splice Matrix menampilkan input cable/core dan output cable/core atau splitter port.
+- [x] UI Splice Matrix menampilkan input cable/core dan output cable/core atau splitter port.
 - [x] UI core occupancy menampilkan status available/used/reserved/damaged/inactive.
 - [x] UI attenuation log menampilkan loss per core/splice bila data tersedia.
 - [x] UI impact analysis menampilkan ODP/customer terdampak dari fiber cut.
-- [ ] As-Built Documents diarahkan menjadi output/export dari data topology yang approved.
+- [x] As-Built Documents diarahkan menjadi output/export dari data topology yang approved.
 - [ ] Semua komponen memakai Relation-Ready Rendering.
 - [ ] Komponen form/tabs/drawer/select/date picker memakai shadcn UI bila tersedia.
 - [ ] Responsive desktop/tablet/mobile.
@@ -810,10 +810,10 @@ Checker:
 
 - [ ] Tidak ada layout overflow di mobile.
 - [ ] Tidak ada UUID flash saat membuka detail.
-- [ ] Adminregion dan superadmin melihat action sesuai role.
+- [x] Adminregion dan superadmin melihat action sesuai role.
 - [ ] Mutasi adminregion masuk approval.
 - [ ] Superadmin bisa review before/after topology.
-- [ ] Nama halaman/menu tidak membingungkan antara topology editor dan dokumen As-Built.
+- [x] Nama halaman/menu tidak membingungkan antara topology editor dan dokumen As-Built.
 
 Catatan implementasi 2026-06-17:
 
@@ -823,8 +823,16 @@ Catatan implementasi 2026-06-17:
 - Topology workspace memiliki Connection Wizard dengan preview port-to-port, region/cable/core context, dan guard input sebelum create connection.
 - Topology workspace mulai mendukung lifecycle connection dari device awal: lihat existing connection, edit connection ke wizard, dan archive/delete connection lewat endpoint resource yang sama.
 - Topology workspace memiliki Relation Overview yang menampilkan endpoint device, occupancy port, route, cable, core status, dan customer/ONT assignment dari context connection yang sedang dipilih.
+- Topology workspace memiliki panel ODP/ODC/OLT Occupancy berbasis endpoint device yang sedang dipilih, termasuk total port, used, idle, assignment, dan persentase occupancy.
+- Topology workspace memiliki Splice Matrix read-only yang menampilkan connection dengan core range, warna core, input/from endpoint, dan output/to endpoint sebagai dasar workflow splice matrix penuh.
+- As-Built Documents memiliki entry point ke As-Built Workspace sebagai generator output dari topology approved dan mendukung filter context project, route, start device, dan end device.
+- As-Built Documents memakai mobile card list dan desktop table agar daftar dokumen tetap terbaca di layar kecil.
+- Filter context As-Built Documents memakai relation-ready combobox untuk project, route, start device, dan end device, bukan input UUID mentah.
+- Topology Trace dan Device Port Provisioning memakai relation-ready device combobox sebagai input utama, dengan technical ID pendek hanya sebagai fallback context.
+- Topology Trace Panel memakai mobile card untuk node/edge detail, menampilkan label device bila tersedia, dan tidak menampilkan raw JSON secara default agar table/detail tidak overflow di layar kecil.
 - Detail device memiliki entry point `Create Connection` yang membuka Topology Workspace langsung pada Connection Wizard dengan start device terisi.
-- Splice Matrix operasional penuh masih belum selesai karena mapping input cable/core ke output cable/core atau splitter port perlu workflow tersendiri.
+- Connection Wizard dan Device Port Provisioning menampilkan action sesuai role: Superadmin direct apply, Admin Region submit approval request, dan Validator/read-only tidak bisa mutasi topology.
+- Splice Matrix operasional penuh seperti drag-and-drop mapping dan split ratio editor masih menjadi pekerjaan lanjutan setelah matrix read-only stabil.
 
 ---
 
@@ -835,20 +843,34 @@ Menjadikan As-Built Documents sebagai dokumen/export/snapshot dari topology appr
 
 Todo:
 
-- [ ] Tentukan apakah menu tetap bernama `As-Built Documents` atau dipindah di bawah `Topology Management`.
-- [ ] Generate As-Built berdasarkan project, route, POP, atau selected device path.
-- [ ] Simpan snapshot metadata: project, region, route, generated_by, generated_at.
-- [ ] Tampilkan visual topology/core summary yang read-only.
-- [ ] Tampilkan Splice Matrix dan color-coded core path pada As-Built jika data tersedia.
-- [ ] Tambahkan export PDF/CSV/JSON bila dibutuhkan.
-- [ ] Pastikan dokumen hanya memakai data approved.
+- [x] Tentukan apakah menu tetap bernama `As-Built Documents` atau dipindah di bawah `Topology Management`.
+- [x] Generate As-Built berdasarkan project, route, POP, atau selected device path.
+- [x] Simpan snapshot metadata: project, region, route, generated_by, generated_at.
+- [x] Tampilkan visual topology/core summary yang read-only.
+- [x] Tampilkan Splice Matrix dan color-coded core path pada As-Built jika data tersedia.
+- [x] Tambahkan export PDF/CSV/JSON bila dibutuhkan.
+- [x] Pastikan dokumen hanya memakai data approved.
 
 Checker:
 
-- [ ] As-Built per project bisa menunjukkan device dan connection yang relevan.
-- [ ] As-Built tidak menjadi tempat input relasi utama.
+- [x] As-Built per project bisa menunjukkan device dan connection yang relevan.
+- [x] As-Built tidak menjadi tempat input relasi utama.
 - [ ] Perubahan topology setelah dokumen dibuat tidak mengubah snapshot lama kecuali regenerate.
-- [ ] Role adminregion hanya bisa melihat scope regionnya.
+- [x] Role adminregion hanya bisa melihat scope regionnya.
+
+Catatan implementasi 2026-06-18:
+
+- As-Built Workspace menyimpan attachment plus metadata snapshot seperti region, project, route, start/end device, trace request, trace summary, export metadata, prepared/checked/approved, dan generated_at.
+- Export SVG/PNG/PDF dan Publish Revision dikunci jika trace tidak menemukan approved path, sehingga dokumen tidak dibuat dari topology kosong atau tidak valid.
+- Header workspace dan hasil export memakai label device dari trace bila tersedia, bukan UUID mentah.
+- As-Built Workspace menampilkan `Core Path & Splice Summary` read-only dari trace approved: endpoint, port label, status, core range, fiber count, used core, dan badge warna core jika data warna tersedia.
+- As-Built Workspace mendukung export SVG/PNG/PDF/JSON sebagai dokumen tersimpan. CSV tersedia sebagai download lokal untuk core path karena schema dokumen saat ini hanya mengizinkan `svg`, `png`, `pdf`, dan `json`.
+- As-Built Documents menampilkan scope region untuk role non-superadmin dan mengunci filter region ke `default_region_id` bila tersedia.
+- Copy As-Built Documents menegaskan bahwa input/edit relasi tetap dilakukan di Topology Workspace, sedangkan As-Built hanya snapshot/export.
+- As-Built Workspace membawa context `project_id`, `route_id`, region, start device, dan end device ke link Topology/Documents, serta menampilkan panel Project/Route Context saat workspace dibuka dari filter project atau route.
+- Publish Revision memakai `revisionCode` aktif, bukan hardcode `v1`, agar snapshot dan history revision konsisten.
+- As-Built Workspace menampilkan `Relevant Topology` dari graph trace untuk context project/route: jumlah device, connection, route, cable, distribusi device type, dan ringkasan connection route/cable/core yang relevan.
+- Keputusan naming final: `Topology Management` menjadi menu/pusat relasi jaringan, sedangkan `As-Built Documents` tetap menjadi menu output/snapshot dokumen dari topology approved.
 
 ---
 
@@ -1086,7 +1108,7 @@ Urutan terbaik:
 2. Jadikan QR dan Project sebagai identitas dasar semua device.
 3. Stabilkan port dan connection.
 4. Pastikan approval-safe.
-5. Baru tampilkan trace dan Topology/Core Management.
+5. Baru tampilkan trace dan Topology Management.
 6. Jadikan As-Built Documents sebagai output dari topology approved.
 7. Setelah data sehat, lanjut ke link budget dan map/GIS yang lebih kaya.
 
