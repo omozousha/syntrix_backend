@@ -795,7 +795,7 @@ Todo:
 - [x] UI trace topology dari detail device.
 - [ ] UI occupancy per ODP/ODC/OLT.
 - [x] UI integrity report.
-- [ ] UI Topology Management menampilkan relasi device, port, core, route, dan customer/ONT assignment.
+- [x] UI Topology Management menampilkan relasi device, port, core, route, dan customer/ONT assignment.
 - [x] UI Core Management menampilkan matrix tray/tube/core color.
 - [ ] UI Splice Matrix menampilkan input cable/core dan output cable/core atau splitter port.
 - [x] UI core occupancy menampilkan status available/used/reserved/damaged/inactive.
@@ -822,6 +822,7 @@ Catatan implementasi 2026-06-17:
 - Topology workspace memiliki impact summary berbasis trace direction untuk estimasi device/ODP/ONT, connection, core link, dan warning loss terdampak.
 - Topology workspace memiliki Connection Wizard dengan preview port-to-port, region/cable/core context, dan guard input sebelum create connection.
 - Topology workspace mulai mendukung lifecycle connection dari device awal: lihat existing connection, edit connection ke wizard, dan archive/delete connection lewat endpoint resource yang sama.
+- Topology workspace memiliki Relation Overview yang menampilkan endpoint device, occupancy port, route, cable, core status, dan customer/ONT assignment dari context connection yang sedang dipilih.
 - Detail device memiliki entry point `Create Connection` yang membuka Topology Workspace langsung pada Connection Wizard dengan start device terisi.
 - Splice Matrix operasional penuh masih belum selesai karena mapping input cable/core ke output cable/core atau splitter port perlu workflow tersendiri.
 
