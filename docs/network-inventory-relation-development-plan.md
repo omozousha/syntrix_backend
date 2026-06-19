@@ -855,7 +855,7 @@ Checker:
 
 - [x] As-Built per project bisa menunjukkan device dan connection yang relevan.
 - [x] As-Built tidak menjadi tempat input relasi utama.
-- [ ] Perubahan topology setelah dokumen dibuat tidak mengubah snapshot lama kecuali regenerate.
+- [x] Perubahan topology setelah dokumen dibuat tidak mengubah snapshot lama kecuali regenerate.
 - [x] Role adminregion hanya bisa melihat scope regionnya.
 
 Catatan implementasi 2026-06-18:
@@ -871,6 +871,7 @@ Catatan implementasi 2026-06-18:
 - Publish Revision memakai `revisionCode` aktif, bukan hardcode `v1`, agar snapshot dan history revision konsisten.
 - As-Built Workspace menampilkan `Relevant Topology` dari graph trace untuk context project/route: jumlah device, connection, route, cable, distribusi device type, dan ringkasan connection route/cable/core yang relevan.
 - Keputusan naming final: `Topology Management` menjadi menu/pusat relasi jaringan, sedangkan `As-Built Documents` tetap menjadi menu output/snapshot dokumen dari topology approved.
+- As-Built Documents menampilkan `Snapshot Policy` dan action `Regenerate` per dokumen. Download tetap memakai attachment lama, sedangkan Regenerate membuka As-Built Workspace dengan context dokumen untuk membuat revision baru secara eksplisit.
 
 ---
 
@@ -881,21 +882,29 @@ Menyediakan data topology yang relevan untuk validator/mobile tanpa memberi akse
 
 Todo:
 
-- [ ] Detail semua device hasil QR menampilkan QR identity dan project context jika tersedia.
-- [ ] Detail ODP menampilkan upstream summary.
-- [ ] Detail ODP menampilkan port occupancy.
-- [ ] Detail ODP menampilkan customer count jika role boleh.
-- [ ] Detail ODP menampilkan validation history dan approved gallery.
-- [ ] Scanner QR tetap memblokir cross-region dan role non-validator.
-- [ ] Loading state konsisten saat memuat trace/detail.
-- [ ] Offline/error state jelas.
+- [x] Detail semua device hasil QR menampilkan QR identity dan project context jika tersedia.
+- [x] Detail ODP menampilkan upstream summary.
+- [x] Detail ODP menampilkan port occupancy.
+- [x] Detail ODP menampilkan customer count jika role boleh.
+- [x] Detail ODP menampilkan validation history dan approved gallery.
+- [x] Scanner QR tetap memblokir cross-region dan role non-validator.
+- [x] Loading state konsisten saat memuat trace/detail.
+- [x] Offline/error state jelas.
 
 Checker:
 
-- [ ] Validator hanya melihat scope region miliknya.
-- [ ] Adminregion/superadmin tidak diarahkan ke form validasi mobile.
-- [ ] Data approved di web dan mobile konsisten.
-- [ ] Tidak ada image/history kosong jika backend sudah punya data approved.
+- [x] Validator hanya melihat scope region miliknya.
+- [x] Adminregion/superadmin tidak diarahkan ke form validasi mobile.
+- [x] Data approved di web dan mobile konsisten.
+- [x] Tidak ada image/history kosong jika backend sudah punya data approved.
+
+Catatan implementasi 2026-06-19:
+
+- Syntrix-One detail device menampilkan section `QR Identity` untuk semua device: device type, inventory ID, device name, region, POP, dan project jika tersedia dari API.
+- QR scan untuk Adminregion/Superadmin membuka detail device read-only, bukan form validasi mobile. Validator tetap masuk flow validasi dengan guard region.
+- Syntrix-One detail ODP menampilkan `Topology Summary` read-only dari endpoint topology device summary: upstream connection, active ports, assigned customer, dan core summary.
+- Syntrix-One detail ODP memakai data approved/backend yang sama untuk validation request history, validation record history, device/gallery attachments, evidence attachments, port summary, dan topology summary.
+- Syntrix-One detail ODP menampilkan loading dan warning non-blocking jika sebagian data context/gallery gagal dimuat, sehingga UAT bisa membedakan data kosong dari kegagalan jaringan/API.
 
 ---
 
