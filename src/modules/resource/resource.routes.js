@@ -555,12 +555,17 @@ async function loadDevicesByIds(ids) {
         region_id
         pop_id
         project_id
+        tenant_id
         status
+        validation_status
+        longitude
+        latitude
         splitter_ratio
         total_ports
         used_ports
         capacity_core
         used_core
+        updated_at
       }
     }
   `;
@@ -888,6 +893,11 @@ async function loadRoutesByIds(routeIds) {
         region_id
         pop_id
         project_id
+        start_asset_id
+        end_asset_id
+        distance_meters
+        path_geojson
+        updated_at
       }
     }
   `;
@@ -1202,6 +1212,26 @@ async function loadCustomerById(customerId) {
   return data.item || null;
 }
 
+async function loadCustomersByIds(customerIds) {
+  if (!customerIds.length) return [];
+  const query = `
+    query LoadCustomersByIds($ids: [uuid!]!) {
+      items: customers(where: { id: { _in: $ids } }) {
+        id
+        customer_id
+        customer_number
+        customer_name
+        region_id
+        pop_id
+        project_id
+        status
+      }
+    }
+  `;
+  const data = await executeHasura(query, { ids: customerIds });
+  return data.items || [];
+}
+
 async function loadActivePortByCustomerId(customerId) {
   if (!customerId) return null;
   const query = `
@@ -1447,6 +1477,411 @@ function sumNumber(items, key) {
     const value = Number(item?.[key]);
     return Number.isFinite(value) ? total + value : total;
   }, 0);
+}
+
+function parseMapLimit(value, fallback, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.floor(parsed), max);
+}
+
+function toNumberOrNull(value) {
+  if (value == null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function hasGeoCoordinates(item) {
+  return toNumberOrNull(item?.longitude) != null && toNumberOrNull(item?.latitude) != null;
+}
+
+function hasRouteGeometry(route) {
+  const geometry = route?.path_geojson;
+  if (!geometry || typeof geometry !== 'object') return false;
+  if (Array.isArray(geometry)) return geometry.length > 0;
+  return Object.keys(geometry).length > 0;
+}
+
+function buildMapScopeWhere({ allowedRegionIds = [], requestedRegionId = null, projectId = null, popId = null }) {
+  const filters = [];
+  if (requestedRegionId) {
+    filters.push({ region_id: { _eq: requestedRegionId } });
+  } else if (allowedRegionIds.length) {
+    filters.push({ region_id: { _in: allowedRegionIds } });
+  }
+  if (projectId) filters.push({ project_id: { _eq: projectId } });
+  if (popId) filters.push({ pop_id: { _eq: popId } });
+  return filters;
+}
+
+async function loadMapDevices({
+  allowedRegionIds = [],
+  requestedRegionId = null,
+  projectId = null,
+  popId = null,
+  deviceTypeKey = null,
+  tenantId = null,
+  limit = 1000,
+}) {
+  const filters = [
+    { deleted_at: { _is_null: true } },
+    ...buildMapScopeWhere({ allowedRegionIds, requestedRegionId, projectId, popId }),
+  ];
+  if (deviceTypeKey) filters.push({ device_type_key: { _eq: deviceTypeKey } });
+  if (tenantId) filters.push({ tenant_id: { _eq: tenantId } });
+
+  const query = `
+    query LoadMapDevices($where: devices_bool_exp!, $limit: Int!) {
+      items: devices(where: $where, limit: $limit, order_by: [{ device_type_key: asc }, { device_name: asc }]) {
+        id
+        device_id
+        device_name
+        device_type_key
+        status
+        validation_status
+        longitude
+        latitude
+        region_id
+        pop_id
+        project_id
+        tenant_id
+        total_ports
+        used_ports
+        capacity_core
+        used_core
+        updated_at
+      }
+    }
+  `;
+  const data = await executeHasura(query, { where: { _and: filters }, limit });
+  return data.items || [];
+}
+
+async function loadMapRoutes({
+  allowedRegionIds = [],
+  requestedRegionId = null,
+  projectId = null,
+  popId = null,
+  limit = 500,
+}) {
+  const filters = [
+    ...buildMapScopeWhere({ allowedRegionIds, requestedRegionId, projectId, popId }),
+    {
+      _or: [
+        { status: { _neq: 'inactive' } },
+        { status: { _is_null: true } },
+      ],
+    },
+  ];
+
+  const query = `
+    query LoadMapRoutes($where: network_routes_bool_exp!, $limit: Int!) {
+      items: network_routes(where: $where, limit: $limit, order_by: [{ updated_at: desc }]) {
+        id
+        route_id
+        route_code
+        route_name
+        route_type
+        status
+        region_id
+        pop_id
+        project_id
+        start_asset_id
+        end_asset_id
+        distance_meters
+        path_geojson
+        updated_at
+      }
+    }
+  `;
+  const data = await executeHasura(query, { where: filters.length ? { _and: filters } : {}, limit });
+  return data.items || [];
+}
+
+async function loadMapPortConnections({
+  allowedRegionIds = [],
+  requestedRegionId = null,
+  limit = 1000,
+}) {
+  const filters = [
+    {
+      _or: [
+        { status: { _neq: 'inactive' } },
+        { status: { _is_null: true } },
+      ],
+    },
+    ...buildMapScopeWhere({ allowedRegionIds, requestedRegionId }),
+  ];
+  const query = `
+    query LoadMapPortConnections($where: port_connections_bool_exp!, $limit: Int!) {
+      items: port_connections(where: $where, limit: $limit, order_by: [{ updated_at: desc }]) {
+        id
+        connection_id
+        region_id
+        from_port_id
+        to_port_id
+        connection_type
+        status
+        route_id
+        cable_device_id
+        core_start
+        core_end
+        fiber_count
+        installed_at
+        updated_at
+      }
+    }
+  `;
+  const data = await executeHasura(query, { where: { _and: filters }, limit });
+  return data.items || [];
+}
+
+function buildMapDeviceItem(device) {
+  const totalPorts = Number(device.total_ports);
+  const usedPorts = Number(device.used_ports);
+  const portOccupancy = Number.isFinite(totalPorts) && totalPorts > 0 && Number.isFinite(usedPorts)
+    ? Math.round((usedPorts / totalPorts) * 1000) / 10
+    : null;
+  const totalCores = Number(device.capacity_core);
+  const usedCores = Number(device.used_core);
+  const coreOccupancy = Number.isFinite(totalCores) && totalCores > 0 && Number.isFinite(usedCores)
+    ? Math.round((usedCores / totalCores) * 1000) / 10
+    : null;
+  const validationStatus = String(device.validation_status || 'unvalidated').toLowerCase();
+  const deviceStatus = String(device.status || 'unknown').toLowerCase();
+  const markerStatus = validationStatus === 'invalid' || deviceStatus === 'inactive'
+    ? 'critical'
+    : validationStatus === 'warning'
+      ? 'warning'
+      : validationStatus === 'valid'
+        ? 'healthy'
+        : 'unvalidated';
+
+  return {
+    id: device.id,
+    device_id: device.device_id,
+    device_name: device.device_name,
+    device_type_key: device.device_type_key,
+    status: device.status,
+    validation_status: device.validation_status,
+    region_id: device.region_id,
+    pop_id: device.pop_id,
+    project_id: device.project_id,
+    tenant_id: device.tenant_id,
+    longitude: toNumberOrNull(device.longitude),
+    latitude: toNumberOrNull(device.latitude),
+    has_coordinates: hasGeoCoordinates(device),
+    marker_status: markerStatus,
+    occupancy: {
+      total_ports: Number.isFinite(totalPorts) ? totalPorts : null,
+      used_ports: Number.isFinite(usedPorts) ? usedPorts : null,
+      port_percent: portOccupancy,
+      capacity_core: Number.isFinite(totalCores) ? totalCores : null,
+      used_core: Number.isFinite(usedCores) ? usedCores : null,
+      core_percent: coreOccupancy,
+    },
+    updated_at: device.updated_at,
+  };
+}
+
+function buildMapRouteItem(route, deviceMap) {
+  const startDevice = deviceMap.get(route.start_asset_id) || null;
+  const endDevice = deviceMap.get(route.end_asset_id) || null;
+  return {
+    id: route.id,
+    route_id: route.route_id,
+    route_code: route.route_code,
+    route_name: route.route_name,
+    route_type: route.route_type,
+    status: route.status,
+    region_id: route.region_id,
+    pop_id: route.pop_id,
+    project_id: route.project_id,
+    start_asset_id: route.start_asset_id,
+    end_asset_id: route.end_asset_id,
+    start_device: startDevice ? buildMapDeviceItem(startDevice) : null,
+    end_device: endDevice ? buildMapDeviceItem(endDevice) : null,
+    distance_meters: toNumberOrNull(route.distance_meters),
+    path_geojson: route.path_geojson || null,
+    has_geometry: hasRouteGeometry(route),
+    updated_at: route.updated_at,
+  };
+}
+
+function buildMapConnectionItem(connection, portMap, deviceMap, routeMap, cableDeviceMap) {
+  const fromPort = portMap.get(connection.from_port_id) || null;
+  const toPort = portMap.get(connection.to_port_id) || null;
+  const fromDevice = fromPort ? deviceMap.get(fromPort.device_id) || null : null;
+  const toDevice = toPort ? deviceMap.get(toPort.device_id) || null : null;
+  const route = routeMap.get(connection.route_id) || null;
+  const cableDevice = cableDeviceMap.get(connection.cable_device_id) || null;
+  const hasEndpointCoordinates = hasGeoCoordinates(fromDevice) && hasGeoCoordinates(toDevice);
+
+  return {
+    id: connection.id,
+    connection_id: connection.connection_id,
+    region_id: connection.region_id,
+    connection_type: connection.connection_type,
+    status: connection.status,
+    route_id: connection.route_id,
+    cable_device_id: connection.cable_device_id,
+    core_start: connection.core_start,
+    core_end: connection.core_end,
+    fiber_count: connection.fiber_count,
+    installed_at: connection.installed_at,
+    from_port: fromPort,
+    to_port: toPort,
+    from_device: fromDevice ? buildMapDeviceItem(fromDevice) : null,
+    to_device: toDevice ? buildMapDeviceItem(toDevice) : null,
+    cable_device: cableDevice ? buildMapDeviceItem(cableDevice) : null,
+    route: route ? buildMapRouteItem(route, deviceMap) : null,
+    has_geometry_context: Boolean(route && hasRouteGeometry(route)) || hasEndpointCoordinates,
+    updated_at: connection.updated_at,
+  };
+}
+
+async function buildFiberCutImpactLayer({ connections, deviceMap, cutConnectionId, cutCableDeviceId }) {
+  if (!cutConnectionId && !cutCableDeviceId) {
+    return {
+      active: false,
+      source: 'approved_inventory_simulation',
+      selector: null,
+      summary: {
+        cut_connections: 0,
+        affected_devices: 0,
+        affected_connections: 0,
+        affected_routes: 0,
+        affected_customers: 0,
+        affected_onts: 0,
+      },
+      cut_connections: [],
+      devices: [],
+      connections: [],
+      routes: [],
+      customer_assignments: [],
+      customers: [],
+      onts: [],
+      warnings: [],
+    };
+  }
+
+  const cutConnections = connections.filter((connection) => {
+    if (cutConnectionId) {
+      return connection.id === cutConnectionId || connection.connection_id === cutConnectionId;
+    }
+    return connection.cable_device_id === cutCableDeviceId
+      || connection.cable_device?.device_id === cutCableDeviceId;
+  });
+
+  if (!cutConnections.length) {
+    return {
+      active: true,
+      source: 'approved_inventory_simulation',
+      selector: cutConnectionId
+        ? { type: 'connection', value: cutConnectionId }
+        : { type: 'cable', value: cutCableDeviceId },
+      summary: {
+        cut_connections: 0,
+        affected_devices: 0,
+        affected_connections: 0,
+        affected_routes: 0,
+        affected_customers: 0,
+        affected_onts: 0,
+      },
+      cut_connections: [],
+      devices: [],
+      connections: [],
+      routes: [],
+      customer_assignments: [],
+      customers: [],
+      onts: [],
+      warnings: ['No approved connection matches the requested fiber-cut selector in this map scope'],
+    };
+  }
+
+  const cutConnectionIds = new Set(cutConnections.map((connection) => connection.id));
+  const downstreamAdjacency = new Map();
+  connections.forEach((connection) => {
+    const fromDeviceId = connection.from_device?.id;
+    const toDeviceId = connection.to_device?.id;
+    if (!fromDeviceId || !toDeviceId || cutConnectionIds.has(connection.id)) return;
+    if (!downstreamAdjacency.has(fromDeviceId)) downstreamAdjacency.set(fromDeviceId, []);
+    downstreamAdjacency.get(fromDeviceId).push({ deviceId: toDeviceId, connection });
+  });
+
+  const affectedDeviceIds = new Set(cutConnections.map((connection) => connection.to_device?.id).filter(Boolean));
+  const affectedConnectionIds = new Set(cutConnectionIds);
+  const queue = Array.from(affectedDeviceIds);
+  while (queue.length) {
+    const currentDeviceId = queue.shift();
+    const downstream = downstreamAdjacency.get(currentDeviceId) || [];
+    downstream.forEach(({ deviceId, connection }) => {
+      affectedConnectionIds.add(connection.id);
+      if (affectedDeviceIds.has(deviceId)) return;
+      affectedDeviceIds.add(deviceId);
+      queue.push(deviceId);
+    });
+  }
+
+  const affectedConnections = connections.filter((connection) => affectedConnectionIds.has(connection.id));
+  const affectedDevices = Array.from(affectedDeviceIds)
+    .map((deviceId) => deviceMap.get(deviceId))
+    .filter(Boolean)
+    .map(buildMapDeviceItem);
+  const affectedRoutes = Array.from(new Map(
+    affectedConnections
+      .map((connection) => connection.route)
+      .filter(Boolean)
+      .map((route) => [route.id, route]),
+  ).values());
+
+  const affectedPorts = (await loadPortsByDeviceIds(Array.from(affectedDeviceIds)))
+    .filter((port) => !port.deleted_at && port.is_active === true && (port.customer_id || port.ont_device_id));
+  const customerIds = Array.from(new Set(affectedPorts.map((port) => port.customer_id).filter(Boolean)));
+  const ontDeviceIds = Array.from(new Set(affectedPorts.map((port) => port.ont_device_id).filter(Boolean)));
+  const [customers, missingOntDevices] = await Promise.all([
+    loadCustomersByIds(customerIds),
+    loadDevicesByIds(ontDeviceIds.filter((deviceId) => !deviceMap.has(deviceId))),
+  ]);
+  const ontDeviceMap = new Map([
+    ...Array.from(deviceMap.entries()),
+    ...missingOntDevices.map((device) => [device.id, device]),
+  ]);
+  const onts = ontDeviceIds.map((deviceId) => ontDeviceMap.get(deviceId)).filter(Boolean).map(buildMapDeviceItem);
+
+  return {
+    active: true,
+    source: 'approved_inventory_simulation',
+    selector: cutConnectionId
+      ? { type: 'connection', value: cutConnectionId }
+      : { type: 'cable', value: cutCableDeviceId },
+    summary: {
+      cut_connections: cutConnections.length,
+      affected_devices: affectedDevices.length,
+      affected_connections: affectedConnections.length,
+      affected_routes: affectedRoutes.length,
+      affected_customers: customers.length,
+      affected_onts: onts.length,
+    },
+    cut_connections: cutConnections,
+    devices: affectedDevices,
+    connections: affectedConnections,
+    routes: affectedRoutes,
+    customer_assignments: affectedPorts.map((port) => ({
+      port_id: port.id,
+      port_inventory_id: port.port_id,
+      device_id: port.device_id,
+      port_index: port.port_index,
+      port_label: port.port_label,
+      customer_id: port.customer_id,
+      ont_device_id: port.ont_device_id,
+    })),
+    customers,
+    onts,
+    warnings: affectedDevices.length
+      ? []
+      : ['The selected cut connection has no downstream device in the approved topology'],
+  };
 }
 
 async function loadPortsByRegion({ allowedRegionIds = [], requestedRegionId = null }) {
@@ -3475,6 +3910,188 @@ resourceRouter.get('/topology/devices/:id/summary', authenticate, requireRole('a
     };
 
     return sendSuccess(res, payload, 'Device topology summary fetched successfully');
+  } catch (error) {
+    return next(error);
+  }
+});
+
+resourceRouter.get('/topology/maps', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const requestedRegionId = req.query.region_id ? String(req.query.region_id) : null;
+    if (req.auth.role === 'user_region') {
+      if (!req.auth.regions.length) {
+        throw createHttpError(403, 'This regional user does not have any assigned region');
+      }
+      if (requestedRegionId && !req.auth.regions.includes(requestedRegionId)) {
+        throw createHttpError(403, 'You do not have access to this region');
+      }
+    }
+
+    const allowedRegionIds = req.auth.role === 'user_region' ? req.auth.regions : [];
+    const projectId = req.query.project_id ? String(req.query.project_id) : null;
+    const popId = req.query.pop_id ? String(req.query.pop_id) : null;
+    const deviceTypeKey = req.query.device_type_key ? String(req.query.device_type_key).toUpperCase() : null;
+    const tenantId = req.query.tenant_id ? String(req.query.tenant_id) : null;
+    const cutConnectionId = req.query.cut_connection_id ? String(req.query.cut_connection_id) : null;
+    const cutCableDeviceId = req.query.cut_cable_device_id ? String(req.query.cut_cable_device_id) : null;
+    if (cutConnectionId && cutCableDeviceId) {
+      throw createHttpError(400, 'Use either cut_connection_id or cut_cable_device_id, not both');
+    }
+    const deviceLimit = parseMapLimit(req.query.device_limit, 1000, 3000);
+    const routeLimit = parseMapLimit(req.query.route_limit, 500, 1000);
+    const connectionLimit = parseMapLimit(req.query.connection_limit, 1000, 3000);
+
+    const [devices, routes, connections] = await Promise.all([
+      loadMapDevices({
+        allowedRegionIds,
+        requestedRegionId,
+        projectId,
+        popId,
+        deviceTypeKey,
+        tenantId,
+        limit: deviceLimit,
+      }),
+      loadMapRoutes({
+        allowedRegionIds,
+        requestedRegionId,
+        projectId,
+        popId,
+        limit: routeLimit,
+      }),
+      loadMapPortConnections({
+        allowedRegionIds,
+        requestedRegionId,
+        limit: connectionLimit,
+      }),
+    ]);
+
+    const portIds = Array.from(new Set(connections.flatMap((item) => [item.from_port_id, item.to_port_id]).filter(Boolean)));
+    const connectionRouteIds = Array.from(new Set(connections.map((item) => item.route_id).filter(Boolean)));
+    const knownRouteIds = new Set(routes.map((route) => route.id));
+    const [ports, connectionRoutes] = await Promise.all([
+      loadPortsByIds(portIds),
+      loadRoutesByIds(connectionRouteIds.filter((routeId) => !knownRouteIds.has(routeId))),
+    ]);
+
+    const routeRows = [...routes, ...connectionRoutes];
+    const routeMap = new Map(routeRows.map((route) => [route.id, route]));
+    const portMap = new Map(ports.map((port) => [port.id, port]));
+    const relatedDeviceIds = Array.from(new Set([
+      ...devices.map((device) => device.id),
+      ...ports.map((port) => port.device_id).filter(Boolean),
+      ...connections.map((connection) => connection.cable_device_id).filter(Boolean),
+      ...routeRows.flatMap((route) => [route.start_asset_id, route.end_asset_id]).filter(Boolean),
+    ]));
+    const existingDeviceIds = new Set(devices.map((device) => device.id));
+    const relatedDevices = await loadDevicesByIds(relatedDeviceIds.filter((deviceId) => !existingDeviceIds.has(deviceId)));
+    const deviceMap = new Map([...devices, ...relatedDevices].map((device) => [device.id, device]));
+    const cableDeviceIds = Array.from(new Set(connections.map((connection) => connection.cable_device_id).filter(Boolean)));
+    const cableDeviceMap = new Map(cableDeviceIds.map((deviceId) => [deviceId, deviceMap.get(deviceId)]).filter(([, device]) => device));
+
+    const matchesConnectionFilters = (item) => {
+      const candidateDevices = [item.from_device, item.to_device, item.cable_device].filter(Boolean);
+      if (projectId && !candidateDevices.some((device) => device.project_id === projectId) && item.route?.project_id !== projectId) return false;
+      if (popId && !candidateDevices.some((device) => device.pop_id === popId) && item.route?.pop_id !== popId) return false;
+      if (deviceTypeKey && !candidateDevices.some((device) => String(device.device_type_key || '').toUpperCase() === deviceTypeKey)) return false;
+      if (tenantId && !candidateDevices.some((device) => device.tenant_id === tenantId)) return false;
+      return true;
+    };
+
+    const mapDevices = devices.map(buildMapDeviceItem);
+    const mapRoutes = routes
+      .map((route) => buildMapRouteItem(route, deviceMap))
+      .filter((route) => {
+        if (!deviceTypeKey && !tenantId) return true;
+        const routeDevices = [route.start_device, route.end_device].filter(Boolean);
+        if (deviceTypeKey && !routeDevices.some((device) => String(device.device_type_key || '').toUpperCase() === deviceTypeKey)) return false;
+        if (tenantId && !routeDevices.some((device) => device.tenant_id === tenantId)) return false;
+        return true;
+      });
+    const mapConnections = connections
+      .map((connection) => buildMapConnectionItem(connection, portMap, deviceMap, routeMap, cableDeviceMap))
+      .filter(matchesConnectionFilters);
+
+    const devicesWithoutCoordinates = mapDevices.filter((device) => !device.has_coordinates);
+    const routesWithoutGeometry = mapRoutes.filter((route) => !route.has_geometry);
+    const connectionsWithoutGeometryContext = mapConnections.filter((connection) => !connection.has_geometry_context);
+    const fiberCutImpact = await buildFiberCutImpactLayer({
+      connections: mapConnections,
+      deviceMap,
+      cutConnectionId,
+      cutCableDeviceId,
+    });
+
+    return sendSuccess(
+      res,
+      {
+        scope: {
+          source: 'approved_inventory',
+          role: req.auth.role,
+          requested_region_id: requestedRegionId,
+          filters: {
+            project_id: projectId,
+            pop_id: popId,
+            device_type_key: deviceTypeKey,
+            tenant_id: tenantId,
+            cut_connection_id: cutConnectionId,
+            cut_cable_device_id: cutCableDeviceId,
+          },
+          limits: {
+            devices: deviceLimit,
+            routes: routeLimit,
+            connections: connectionLimit,
+          },
+        },
+        layers: {
+          devices: {
+            items: mapDevices,
+            summary: {
+              total: mapDevices.length,
+              with_coordinates: mapDevices.length - devicesWithoutCoordinates.length,
+              without_coordinates: devicesWithoutCoordinates.length,
+              by_type: countBy(mapDevices, 'device_type_key'),
+              by_status: countBy(mapDevices, 'status'),
+              by_validation_status: countBy(mapDevices, 'validation_status'),
+              by_marker_status: countBy(mapDevices, 'marker_status'),
+            },
+          },
+          routes: {
+            items: mapRoutes,
+            summary: {
+              total: mapRoutes.length,
+              with_geometry: mapRoutes.length - routesWithoutGeometry.length,
+              without_geometry: routesWithoutGeometry.length,
+              by_type: countBy(mapRoutes, 'route_type'),
+              by_status: countBy(mapRoutes, 'status'),
+            },
+          },
+          connections: {
+            items: mapConnections,
+            summary: {
+              total: mapConnections.length,
+              with_route: mapConnections.filter((item) => item.route_id).length,
+              with_cable: mapConnections.filter((item) => item.cable_device_id).length,
+              with_core_range: mapConnections.filter((item) => item.core_start != null && item.core_end != null).length,
+              with_geometry_context: mapConnections.length - connectionsWithoutGeometryContext.length,
+              without_geometry_context: connectionsWithoutGeometryContext.length,
+              by_type: countBy(mapConnections, 'connection_type'),
+              by_status: countBy(mapConnections, 'status'),
+            },
+          },
+          fiber_cut_impact: fiberCutImpact,
+        },
+        issues: {
+          devices_without_coordinates: devicesWithoutCoordinates.slice(0, 100),
+          routes_without_geometry: routesWithoutGeometry.slice(0, 100),
+          connections_without_geometry_context: connectionsWithoutGeometryContext.slice(0, 100),
+        },
+        meta: {
+          source: 'approved_inventory',
+          generated_at: new Date().toISOString(),
+        },
+      },
+      'Topology map layers fetched successfully',
+    );
   } catch (error) {
     return next(error);
   }

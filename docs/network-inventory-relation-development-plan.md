@@ -802,7 +802,7 @@ Todo:
 - [x] UI attenuation log menampilkan loss per core/splice bila data tersedia.
 - [x] UI impact analysis menampilkan ODP/customer terdampak dari fiber cut.
 - [x] As-Built Documents diarahkan menjadi output/export dari data topology yang approved.
-- [ ] Semua komponen memakai Relation-Ready Rendering.
+- [x] Semua komponen memakai Relation-Ready Rendering.
 - [ ] Komponen form/tabs/drawer/select/date picker memakai shadcn UI bila tersedia.
 - [ ] Responsive desktop/tablet/mobile.
 
@@ -831,6 +831,8 @@ Catatan implementasi 2026-06-17:
 - Topology Trace dan Device Port Provisioning memakai relation-ready device combobox sebagai input utama, dengan technical ID pendek hanya sebagai fallback context.
 - Topology Trace Panel memakai mobile card untuk node/edge detail, menampilkan label device bila tersedia, dan tidak menampilkan raw JSON secara default agar table/detail tidak overflow di layar kecil.
 - Detail device memiliki entry point `Create Connection` yang membuka Topology Workspace langsung pada Connection Wizard dengan start device terisi.
+- Hasil Device Port Provisioning memakai relation-ready summary (label device, mode dry-run/applied, jumlah port, profile, dan missing port) tanpa raw JSON/UUID sebagai display utama.
+- Strict relation-display guard frontend/Syntrix-One lulus: relation label tidak fallback ke raw UUID dan label role tidak mengekspos internal role ID.
 - Connection Wizard dan Device Port Provisioning menampilkan action sesuai role: Superadmin direct apply, Admin Region submit approval request, dan Validator/read-only tidak bisa mutasi topology.
 - Splice Matrix operasional penuh seperti drag-and-drop mapping dan split ratio editor masih menjadi pekerjaan lanjutan setelah matrix read-only stabil.
 
@@ -915,20 +917,32 @@ Menambahkan layer spasial setelah relasi topology, route, dan core stabil.
 
 Todo:
 
-- [ ] Tampilkan device berdasarkan longitude/latitude.
-- [ ] Tampilkan route berdasarkan `network_routes.path_geojson`.
-- [ ] Tampilkan connection/path dari hasil trace.
-- [ ] Tampilkan fiber-cut impact layer setelah core path dan route stabil.
-- [ ] Tampilkan marker status validation/health/occupancy.
-- [ ] Filter by region, project, POP, device type, dan tenant.
-- [ ] Pastikan map membaca data approved, bukan staged request.
+- [x] Tampilkan device berdasarkan longitude/latitude.
+- [x] Tampilkan route berdasarkan `network_routes.path_geojson`.
+- [x] Tampilkan connection/path dari hasil trace.
+- [x] Tampilkan fiber-cut impact layer setelah core path dan route stabil.
+- [x] Tampilkan marker status validation/health/occupancy.
+- [x] Filter by region, project, POP, device type, dan tenant.
+- [x] Pastikan map membaca data approved, bukan staged request.
 
 Checker:
 
-- [ ] Maps tidak menjadi source of truth relasi.
-- [ ] Device tanpa koordinat punya fallback list issue.
-- [ ] Route tanpa geometry tetap bisa ditampilkan di topology table/tree.
-- [ ] Performa tetap aman saat data besar.
+- [x] Maps tidak menjadi source of truth relasi.
+- [x] Device tanpa koordinat punya fallback list issue.
+- [x] Route tanpa geometry tetap bisa ditampilkan di topology table/tree.
+- [x] Performa tetap aman saat data besar.
+
+Catatan implementasi 2026-06-19:
+
+- Backend menyediakan endpoint read-only `GET /api/v1/topology/maps`.
+- Endpoint membaca data approved dari `devices`, `network_routes`, `port_connections`, dan `device_ports`; bukan staged validation request.
+- Response dipisah menjadi layer `devices`, `routes`, dan `connections` dengan summary, marker status, occupancy, geometry context, dan issue list untuk device tanpa koordinat atau route tanpa geometry.
+- Filter awal tersedia untuk `region_id`, `project_id`, `pop_id`, `device_type_key`, dan `tenant_id`.
+- Endpoint maps menerima salah satu selector simulasi `cut_connection_id` atau `cut_cable_device_id` dan mengembalikan layer `fiber_cut_impact` tanpa mengubah data inventory.
+- Layer fiber cut mengikuti arah connection approved (`from` ke `to`) dan merangkum cut connection, device/connection/route downstream, customer assignment, customer, serta ONT terdampak.
+- Selector yang tidak ditemukan tetap menghasilkan response sukses dengan warning agar frontend dapat menampilkan empty state yang jelas.
+- Frontend `/maps` membaca endpoint topology maps dan merender basemap OpenStreetMap melalui MapLibre, device marker, route GeoJSON, connection line, filter device type, serta simulasi fiber cut berdasarkan connection/cable.
+- Data tanpa koordinat atau geometry tetap tersedia sebagai issue list, sedangkan impact summary menampilkan device, connection, route, customer, dan ONT downstream terdampak.
 
 ---
 
