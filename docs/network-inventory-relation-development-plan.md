@@ -948,7 +948,7 @@ Todo:
 - [x] Backfill `fiber_cores` untuk Cable berdasarkan `capacity_core`, `cores_per_tube`, dan color profile.
 - [x] Backfill project relation bila bisa diturunkan dari import, request, POP, route, atau dokumen lama.
 - [x] Backfill basic `device_links` ke `port_connections` jika memungkinkan.
-- [ ] Backfill customer assignment ke port jika data tersedia.
+- [x] Backfill customer assignment ke port jika data tersedia.
 - [x] Backfill route/core relation jika data tersedia.
 - [x] Backfill tray/tube/core color dari `fiber_cores.core_no` dan default 12-color cycle.
 - [x] Backfill status core dari connection aktif: used jika punya active/cutover connection, reserved jika planned, available jika kosong.
@@ -971,8 +971,10 @@ Catatan implementasi:
 - Script backfill project deterministic: `database/manual/20260617_backfill_device_project_relation_from_pop.sql`.
 - Script backfill deterministic legacy link: `database/manual/20260617_backfill_device_links_to_port_connections.sql`.
 - Script backfill core summary dari connection: `database/manual/20260617_backfill_core_management_from_port_connections.sql`.
+- Script backfill deterministic customer assignment ke port: `database/manual/20260619_backfill_customer_assignment_to_device_ports.sql`.
 - Endpoint read-only device topology summary untuk frontend: `GET /api/v1/topology/devices/:id/summary`. Endpoint ini menggabungkan device identity, ports, port connections, core management summary, fiber core occupancy, dan readiness flags tanpa mengubah inventory final.
 - Legacy link backfill ikut membawa `route_id`, `cable_device_id`, dan `core_start/core_end` jika datanya tersedia pada `device_links`; core summary kemudian dibuat dari `port_connections`. Sumber data route/core lain tetap perlu review manual.
+- Customer assignment backfill hanya mengubah data ketika kandidat benar-benar deterministik: customer aktif/prospect belum punya assignment, tepat satu ODP/ONT di scope region/POP, dan tepat satu port idle yang belum punya customer/ONT/occupied date.
 - Rollback helper tidak menghapus data otomatis. Script hanya menampilkan kandidat aman, backup snapshot JSON, dan generated SQL yang harus direview manual.
 
 ---
