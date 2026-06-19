@@ -132,6 +132,25 @@ function setCachedReferenceData(cacheKey, payload) {
   });
 }
 
+function getRegionalTopologyScope(auth) {
+  if (!isRegionalRole(auth?.role)) {
+    return { allowedRegionIds: [], isRegional: false };
+  }
+
+  const allowedRegionIds = Array.from(new Set((auth?.regions || []).filter(Boolean)));
+  if (!allowedRegionIds.length) {
+    throw createHttpError(403, 'This regional user does not have any assigned region');
+  }
+
+  return { allowedRegionIds, isRegional: true };
+}
+
+function assertTopologyRegionAccess(scope, regionId, message = 'You do not have access to this region') {
+  if (scope.isRegional && regionId && !scope.allowedRegionIds.includes(regionId)) {
+    throw createHttpError(403, message);
+  }
+}
+
 function buildReferenceDataWhere(config, query, auth) {
   const where = buildWhereClause(config, query, auth);
   const normalizedRole = normalizeRoleName(auth.role);
@@ -2909,13 +2928,12 @@ resourceRouter.get('/devices/:id/trace', authenticate, requireRole('admin', 'use
       throw createHttpError(404, 'Device not found');
     }
 
-    if (req.auth.role === 'user_region' && !req.auth.regions.includes(startDevice.region_id)) {
-      throw createHttpError(403, 'You do not have access to this device region');
-    }
-
+    const scope = getRegionalTopologyScope(req.auth);
+    assertTopologyRegionAccess(scope, startDevice.region_id, 'You do not have access to this device region');
     const requestedRegionId = req.query.region_id ? String(req.query.region_id) : null;
+    assertTopologyRegionAccess(scope, requestedRegionId);
     const maxDepth = Math.min(Math.max(Number(req.query.max_depth) || 6, 1), 24);
-    const allowedRegionIds = req.auth.role === 'user_region' ? req.auth.regions : [];
+    const allowedRegionIds = scope.allowedRegionIds;
 
     const connections = await loadPortConnections({ allowedRegionIds, requestedRegionId });
     const portIds = Array.from(
@@ -3067,9 +3085,8 @@ resourceRouter.get('/devices/:id/core-chain-summary', authenticate, requireRole(
     const device = await loadDeviceById(req.params.id);
     if (!device) throw createHttpError(404, 'Device not found');
 
-    if (req.auth.role === 'user_region' && !req.auth.regions.includes(device.region_id)) {
-      throw createHttpError(403, 'You do not have access to this device region');
-    }
+    const scope = getRegionalTopologyScope(req.auth);
+    assertTopologyRegionAccess(scope, device.region_id, 'You do not have access to this device region');
 
     const summary = await buildOdpCoreChainSummary(req.params.id);
     if (!summary) throw createHttpError(404, 'Device not found');
@@ -3085,9 +3102,8 @@ resourceRouter.get('/devices/:id/core-chain-draft', authenticate, requireRole('a
     const device = await loadDeviceById(req.params.id);
     if (!device) throw createHttpError(404, 'Device not found');
 
-    if (req.auth.role === 'user_region' && !req.auth.regions.includes(device.region_id)) {
-      throw createHttpError(403, 'You do not have access to this device region');
-    }
+    const scope = getRegionalTopologyScope(req.auth);
+    assertTopologyRegionAccess(scope, device.region_id, 'You do not have access to this device region');
 
     const draft = await buildOdpCoreChainDraft(req.params.id);
     if (!draft) throw createHttpError(404, 'Device not found');
@@ -3103,9 +3119,8 @@ resourceRouter.post('/devices/:id/core-chain-draft-link', authenticate, requireR
     const odpDevice = await loadDeviceById(req.params.id);
     if (!odpDevice) throw createHttpError(404, 'Device not found');
 
-    if (req.auth.role === 'user_region' && !req.auth.regions.includes(odpDevice.region_id)) {
-      throw createHttpError(403, 'You do not have access to this device region');
-    }
+    const scope = getRegionalTopologyScope(req.auth);
+    assertTopologyRegionAccess(scope, odpDevice.region_id, 'You do not have access to this device region');
 
     if (String(odpDevice.device_type_key || '').toUpperCase() !== 'ODP') {
       throw createHttpError(400, 'Draft link endpoint only supports ODP device');
@@ -3361,9 +3376,8 @@ resourceRouter.post('/devices/:id/provision-ports', authenticate, requireRole('a
     const device = await loadDeviceById(req.params.id);
     if (!device) throw createHttpError(404, 'Device not found');
 
-    if (req.auth.role === 'user_region' && !req.auth.regions.includes(device.region_id)) {
-      throw createHttpError(403, 'You do not have access to this device region');
-    }
+    const scope = getRegionalTopologyScope(req.auth);
+    assertTopologyRegionAccess(scope, device.region_id, 'You do not have access to this device region');
 
     const profileName = String(req.body?.profile_name || 'default').trim() || 'default';
     const dryRun = String(req.body?.dry_run || '').toLowerCase() === 'true';
@@ -3750,21 +3764,14 @@ resourceRouter.get('/topology/port-connections', authenticate, requireRole('admi
     const requestedRegionId = req.query.region_id ? String(req.query.region_id) : null;
     const requestedStatus = req.query.status ? String(req.query.status) : null;
     const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 200);
-
-    if (req.auth.role === 'user_region') {
-      if (!req.auth.regions.length) {
-        throw createHttpError(403, 'This regional user does not have any assigned region');
-      }
-      if (requestedRegionId && !req.auth.regions.includes(requestedRegionId)) {
-        throw createHttpError(403, 'You do not have access to this region');
-      }
-    }
+    const scope = getRegionalTopologyScope(req.auth);
+    assertTopologyRegionAccess(scope, requestedRegionId);
 
     const filters = [];
     if (requestedRegionId) {
       filters.push({ region_id: { _eq: requestedRegionId } });
-    } else if (req.auth.role === 'user_region') {
-      filters.push({ region_id: { _in: req.auth.regions } });
+    } else if (scope.isRegional) {
+      filters.push({ region_id: { _in: scope.allowedRegionIds } });
     }
 
     if (requestedStatus) {
@@ -3803,12 +3810,10 @@ resourceRouter.get('/topology/port-connections', authenticate, requireRole('admi
 resourceRouter.get('/topology/port-connections/:id', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
   try {
     const filters = [{ id: { _eq: req.params.id } }];
+    const scope = getRegionalTopologyScope(req.auth);
 
-    if (req.auth.role === 'user_region') {
-      if (!req.auth.regions.length) {
-        throw createHttpError(403, 'This regional user does not have any assigned region');
-      }
-      filters.push({ region_id: { _in: req.auth.regions } });
+    if (scope.isRegional) {
+      filters.push({ region_id: { _in: scope.allowedRegionIds } });
     }
 
     const connections = await loadPortConnectionsByWhere({ _and: filters }, 1);
@@ -3831,14 +3836,8 @@ resourceRouter.get('/topology/devices/:id/summary', authenticate, requireRole('a
       throw createHttpError(404, 'Device not found');
     }
 
-    if (req.auth.role === 'user_region') {
-      if (!req.auth.regions.length) {
-        throw createHttpError(403, 'This regional user does not have any assigned region');
-      }
-      if (!req.auth.regions.includes(device.region_id)) {
-        throw createHttpError(403, 'You do not have access to this device region');
-      }
-    }
+    const scope = getRegionalTopologyScope(req.auth);
+    assertTopologyRegionAccess(scope, device.region_id, 'You do not have access to this device region');
 
     const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 200);
     const ports = await loadPortsByDeviceIds([device.id]);
@@ -3918,16 +3917,9 @@ resourceRouter.get('/topology/devices/:id/summary', authenticate, requireRole('a
 resourceRouter.get('/topology/maps', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
   try {
     const requestedRegionId = req.query.region_id ? String(req.query.region_id) : null;
-    if (req.auth.role === 'user_region') {
-      if (!req.auth.regions.length) {
-        throw createHttpError(403, 'This regional user does not have any assigned region');
-      }
-      if (requestedRegionId && !req.auth.regions.includes(requestedRegionId)) {
-        throw createHttpError(403, 'You do not have access to this region');
-      }
-    }
-
-    const allowedRegionIds = req.auth.role === 'user_region' ? req.auth.regions : [];
+    const scope = getRegionalTopologyScope(req.auth);
+    assertTopologyRegionAccess(scope, requestedRegionId);
+    const allowedRegionIds = scope.allowedRegionIds;
     const projectId = req.query.project_id ? String(req.query.project_id) : null;
     const popId = req.query.pop_id ? String(req.query.pop_id) : null;
     const deviceTypeKey = req.query.device_type_key ? String(req.query.device_type_key).toUpperCase() : null;
@@ -4028,6 +4020,7 @@ resourceRouter.get('/topology/maps', authenticate, requireRole('admin', 'user_re
           source: 'approved_inventory',
           role: req.auth.role,
           requested_region_id: requestedRegionId,
+          effective_region_ids: allowedRegionIds.length ? allowedRegionIds : null,
           filters: {
             project_id: projectId,
             pop_id: popId,
@@ -4101,19 +4094,13 @@ resourceRouter.get('/topology/quality', authenticate, requireRole('admin', 'user
   try {
     const requestedRegionId = req.query.region_id ? String(req.query.region_id) : null;
     let regionWhere = {};
+    const scope = getRegionalTopologyScope(req.auth);
+    assertTopologyRegionAccess(scope, requestedRegionId);
 
-    if (req.auth.role === 'user_region') {
-      if (!req.auth.regions.length) {
-        throw createHttpError(403, 'This regional user does not have any assigned region');
-      }
-
-      if (requestedRegionId && !req.auth.regions.includes(requestedRegionId)) {
-        throw createHttpError(403, 'You do not have access to this region');
-      }
-
+    if (scope.isRegional) {
       regionWhere = requestedRegionId
         ? { region_id: { _eq: requestedRegionId } }
-        : { region_id: { _in: req.auth.regions } };
+        : { region_id: { _in: scope.allowedRegionIds } };
     } else if (requestedRegionId) {
       regionWhere = { region_id: { _eq: requestedRegionId } };
     }
@@ -4193,16 +4180,9 @@ resourceRouter.get('/topology/quality', authenticate, requireRole('admin', 'user
 resourceRouter.get('/topology/integrity', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
   try {
     const requestedRegionId = req.query.region_id ? String(req.query.region_id) : null;
-    if (req.auth.role === 'user_region') {
-      if (!req.auth.regions.length) {
-        throw createHttpError(403, 'This regional user does not have any assigned region');
-      }
-      if (requestedRegionId && !req.auth.regions.includes(requestedRegionId)) {
-        throw createHttpError(403, 'You do not have access to this region');
-      }
-    }
-
-    const allowedRegionIds = req.auth.role === 'user_region' ? req.auth.regions : [];
+    const scope = getRegionalTopologyScope(req.auth);
+    assertTopologyRegionAccess(scope, requestedRegionId);
+    const allowedRegionIds = scope.allowedRegionIds;
     const [connections, ports, fiberCores, deviceLinks, routes, devices] = await Promise.all([
       loadPortConnections({ allowedRegionIds, requestedRegionId }),
       loadPortsByRegion({ allowedRegionIds, requestedRegionId }),
@@ -4864,16 +4844,9 @@ resourceRouter.post('/topology/transition/device-links', authenticate, requireRo
     const apply = String(req.body?.apply || '').toLowerCase() === 'true';
     const limit = Math.min(Math.max(Number(req.body?.limit) || 200, 1), 1000);
 
-    if (req.auth.role === 'user_region') {
-      if (!req.auth.regions.length) {
-        throw createHttpError(403, 'This regional user does not have any assigned region');
-      }
-      if (requestedRegionId && !req.auth.regions.includes(requestedRegionId)) {
-        throw createHttpError(403, 'You do not have access to this region');
-      }
-    }
-
-    const allowedRegionIds = req.auth.role === 'user_region' ? req.auth.regions : [];
+    const scope = getRegionalTopologyScope(req.auth);
+    assertTopologyRegionAccess(scope, requestedRegionId);
+    const allowedRegionIds = scope.allowedRegionIds;
     const links = await loadDeviceLinksByRegion({ allowedRegionIds, requestedRegionId, limit });
     if (!links.length) {
       return sendSuccess(res, { apply, processed: 0, migrated: 0, skipped: 0, items: [] }, 'No legacy device links to process');
@@ -5064,22 +5037,10 @@ resourceRouter.get('/topology/trace', authenticate, requireRole('admin', 'user_r
     const resolvedStartDeviceId = startDevice?.id || null;
     const resolvedEndDeviceId = endDevice?.id || null;
 
-    if (req.auth.role === 'user_region') {
-      if (!req.auth.regions.length) {
-        throw createHttpError(403, 'This regional user does not have any assigned region');
-      }
-
-      if (startDevice && !req.auth.regions.includes(startDevice.region_id)) {
-        throw createHttpError(403, 'You do not have access to the start device region');
-      }
-      if (endDevice && !req.auth.regions.includes(endDevice.region_id)) {
-        throw createHttpError(403, 'You do not have access to the end device region');
-      }
-
-      if (requestedRegionId && !req.auth.regions.includes(requestedRegionId)) {
-        throw createHttpError(403, 'You do not have access to this region');
-      }
-    }
+    const scope = getRegionalTopologyScope(req.auth);
+    if (startDevice) assertTopologyRegionAccess(scope, startDevice.region_id, 'You do not have access to the start device region');
+    if (endDevice) assertTopologyRegionAccess(scope, endDevice.region_id, 'You do not have access to the end device region');
+    assertTopologyRegionAccess(scope, requestedRegionId);
 
     if (!startDevice) {
       return sendSuccess(
@@ -5104,7 +5065,7 @@ resourceRouter.get('/topology/trace', authenticate, requireRole('admin', 'user_r
       );
     }
 
-    const allowedRegionIds = req.auth.role === 'user_region' ? req.auth.regions : [];
+    const allowedRegionIds = scope.allowedRegionIds;
     const connections = await loadPortConnections({ allowedRegionIds, requestedRegionId });
     const portIds = Array.from(
       new Set(

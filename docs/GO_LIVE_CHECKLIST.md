@@ -19,7 +19,7 @@ Gunakan checklist ini sebelum backend dianggap production-ready.
 
 ## API & Access
 
-10. Uji endpoint inti: `/health`, `/api/v1/auth/login`, `/api/v1/pops`, `/api/v1/devices`.
+10. Uji endpoint inti: `/health`, `/api/v1/auth/login`, `/api/v1/pops`, `/api/v1/devices`, `/api/v1/topology/devices/:id/summary`, `/api/v1/topology/maps`, dan `/api/v1/topology/quality`.
 11. Uji role boundary:
 - `user_region` tidak boleh create `regions` (403).
 - `user_region` hanya boleh write data dalam region scope.
@@ -29,7 +29,7 @@ Gunakan checklist ini sebelum backend dianggap production-ready.
 
 13. Pastikan deployment Vercel terbaru status `READY` tanpa error kritis di runtime logs.
 14. Pastikan env di Vercel sudah lengkap sesuai `.env.example` (key list sinkron).
-15. Jalankan smoke test setelah deploy (`npm run smoke`) dan simpan hasilnya.
+15. Jalankan smoke test setelah deploy (`npm run smoke`) dan simpan hasilnya. Smoke test wajib memastikan topology summary, maps marker, dan quality metrics merespons dari deployment terbaru.
 
 ## Post Go-Live
 

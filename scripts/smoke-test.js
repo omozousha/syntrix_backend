@@ -27,6 +27,25 @@ function removeFileSafe(filePath) {
   }
 }
 
+async function cleanupCreatedResources(cleanup, headers) {
+  if (!headers) return;
+
+  const deleteIfPresent = async (key, endpoint) => {
+    if (!cleanup[key]) return;
+    try {
+      await axios.delete(`${apiBase}/${endpoint}/${cleanup[key]}`, { headers });
+      cleanup[key] = null;
+    } catch (_error) {
+      // Ignore cleanup errors in smoke test.
+    }
+  };
+
+  await deleteIfPresent('attachmentId', 'attachments');
+  await deleteIfPresent('deviceId', 'devices');
+  await deleteIfPresent('projectId', 'projects');
+  await deleteIfPresent('popId', 'pops');
+}
+
 async function main() {
   const cleanup = {
     popId: null,
@@ -37,6 +56,7 @@ async function main() {
 
   let tempExcel = null;
   let tempKmz = null;
+  let headers = null;
   try {
     const health = await axios.get(`${baseUrl}/health`);
     if (!health.data?.success) {
@@ -49,7 +69,7 @@ async function main() {
       throw new Error('Access token not found in login response');
     }
 
-    const headers = { Authorization: `Bearer ${token}` };
+    headers = { Authorization: `Bearer ${token}` };
 
     const me = await axios.get(`${apiBase}/auth/me`, { headers });
     const role = me.data?.data?.role;
@@ -93,8 +113,39 @@ async function main() {
       total_ports: 16,
       used_ports: 1,
       address: 'Smoke Rack',
+      longitude: 106.82,
+      latitude: -6.21,
     }, { headers });
     cleanup.deviceId = device.data?.data?.id;
+
+    const topologySummary = await axios.get(`${apiBase}/topology/devices/${cleanup.deviceId}/summary`, { headers });
+    if (topologySummary.data?.data?.device?.id !== cleanup.deviceId) {
+      throw new Error('Topology device summary did not return the smoke device');
+    }
+
+    const topologyMaps = await axios.get(`${apiBase}/topology/maps`, {
+      headers,
+      params: {
+        region_id: regionId,
+        project_id: cleanup.projectId,
+        device_type_key: 'OLT',
+        device_limit: 20,
+        route_limit: 20,
+        connection_limit: 20,
+      },
+    });
+    const mapDevices = topologyMaps.data?.data?.layers?.devices?.items || [];
+    if (!mapDevices.some((item) => item.id === cleanup.deviceId && item.has_coordinates)) {
+      throw new Error('Topology maps did not return the smoke device marker with coordinates');
+    }
+
+    const topologyQuality = await axios.get(`${apiBase}/topology/quality`, {
+      headers,
+      params: { region_id: regionId },
+    });
+    if (!topologyQuality.data?.success || !topologyQuality.data?.data?.metrics) {
+      throw new Error('Topology quality endpoint did not return metrics');
+    }
 
     const uploadForm = new FormData();
     uploadForm.append('file', fs.createReadStream(path.resolve(__dirname, '../README.md')));
@@ -188,6 +239,7 @@ async function main() {
     console.error('Smoke test failed:', details);
     process.exitCode = 1;
   } finally {
+    await cleanupCreatedResources(cleanup, headers);
     removeFileSafe(tempExcel);
     removeFileSafe(tempKmz);
   }

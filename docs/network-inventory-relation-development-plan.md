@@ -630,7 +630,7 @@ Checker:
 - [x] Detail ODP, ODC, OLT, ONT, dan device lain memiliki QR panel konsisten.
 - [x] Download QR detail dan bulk memakai template global yang sama.
 - [x] Device baru dari adminregion membawa project context ke request.
-- [ ] Superadmin bisa melihat Project saat approve create/update device.
+- [x] Superadmin bisa melihat Project saat approve create/update device.
 - [x] UI tidak menampilkan raw `project_id`.
 
 ---
@@ -809,10 +809,10 @@ Todo:
 Checker:
 
 - [ ] Tidak ada layout overflow di mobile.
-- [ ] Tidak ada UUID flash saat membuka detail.
+- [x] Tidak ada UUID flash saat membuka detail.
 - [x] Adminregion dan superadmin melihat action sesuai role.
-- [ ] Mutasi adminregion masuk approval.
-- [ ] Superadmin bisa review before/after topology.
+- [x] Mutasi adminregion masuk approval.
+- [x] Superadmin bisa review before/after topology.
 - [x] Nama halaman/menu tidak membingungkan antara topology editor dan dokumen As-Built.
 
 Catatan implementasi 2026-06-17:
@@ -834,6 +834,7 @@ Catatan implementasi 2026-06-17:
 - Hasil Device Port Provisioning memakai relation-ready summary (label device, mode dry-run/applied, jumlah port, profile, dan missing port) tanpa raw JSON/UUID sebagai display utama.
 - Strict relation-display guard frontend/Syntrix-One lulus: relation label tidak fallback ke raw UUID dan label role tidak mengekspos internal role ID.
 - Connection Wizard dan Device Port Provisioning menampilkan action sesuai role: Superadmin direct apply, Admin Region submit approval request, dan Validator/read-only tidak bisa mutasi topology.
+- Validation Requests mengenali request `Topology Connection`, menyediakan filter khusus, badge khusus, action `Approve Connection`, dan panel review endpoint/route/cable/core dengan before/after untuk update connection.
 - Splice Matrix operasional penuh seperti drag-and-drop mapping dan split ratio editor masih menjadi pekerjaan lanjutan setelah matrix read-only stabil.
 
 ---
@@ -941,6 +942,7 @@ Catatan implementasi 2026-06-19:
 - Endpoint maps menerima salah satu selector simulasi `cut_connection_id` atau `cut_cable_device_id` dan mengembalikan layer `fiber_cut_impact` tanpa mengubah data inventory.
 - Layer fiber cut mengikuti arah connection approved (`from` ke `to`) dan merangkum cut connection, device/connection/route downstream, customer assignment, customer, serta ONT terdampak.
 - Selector yang tidak ditemukan tetap menghasilkan response sukses dengan warning agar frontend dapat menampilkan empty state yang jelas.
+- Scope backend untuk Maps dan endpoint topology read mengikuti assigned region untuk role Admin Region (`user_all_region`) dan Validator (`user_region`); Superadmin tetap dapat melihat semua region.
 - Frontend `/maps` membaca endpoint topology maps dan merender basemap OpenStreetMap melalui MapLibre, device marker, route GeoJSON, connection line, filter device type, serta simulasi fiber cut berdasarkan connection/cable.
 - Data tanpa koordinat atau geometry tetap tersedia sebagai issue list, sedangkan impact summary menampilkan device, connection, route, customer, dan ONT downstream terdampak.
 
@@ -1033,6 +1035,12 @@ Release checklist:
 - [ ] Syntrix-One build siap jika ada perubahan mobile.
 - [ ] Post-deploy smoke test selesai.
 - [ ] Rollback plan tersedia.
+
+Catatan implementasi 2026-06-19:
+
+- Backend smoke test `npm run smoke` sekarang ikut mengecek endpoint topology read-only: `GET /api/v1/topology/devices/:id/summary`, `GET /api/v1/topology/maps`, dan `GET /api/v1/topology/quality`.
+- Smoke test membuat device sementara dengan koordinat, memastikan maps mengembalikan marker device tersebut, lalu menjalankan cleanup best-effort di `finally` agar data smoke tidak tertinggal jika endpoint topology gagal.
+- Checklist go-live backend diperbarui agar post-deploy smoke mencakup topology summary, maps marker, dan quality metrics.
 
 ---
 
