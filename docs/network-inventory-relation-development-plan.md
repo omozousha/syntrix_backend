@@ -578,29 +578,38 @@ Memastikan schema dan product contract cukup untuk topology target sebelum menam
 
 Todo:
 
-- [ ] Audit `devices`, `device_ports`, `port_connections`, `device_links`, `network_routes`, `fiber_cores`, `core_management`.
-- [ ] Audit QR label component agar bisa dipakai semua device type.
-- [ ] Audit penggunaan `project_id` di create/edit/detail/request/approval/filter.
+- [x] Audit `devices`, `device_ports`, `port_connections`, `device_links`, `network_routes`, `fiber_cores`, `core_management`.
+- [x] Audit QR label component agar bisa dipakai semua device type.
+- [x] Audit penggunaan `project_id` di create/edit/detail/request/approval/filter.
 - [x] Tetapkan keputusan nama produk: `Topology Management` sebagai pusat relasi, `As-Built Documents` sebagai output.
-- [ ] Pastikan semua FK dan index yang dibutuhkan trace sudah ada.
-- [ ] Pastikan `device_ports` mendukung customer/ONT assignment.
-- [ ] Pastikan `port_connections` mendukung route, cable, core range, status.
-- [ ] Audit kebutuhan tray/tube/core color coding pada `fiber_cores` dan `core_management`.
-- [ ] Audit kebutuhan Splice Matrix, core occupancy, attenuation log, dan fiber-cut impact analysis.
+- [x] Pastikan semua FK dan index yang dibutuhkan trace sudah ada.
+- [x] Pastikan `device_ports` mendukung customer/ONT assignment.
+- [x] Pastikan `port_connections` mendukung route, cable, core range, status.
+- [x] Audit kebutuhan tray/tube/core color coding pada `fiber_cores` dan `core_management`.
+- [x] Audit kebutuhan Splice Matrix, core occupancy, attenuation log, dan fiber-cut impact analysis.
 - [x] Siapkan migration idempotent untuk field tray/tube/core color foundation.
 - [x] Expose field tray/tube/core color dan attenuation dasar di backend resource.
 - [x] Buat response contract topology untuk frontend dan Syntrix-One.
-- [ ] Tentukan field wajib untuk port create/update.
-- [ ] Tentukan field wajib untuk connection create/update.
+- [x] Tentukan field wajib untuk port create/update.
+- [x] Tentukan field wajib untuk connection create/update.
 
 Checker:
 
-- [ ] Tidak ada tabel baru yang dibuat jika schema existing cukup.
-- [ ] Semua relasi target dapat direpresentasikan dengan tabel existing.
-- [ ] Semua device non-POP dapat diarahkan ke QR endpoint.
-- [ ] Project relation tersedia di API contract device.
-- [ ] Tidak ada field UUID-only yang menjadi satu-satunya data display di API contract.
-- [ ] Dokumen contract disetujui sebelum implementasi API.
+- [x] Tidak ada tabel baru yang dibuat jika schema existing cukup.
+- [x] Semua relasi target dapat direpresentasikan dengan tabel existing.
+- [x] Semua device non-POP dapat diarahkan ke QR endpoint.
+- [x] Project relation tersedia di API contract device.
+- [x] Tidak ada field UUID-only yang menjadi satu-satunya data display di API contract.
+- [x] Dokumen contract disetujui sebelum implementasi API.
+
+Catatan audit contract:
+
+- `resource.registry.js` sudah mengekspos `devices`, `device_ports`, `port_connections`, `device_links`, `network_routes`, `fiber_cores`, `core_management`, `as_built_documents`, dan filter `region_id`/`pop_id`/`project_id` yang diperlukan.
+- `device_ports` menjadi endpoint assignment customer/ONT melalui kolom `customer_id`, `ont_device_id`, `occupied_at`, `status`, dan soft delete.
+- `port_connections` menjadi source of truth connection port-to-port dengan `route_id`, `cable_device_id`, `core_start`, `core_end`, `fiber_count`, `status`, serta sinkronisasi `fiber_cores`.
+- Trace, integrity, maps, fiber-cut impact, device topology summary, dan as-built read model memakai schema existing; tambahan yang dibuat hanya field/foundation idempotent untuk color/tray/tube/attenuation dan read/export support.
+- QR label memakai template generik semua device non-POP dengan nama device, inventory ID, type, POP, optional project, dan optional tenant.
+- Relation-ready display adapter dan request review sudah menjadi guard agar UI tidak hanya menampilkan UUID untuk project/POP/device/connection.
 
 Risiko:
 
