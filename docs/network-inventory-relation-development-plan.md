@@ -618,7 +618,7 @@ Todo:
 
 - [x] Jadikan QR Label Panel sebagai komponen generik di detail semua device non-POP.
 - [x] Pastikan QR bulk bisa memproses semua device type yang eligible, bukan hanya ODP.
-- [ ] Pastikan QR label menampilkan type device, nama device, inventory ID, POP, dan optional project/tenant sesuai template.
+- [x] Pastikan QR label menampilkan type device, nama device, inventory ID, POP, dan optional project/tenant sesuai template.
 - [x] Pastikan public QR fallback tetap app-required dan aman.
 - [x] Pastikan create/edit device punya field Project yang jelas.
 - [x] Pastikan detail device menampilkan Project di section utama.
@@ -803,12 +803,12 @@ Todo:
 - [x] UI impact analysis menampilkan ODP/customer terdampak dari fiber cut.
 - [x] As-Built Documents diarahkan menjadi output/export dari data topology yang approved.
 - [x] Semua komponen memakai Relation-Ready Rendering.
-- [ ] Komponen form/tabs/drawer/select/date picker memakai shadcn UI bila tersedia.
-- [ ] Responsive desktop/tablet/mobile.
+- [x] Komponen form/tabs/drawer/select/date picker memakai shadcn UI bila tersedia.
+- [x] Responsive desktop/tablet/mobile.
 
 Checker:
 
-- [ ] Tidak ada layout overflow di mobile.
+- [x] Tidak ada layout overflow di mobile.
 - [x] Tidak ada UUID flash saat membuka detail.
 - [x] Adminregion dan superadmin melihat action sesuai role.
 - [x] Mutasi adminregion masuk approval.
@@ -835,6 +835,7 @@ Catatan implementasi 2026-06-17:
 - Strict relation-display guard frontend/Syntrix-One lulus: relation label tidak fallback ke raw UUID dan label role tidak mengekspos internal role ID.
 - Connection Wizard dan Device Port Provisioning menampilkan action sesuai role: Superadmin direct apply, Admin Region submit approval request, dan Validator/read-only tidak bisa mutasi topology.
 - Validation Requests mengenali request `Topology Connection`, menyediakan filter khusus, badge khusus, action `Approve Connection`, dan panel review endpoint/route/cable/core dengan before/after untuk update connection.
+- Topology Workspace advanced tools dipisah menjadi tabs `Connection`, `Occupancy`, dan `Provisioning` agar workflow connection/provisioning tetap memakai komponen UI konsisten dan lebih aman di mobile.
 - Splice Matrix operasional penuh seperti drag-and-drop mapping dan split ratio editor masih menjadi pekerjaan lanjutan setelah matrix read-only stabil.
 
 ---
@@ -944,6 +945,7 @@ Catatan implementasi 2026-06-19:
 - Selector yang tidak ditemukan tetap menghasilkan response sukses dengan warning agar frontend dapat menampilkan empty state yang jelas.
 - Scope backend untuk Maps dan endpoint topology read mengikuti assigned region untuk role Admin Region (`user_all_region`) dan Validator (`user_region`); Superadmin tetap dapat melihat semua region.
 - Frontend `/maps` membaca endpoint topology maps dan merender basemap OpenStreetMap melalui MapLibre, device marker, route GeoJSON, connection line, filter device type, serta simulasi fiber cut berdasarkan connection/cable.
+- Frontend Maps menampilkan badge role/scope region dari response backend agar Admin Region bisa memastikan layer yang terlihat sudah sesuai assigned region, serta memakai filter region, project, POP, tenant, device type, tab simulasi fiber cut, dan layout metric/map yang lebih aman di mobile.
 - Data tanpa koordinat atau geometry tetap tersedia sebagai issue list, sedangkan impact summary menampilkan device, connection, route, customer, dan ONT downstream terdampak.
 
 ---
@@ -1002,29 +1004,29 @@ Memastikan fitur aman sebelum dipakai operasional.
 
 UAT scenario:
 
-- [ ] Semua device non-POP punya QR di detail.
-- [ ] QR ODP, ODC, OLT, ONT, dan device lain membuka fallback/app target yang benar.
-- [ ] Create device baru wajib/menyarankan project dan tampil di approval.
-- [ ] Superadmin create ODP dengan 16 port.
-- [ ] Adminregion create ODP dan menunggu approval.
-- [ ] Superadmin approve create ODP lalu port tersedia.
-- [ ] Adminregion membuat connection ODC -> ODP dan menunggu approval.
-- [ ] Superadmin approve connection lalu trace bekerja.
-- [ ] Assign customer ke port ODP.
-- [ ] Coba assign customer ke port used, harus ditolak.
-- [ ] Trace customer ke POP.
-- [ ] Trace ODC downstream untuk impact analysis.
-- [ ] Integrity report mendeteksi orphan/cross-region test data.
-- [ ] Topology Management menampilkan port, connection, route, core, dan assignment.
-- [ ] Core Management menampilkan tray/tube/core color sesuai standar internasional.
-- [ ] Splice Matrix bisa menunjukkan mapping core input ke output/splitter.
-- [ ] Core occupancy dan health status bisa dibaca per cable.
-- [ ] Fiber cut simulation menampilkan device/customer terdampak jika relasi tersedia.
-- [ ] Attenuation warning muncul jika loss melebihi threshold.
-- [ ] As-Built Documents dapat dibuat dari project/topology approved.
-- [ ] Maps menampilkan data jika relasi dan koordinat sudah tersedia.
-- [ ] Audit trail menampilkan action, actor, entity label, before/after.
-- [ ] Syntrix-One detail ODP menampilkan data approved yang sama dengan frontend.
+- [x] Semua device non-POP punya QR di detail.
+- [x] QR ODP, ODC, OLT, ONT, dan device lain membuka fallback/app target yang benar.
+- [x] Create device baru wajib/menyarankan project dan tampil di approval.
+- [x] Superadmin create ODP dengan 16 port.
+- [x] Adminregion create ODP dan menunggu approval.
+- [x] Superadmin approve create ODP lalu port tersedia.
+- [x] Adminregion membuat connection ODC -> ODP dan menunggu approval.
+- [x] Superadmin approve connection lalu trace bekerja.
+- [x] Assign customer ke port ODP.
+- [x] Coba assign customer ke port used, harus ditolak.
+- [x] Trace customer ke POP.
+- [x] Trace ODC downstream untuk impact analysis.
+- [x] Integrity report mendeteksi orphan/cross-region test data.
+- [x] Topology Management menampilkan port, connection, route, core, dan assignment.
+- [x] Core Management menampilkan tray/tube/core color sesuai standar internasional.
+- [x] Splice Matrix bisa menunjukkan mapping core input ke output/splitter.
+- [x] Core occupancy dan health status bisa dibaca per cable.
+- [x] Fiber cut simulation menampilkan device/customer terdampak jika relasi tersedia.
+- [x] Attenuation warning muncul jika loss melebihi threshold.
+- [x] As-Built Documents dapat dibuat dari project/topology approved.
+- [x] Maps menampilkan data jika relasi dan koordinat sudah tersedia.
+- [x] Audit trail menampilkan action, actor, entity label, before/after.
+- [x] Syntrix-One detail ODP menampilkan data approved yang sama dengan frontend.
 
 Release checklist:
 
