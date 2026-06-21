@@ -31,6 +31,7 @@ const {
   markAllNotificationsAsRead,
   getNotificationDigest,
   applyValidationPayloadToAsset,
+  buildGenericFieldValidationPayload,
 } = require('./validation.service');
 const { getPagination } = require('../../utils/pagination');
 
@@ -86,7 +87,24 @@ function buildAuditRequestContext(request) {
     entity_id: request?.entity_id || null,
     device_name: deviceName || null,
     entity_label: entityLabel,
+    field_validation_type: payload.field_validation_type || device.device_type_key || null,
   };
+}
+
+function getAuditDeviceType(value) {
+  const payload = value?.payload_snapshot || value || {};
+  const device = payload.device || {};
+  const fieldValidation = payload.field_validation || {};
+  return String(payload.field_validation_type || device.device_type_key || fieldValidation.device_type_key || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function buildTypedAuditActionName(baseActionName, value) {
+  const deviceType = getAuditDeviceType(value);
+  return deviceType ? `${baseActionName}_${deviceType}` : baseActionName;
 }
 
 async function submitValidationRequest(req, res, next) {
@@ -113,6 +131,10 @@ async function submitValidationRequest(req, res, next) {
     if (!device) {
       throw createHttpError(404, 'Device not found');
     }
+    const normalizedPayloadSnapshot = buildGenericFieldValidationPayload({
+      payloadSnapshot,
+      device,
+    });
 
     assertHasRegionAccess(req.auth, device.region_id);
     assertPilotRegionAllowed(device.region_id);
@@ -132,7 +154,10 @@ async function submitValidationRequest(req, res, next) {
     }
 
     let request;
-    let auditActionName = 'validation_request_submitted';
+    let auditActionName = buildTypedAuditActionName(
+      'validation_request_submitted',
+      normalizedPayloadSnapshot,
+    );
     let actionType = ACTION.SUBMITTED;
     let beforeStatus = STATUS.UNVALIDATED;
     let responseCode = 201;
@@ -143,12 +168,15 @@ async function submitValidationRequest(req, res, next) {
         requestId: activeRequest.id,
         submittedByUserId: actorUserId,
         nextStatus: STATUS.ONGOING,
-        payloadSnapshot,
+        payloadSnapshot: normalizedPayloadSnapshot,
         evidenceAttachments,
         checklist,
         findingNote,
       });
-      auditActionName = 'validation_request_resubmitted_by_validator';
+      auditActionName = buildTypedAuditActionName(
+        'validation_request_resubmitted_by_validator',
+        normalizedPayloadSnapshot,
+      );
       actionType = ACTION.RESUBMIT_VALIDATOR;
       beforeStatus = activeRequest.current_status;
       responseCode = 200;
@@ -158,7 +186,7 @@ async function submitValidationRequest(req, res, next) {
         entityId,
         regionId: device.region_id,
         submittedByUserId: actorUserId,
-        payloadSnapshot,
+        payloadSnapshot: normalizedPayloadSnapshot,
         evidenceAttachments,
         checklist,
         findingNote,
@@ -172,7 +200,7 @@ async function submitValidationRequest(req, res, next) {
       actorRole,
       beforeStatus,
       afterStatus: STATUS.ONGOING,
-      payloadPatch: payloadSnapshot,
+      payloadPatch: normalizedPayloadSnapshot,
     });
 
     await createAuditLog({
@@ -352,7 +380,7 @@ async function approveByAdminRegion(req, res, next) {
 
     await createAuditLog({
       actorUserId,
-      actionName: 'validation_request_approved_by_adminregion',
+      actionName: buildTypedAuditActionName('validation_request_approved_by_adminregion', request),
       entityType: 'validation_requests',
       entityId: request.id,
       beforeData: {
@@ -419,7 +447,7 @@ async function rejectByAdminRegion(req, res, next) {
 
     await createAuditLog({
       actorUserId,
-      actionName: 'validation_request_rejected_by_adminregion',
+      actionName: buildTypedAuditActionName('validation_request_rejected_by_adminregion', request),
       entityType: 'validation_requests',
       entityId: request.id,
       beforeData: {
@@ -482,7 +510,7 @@ async function resubmitByAdminRegion(req, res, next) {
 
     await createAuditLog({
       actorUserId,
-      actionName: 'validation_request_resubmitted_by_adminregion',
+      actionName: buildTypedAuditActionName('validation_request_resubmitted_by_adminregion', request),
       entityType: 'validation_requests',
       entityId: request.id,
       beforeData: {
@@ -533,7 +561,7 @@ async function approveBySuperAdmin(req, res, next) {
 
     await createAuditLog({
       actorUserId,
-      actionName: 'validation_request_applied_to_asset',
+      actionName: buildTypedAuditActionName('validation_request_applied_to_asset', request),
       entityType: 'validation_requests',
       entityId: request.id,
       beforeData: applyResult.before,
@@ -560,7 +588,7 @@ async function approveBySuperAdmin(req, res, next) {
 
     await createAuditLog({
       actorUserId,
-      actionName: 'validation_request_approved_by_superadmin',
+      actionName: buildTypedAuditActionName('validation_request_approved_by_superadmin', request),
       entityType: 'validation_requests',
       entityId: request.id,
       beforeData: {
@@ -630,7 +658,7 @@ async function rejectBySuperAdmin(req, res, next) {
 
     await createAuditLog({
       actorUserId,
-      actionName: 'validation_request_rejected_by_superadmin',
+      actionName: buildTypedAuditActionName('validation_request_rejected_by_superadmin', request),
       entityType: 'validation_requests',
       entityId: request.id,
       beforeData: {

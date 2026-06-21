@@ -233,6 +233,12 @@ async function loadDeviceById(deviceId) {
       item: devices_by_pk(id: $id) {
         id
         region_id
+        pop_id
+        project_id
+        tenant_id
+        device_name
+        device_type_key
+        status
         validation_status
       }
     }
@@ -1213,6 +1219,138 @@ function pickObject(source, keys) {
   }, {});
 }
 
+const FIELD_VALIDATION_SOURCE = 'field-validation-device';
+const GENERIC_DEVICE_APPLY_FIELDS = [
+  'status',
+  'address',
+  'longitude',
+  'latitude',
+];
+const DEVICE_TYPE_APPLY_FIELDS = {
+  ODP: [
+    ...GENERIC_DEVICE_APPLY_FIELDS,
+    'splitter_ratio',
+    'odp_type',
+    'installation_type',
+    'total_ports',
+    'used_ports',
+  ],
+  ODC: [
+    ...GENERIC_DEVICE_APPLY_FIELDS,
+    'splitter_ratio',
+    'total_ports',
+    'used_ports',
+    'capacity_core',
+    'used_core',
+  ],
+  OLT: [
+    ...GENERIC_DEVICE_APPLY_FIELDS,
+    'management_ip',
+    'total_ports',
+    'used_ports',
+  ],
+  ONT: [
+    ...GENERIC_DEVICE_APPLY_FIELDS,
+    'serial_number',
+    'total_ports',
+    'used_ports',
+  ],
+  CABLE: [
+    ...GENERIC_DEVICE_APPLY_FIELDS,
+    'capacity_core',
+    'used_core',
+  ],
+  SWITCH: [
+    ...GENERIC_DEVICE_APPLY_FIELDS,
+    'management_ip',
+    'total_ports',
+    'used_ports',
+  ],
+  ROUTER: [
+    ...GENERIC_DEVICE_APPLY_FIELDS,
+    'management_ip',
+    'total_ports',
+    'used_ports',
+  ],
+};
+const PORT_APPLY_DEVICE_TYPES = new Set(['ODP', 'ODC', 'OLT', 'ONT', 'SWITCH', 'ROUTER']);
+
+function normalizeDeviceTypeKey(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+  return normalized || 'DEVICE';
+}
+
+function compactObject(source) {
+  return Object.entries(source || {}).reduce((acc, [key, value]) => {
+    if (value !== undefined) acc[key] = value;
+    return acc;
+  }, {});
+}
+
+function buildGenericFieldValidationPayload({ payloadSnapshot = {}, device = {} } = {}) {
+  const payload = payloadSnapshot && typeof payloadSnapshot === 'object' ? payloadSnapshot : {};
+  const legacyFieldValidation = payload.field_validation && typeof payload.field_validation === 'object'
+    ? payload.field_validation
+    : {};
+  const payloadDevice = payload.device && typeof payload.device === 'object' ? payload.device : {};
+  const fieldValidationType = normalizeDeviceTypeKey(
+    payload.field_validation_type ||
+    payloadDevice.device_type_key ||
+    legacyFieldValidation.device_type_key ||
+    device.device_type_key,
+  );
+
+  return {
+    ...payload,
+    source: payload.source || FIELD_VALIDATION_SOURCE,
+    field_validation_type: fieldValidationType,
+    device: {
+      ...payloadDevice,
+      ...compactObject({
+        id: payloadDevice.id || device.id,
+        device_type_key: payloadDevice.device_type_key || device.device_type_key || fieldValidationType,
+        device_name: payloadDevice.device_name || device.device_name,
+        region_id: payloadDevice.region_id || device.region_id,
+        pop_id: payloadDevice.pop_id || device.pop_id,
+        project_id: payloadDevice.project_id || device.project_id,
+        tenant_id: payloadDevice.tenant_id || device.tenant_id,
+      }),
+    },
+    general_validation: {
+      ...(payload.general_validation && typeof payload.general_validation === 'object' ? payload.general_validation : {}),
+      ...compactObject({
+        device_name: legacyFieldValidation.new_device_name || legacyFieldValidation.old_device_name,
+        status: legacyFieldValidation.validation_status,
+        address: legacyFieldValidation.address,
+        longitude: legacyFieldValidation.longitude,
+        latitude: legacyFieldValidation.latitude,
+      }),
+    },
+    technical_validation: {
+      ...(payload.technical_validation && typeof payload.technical_validation === 'object' ? payload.technical_validation : {}),
+      ...pickObject(legacyFieldValidation, [
+        'splitter_ratio',
+        'odp_type',
+        'installation_type',
+        'total_ports',
+        'used_ports',
+        'capacity_core',
+        'used_core',
+        'management_ip',
+        'serial_number',
+      ]),
+    },
+  };
+}
+
+function getAllowedDeviceApplyFields(deviceTypeKey) {
+  return DEVICE_TYPE_APPLY_FIELDS[normalizeDeviceTypeKey(deviceTypeKey)] || GENERIC_DEVICE_APPLY_FIELDS;
+}
+
+function shouldApplyPortPayload(deviceTypeKey) {
+  return PORT_APPLY_DEVICE_TYPES.has(normalizeDeviceTypeKey(deviceTypeKey));
+}
+
 function normalizeResourcePayloadForApply(resourceName, payload) {
   if (resourceName !== 'projects') {
     return payload;
@@ -1240,6 +1378,10 @@ async function loadDeviceSnapshot(deviceId) {
       device: devices_by_pk(id: $deviceId) {
         id
         region_id
+        pop_id
+        project_id
+        tenant_id
+        device_type_key
         device_name
         status
         validation_status
@@ -1665,28 +1807,33 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
     return applyResourceChangeRequest({ request, actorUserId });
   }
 
-  const payloadDevice = payload.device || {};
-  const payloadPorts = Array.isArray(payload.device_ports) ? payload.device_ports : [];
-
   const before = await loadDeviceSnapshot(request.entity_id);
   if (!before.device) {
     throw createHttpError(404, 'Target device for apply not found');
   }
 
+  const normalizedPayload = buildGenericFieldValidationPayload({
+    payloadSnapshot: payload,
+    device: before.device,
+  });
+  const payloadDevice = {
+    ...(normalizedPayload.device || {}),
+    ...(normalizedPayload.general_validation || {}),
+    ...(normalizedPayload.technical_validation || {}),
+  };
+  const deviceTypeKey = normalizeDeviceTypeKey(
+    normalizedPayload.field_validation_type ||
+    payloadDevice.device_type_key ||
+    before.device.device_type_key,
+  );
+  const payloadPorts = shouldApplyPortPayload(deviceTypeKey) && Array.isArray(normalizedPayload.device_ports)
+    ? normalizedPayload.device_ports
+    : [];
+
   const currentPortMap = new Map(before.ports.map((port) => [String(port.id), port]));
   const currentPortByIndex = new Map(before.ports.map((port) => [Number(port.port_index), port]));
 
-  const deviceChanges = pickObject(payloadDevice, [
-    'status',
-    'splitter_ratio',
-    'odp_type',
-    'installation_type',
-    'total_ports',
-    'used_ports',
-    'address',
-    'longitude',
-    'latitude',
-  ]);
+  const deviceChanges = pickObject(payloadDevice, getAllowedDeviceApplyFields(deviceTypeKey));
   // `validation_requests.current_status` uses `validated`,
   // while `devices.validation_status` still uses legacy enum (`valid|warning|invalid|unvalidated`).
   deviceChanges.validation_status = 'valid';
@@ -1941,4 +2088,5 @@ module.exports = {
   markAllNotificationsAsRead,
   getNotificationDigest,
   applyValidationPayloadToAsset,
+  buildGenericFieldValidationPayload,
 };

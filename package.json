@@ -10,6 +10,7 @@
     "audit:deps": "npm audit",
     "smoke": "node scripts/smoke-test.js",
     "test:validation-state-machine": "node scripts/test-validation-state-machine.js",
+    "test:generic-validation-payload": "node scripts/test-generic-device-validation-payload.js",
     "test:validation-workflow": "node scripts/test-validation-workflow.js",
     "test:validation-auth-regression": "node scripts/test-validation-auth-regression.js",
     "check:validation-test-accounts": "node scripts/check-validation-test-accounts.js",
