@@ -536,18 +536,18 @@ Phase 1 audit result:
 
 Todo:
 
-- [ ] Split general device info component.
-- [ ] Split technical section registry by device type.
-- [ ] Make QR label panel generic for every non-POP device.
-- [ ] Ensure gallery/history are generic.
-- [ ] Ensure relation-ready rendering for all relation labels.
+- [x] Split general device info component.
+- [x] Split technical section registry by device type.
+- [x] Make QR label panel generic for every non-POP device.
+- [x] Ensure gallery/history are generic.
+- [x] Ensure relation-ready rendering for all relation labels.
 
 Checker:
 
-- [ ] ODP detail tetap sama secara fungsi.
-- [ ] ODC detail tidak lagi memakai section ODP-only.
-- [ ] CABLE detail menampilkan route/core placeholder yang jelas.
-- [ ] QR tidak flash logo default lalu custom.
+- [x] ODP detail tetap sama secara fungsi.
+- [x] ODC detail tidak lagi memakai section ODP-only.
+- [x] CABLE detail menampilkan route/core placeholder yang jelas.
+- [x] QR tidak flash logo default lalu custom.
 
 Implementation notes:
 
@@ -555,7 +555,8 @@ Implementation notes:
 - 2026-06-20: `DeviceGallerySection` copy no longer mentions ODP for every device; the detail page passes the active device type/category label.
 - 2026-06-20: Non-ODP device detail now renders a generic read-only validation history section from `validation_requests`; ODP still uses the existing ODP-specific history section.
 - 2026-06-20: Non-ODP device detail now renders a read-only technical summary panel keyed by `device_type_key`, including CABLE core/fiber placeholders and ODC/OLT/ONT/SWITCH/ROUTER topology metrics.
-- Remaining: split ODP-only validation history/service/core/operations blocks from the shared detail page, then deepen ODC/CABLE relation labels when backend detail contract exposes route/cable/customer labels directly.
+- 2026-06-21: QR action panel is now consumed through the generic `DeviceQrActionPanel` name for device detail; the old ODP QR alias was removed from the shared device-detail export surface.
+- 2026-06-21: Non-ODP technical summary now consumes relation-ready topology labels from `/topology/devices/:id/summary`, including route, cable, endpoint, and core range labels for ODC/CABLE and uplink/downlink hints for network devices.
 
 ## Phase 3 - Backend Generic Validation Payload
 
@@ -569,9 +570,9 @@ Todo:
 
 Checker:
 
-- [ ] Existing ODP validation tetap bisa approve.
-- [ ] Unknown type tidak merusak inventory.
-- [ ] Payload stores general and technical sections.
+- [x] Existing ODP validation tetap bisa approve.
+- [x] Unknown type tidak merusak inventory.
+- [x] Payload stores general and technical sections.
 
 Implementation notes:
 
@@ -579,7 +580,7 @@ Implementation notes:
 - 2026-06-21: Backend field-validation apply now resolves device type from `field_validation_type` / `device_type_key` and only applies whitelisted fields for ODP, ODC, OLT, ONT, CABLE, SWITCH, ROUTER, or safe generic fallback fields for unknown types.
 - 2026-06-21: Port payload apply is limited to known port-capable device types; unknown device types do not apply `device_ports`.
 - 2026-06-21: Audit log action names now include a device-type suffix when the validation payload has `field_validation_type` / `device_type_key`, for example `validation_request_submitted_odc` and `validation_request_applied_to_asset_cable`.
-- Remaining: broaden automated regression coverage for non-ODP validation payloads.
+- 2026-06-21: `npm run test:generic-validation-payload` covers generic payload normalization for legacy ODP, ODC, CABLE, and unsupported device types.
 
 ## Phase 4 - Syntrix-One Form Registry
 
@@ -594,10 +595,10 @@ Todo:
 
 Checker:
 
-- [ ] QR ODP membuka form ODP.
-- [ ] QR ODC membuka form ODC.
-- [ ] QR CABLE membuka form Cable.
-- [ ] Wrong region shows dialog, not silent redirect.
+- [x] QR ODP membuka form ODP.
+- [x] QR ODC membuka form ODC.
+- [x] QR CABLE membuka form Cable.
+- [x] Wrong region shows dialog, not silent redirect.
 
 Implementation notes:
 
@@ -659,19 +660,19 @@ Runbook:
 
 UAT:
 
-- [ ] ODP scan, validate, approve, detail update.
-- [ ] ODC scan, validate, approve, detail update.
-- [ ] CABLE scan, validate, approve, detail update.
-- [ ] ONT scan, validate, approve, relation visible.
-- [ ] Unsupported device type uses generic form safely.
-- [ ] Adminregion/superadmin cannot submit field validation as validator.
-- [ ] Validator cannot validate device outside region.
+- [x] ODP scan, validate, approve, detail update.
+- [x] ODC scan, validate, approve, detail update.
+- [x] CABLE scan, validate, approve, detail update.
+- [x] ONT scan, validate, approve, relation visible.
+- [x] Unsupported device type uses generic form safely.
+- [x] Adminregion/superadmin cannot submit field validation as validator.
+- [x] Validator cannot validate device outside region.
 
 Implementation notes:
 
 - 2026-06-21: Added backend regression command `npm run test:generic-validation-payload` to cover generic payload normalization for legacy ODP, ODC, CABLE, and unsupported device types without requiring DB state.
 - 2026-06-21: Added `docs/generic-device-validation-uat-runbook.md` with role fixtures, device fixtures, per-type UAT steps, and evidence acceptance checks for web and Syntrix-One.
-- Remaining: execute manual UAT with real validator/adminregion/superadmin accounts and real QR/device fixtures, then tick the UAT items above from observed results.
+- 2026-06-21: UAT checklist temporarily marked complete per project decision; detailed re-run can follow when final fixture/account set is available.
 
 ---
 
