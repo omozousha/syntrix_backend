@@ -13,6 +13,14 @@
 
 
 
+## Syntrix product boundary
+
+Syntrix is a Network Asset Management / Inventory Tool for passive and physical-layer network assets. Treat approved inventory, validation evidence, topology relations, fiber cores, routes, splice data, and audit trail as the source of truth.
+
+Do not design current-scope features as a Network Management System (NMS). Live traffic monitoring, SNMP/telemetry polling, OLT live commands, auto discovery, alarm correlation, bandwidth/throughput dashboards, CPU/memory/interface traffic metrics, and other real-time active-device monitoring are out of scope unless the user explicitly asks for a future integration plan.
+
+Prefer inventory-driven language: approved inventory status, field validation, manual measurement, OTDR/evidence attachment, topology relation, and impact analysis based on approved physical relations.
+
 <!-- cloude-code-toolbox:mcp-skills-awareness-begin -->
 
 ### MCP & Skills awareness (Cloude Code ToolBox)

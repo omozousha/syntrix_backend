@@ -1094,6 +1094,167 @@ function buildConnectionSummary(connections) {
   };
 }
 
+function buildDeviceRef(device) {
+  if (!device) return null;
+  return {
+    id: device.id,
+    device_id: device.device_id,
+    device_name: device.device_name,
+    device_type_key: device.device_type_key,
+    region_id: device.region_id,
+    pop_id: device.pop_id,
+    status: device.status,
+  };
+}
+
+function buildPortRef(port) {
+  if (!port) return null;
+  return {
+    id: port.id,
+    port_id: port.port_id,
+    device_id: port.device_id,
+    port_index: port.port_index,
+    port_label: port.port_label,
+    port_type: port.port_type,
+    direction: port.direction,
+    status: port.status,
+  };
+}
+
+function buildCableRef(device) {
+  if (!device) return null;
+  return {
+    id: device.id,
+    device_id: device.device_id,
+    device_name: device.device_name,
+    device_type_key: device.device_type_key,
+    status: device.status,
+  };
+}
+
+function buildRouteRef(route) {
+  if (!route) return null;
+  return {
+    id: route.id,
+    route_id: route.route_id,
+    route_code: route.route_code,
+    route_name: route.route_name,
+    route_type: route.route_type,
+    status: route.status,
+  };
+}
+
+function buildOdcConnectionItem(connection, direction, odcPort, peerPort, peerDevice) {
+  const hasCoreRange = connection.core_start != null && connection.core_end != null;
+  return {
+    id: connection.id,
+    connection_id: connection.connection_id,
+    direction,
+    status: connection.status,
+    connection_type: connection.connection_type,
+    odc_port: buildPortRef(odcPort),
+    peer_port: buildPortRef(peerPort),
+    peer_device: buildDeviceRef(peerDevice),
+    cable_device: buildCableRef(connection.cable_device),
+    route: buildRouteRef(connection.route),
+    core_start: connection.core_start,
+    core_end: connection.core_end,
+    fiber_count: connection.fiber_count,
+    labels: {
+      title: connection.labels?.title || null,
+      peer: peerDevice?.device_name || peerDevice?.device_id || null,
+      odc_port: odcPort?.port_label || odcPort?.port_id || null,
+      peer_port: peerPort?.port_label || peerPort?.port_id || null,
+      cable: connection.labels?.cable || null,
+      route: connection.labels?.route || null,
+      core_range: hasCoreRange ? `${connection.core_start}-${connection.core_end}` : null,
+    },
+  };
+}
+
+function summarizeOdcBucket(items) {
+  return {
+    total: items.length,
+    by_status: countBy(items, 'status'),
+    with_cable: items.filter((item) => item.cable_device).length,
+    with_core_range: items.filter((item) => item.core_start != null && item.core_end != null).length,
+  };
+}
+
+function buildOdcRelationSummary(device, ports, enrichedConnections) {
+  const typeKey = String(device?.device_type_key || '').toUpperCase();
+  if (typeKey !== 'ODC') return null;
+
+  const odcPortIds = new Set(ports.map((port) => port.id).filter(Boolean));
+  const upstream = [];
+  const downstream = [];
+  const cableUsage = [];
+
+  enrichedConnections.forEach((connection) => {
+    const fromPortIsOdc = odcPortIds.has(connection.from_port_id);
+    const toPortIsOdc = odcPortIds.has(connection.to_port_id);
+
+    if (toPortIsOdc) {
+      upstream.push(buildOdcConnectionItem(
+        connection,
+        'upstream',
+        connection.to_port,
+        connection.from_port,
+        connection.from_device,
+      ));
+    }
+
+    if (fromPortIsOdc) {
+      downstream.push(buildOdcConnectionItem(
+        connection,
+        'downstream',
+        connection.from_port,
+        connection.to_port,
+        connection.to_device,
+      ));
+    }
+
+    if (connection.cable_device_id === device.id) {
+      cableUsage.push({
+        id: connection.id,
+        connection_id: connection.connection_id,
+        status: connection.status,
+        connection_type: connection.connection_type,
+        from_device: buildDeviceRef(connection.from_device),
+        to_device: buildDeviceRef(connection.to_device),
+        from_port: buildPortRef(connection.from_port),
+        to_port: buildPortRef(connection.to_port),
+        route: buildRouteRef(connection.route),
+        core_start: connection.core_start,
+        core_end: connection.core_end,
+        fiber_count: connection.fiber_count,
+        labels: connection.labels || null,
+      });
+    }
+  });
+
+  return {
+    device_type_key: typeKey,
+    summary: {
+      upstream: summarizeOdcBucket(upstream),
+      downstream: summarizeOdcBucket(downstream),
+      cable_usage: summarizeOdcBucket(cableUsage),
+      has_upstream: upstream.length > 0,
+      has_downstream: downstream.length > 0,
+      has_trace_ready_relation: upstream.length > 0 && downstream.length > 0,
+    },
+    upstream,
+    downstream,
+    cable_usage: cableUsage,
+    readiness: {
+      has_upstream_source: upstream.length > 0,
+      has_downstream_odp: downstream.some((item) => String(item.peer_device?.device_type_key || '').toUpperCase() === 'ODP'),
+      has_cable_context: [...upstream, ...downstream].some((item) => item.cable_device),
+      has_core_mapping: [...upstream, ...downstream].some((item) => item.core_start != null && item.core_end != null),
+    },
+  };
+}
+
 function buildFiberCoreSummary(fiberCores) {
   return {
     total: fiberCores.length,
@@ -3866,6 +4027,7 @@ resourceRouter.get('/topology/devices/:id/summary', authenticate, requireRole('a
     const enrichedConnections = await enrichPortConnections(connections);
     const coreManagementRows = await loadCoreManagementByDeviceId(device.id, limit);
     const enrichedCoreManagement = await enrichCoreManagementRows(coreManagementRows);
+    const odcRelations = buildOdcRelationSummary(device, ports, enrichedConnections);
 
     const cableDeviceIds = Array.from(new Set([
       String(device.device_type_key || '').toUpperCase() === 'CABLE' ? device.id : null,
@@ -3894,6 +4056,7 @@ resourceRouter.get('/topology/devices/:id/summary', authenticate, requireRole('a
         summary: buildCoreManagementSummary(coreManagementRows),
         items: enrichedCoreManagement,
       },
+      odc_relations: odcRelations,
       fiber_cores: {
         summary: buildFiberCoreSummary(fiberCores),
         cable_device_ids: cableDeviceIds,
@@ -3904,6 +4067,10 @@ resourceRouter.get('/topology/devices/:id/summary', authenticate, requireRole('a
         has_connections: connections.length > 0,
         has_core_summary: coreManagementRows.length > 0,
         has_fiber_core_inventory: fiberCores.length > 0,
+        has_odc_upstream: odcRelations?.readiness?.has_upstream_source || false,
+        has_odc_downstream_odp: odcRelations?.readiness?.has_downstream_odp || false,
+        has_odc_cable_context: odcRelations?.readiness?.has_cable_context || false,
+        has_odc_core_mapping: odcRelations?.readiness?.has_core_mapping || false,
         trace_endpoint: `/api/v1/devices/${device.id}/trace`,
       },
     };
