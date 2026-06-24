@@ -150,9 +150,9 @@ const RESOURCE_CONFIG = {
   splitterProfiles: {
     table: 'splitter_profiles',
     pk: 'id',
-    listFields: ['id', 'splitter_profile_id', 'ratio_label', 'input_port_count', 'output_port_count', 'expected_loss_db', 'notes', 'is_active', 'created_at', 'updated_at'],
-    insertFields: ['ratio_label', 'input_port_count', 'output_port_count', 'expected_loss_db', 'notes', 'is_active'],
-    updateFields: ['ratio_label', 'input_port_count', 'output_port_count', 'expected_loss_db', 'notes', 'is_active'],
+    listFields: ['id', 'splitter_profile_id', 'ratio_label', 'input_port_count', 'output_port_count', 'expected_loss_db', 'notes', 'is_active', 'allowed_device_type_keys', 'created_at', 'updated_at'],
+    insertFields: ['ratio_label', 'input_port_count', 'output_port_count', 'expected_loss_db', 'notes', 'is_active', 'allowed_device_type_keys'],
+    updateFields: ['ratio_label', 'input_port_count', 'output_port_count', 'expected_loss_db', 'notes', 'is_active', 'allowed_device_type_keys'],
     searchColumns: ['ratio_label', 'notes'],
     filterKeys: ['is_active', 'output_port_count'],
     defaultOrderBy: [{ output_port_count: 'asc' }, { ratio_label: 'asc' }],

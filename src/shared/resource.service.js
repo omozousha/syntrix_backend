@@ -366,7 +366,8 @@ async function enrichDeviceRelationsWithSql(data) {
         'sp.ratio_label as splitter_ratio_label',
         'sp.input_port_count::text as splitter_input_port_count',
         'sp.output_port_count::text as splitter_output_port_count',
-        'sp.expected_loss_db::text as splitter_expected_loss_db'
+        'sp.expected_loss_db::text as splitter_expected_loss_db',
+        'sp.allowed_device_type_keys::text[] as splitter_allowed_device_type_keys'
       );
     }
 
@@ -460,6 +461,7 @@ async function enrichDeviceRelationsWithSql(data) {
           input_port_count: row.splitter_input_port_count,
           output_port_count: row.splitter_output_port_count,
           expected_loss_db: row.splitter_expected_loss_db,
+          allowed_device_type_keys: row.splitter_allowed_device_type_keys,
         }),
       };
     };
