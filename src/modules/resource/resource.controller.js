@@ -26,6 +26,7 @@ const {
   validateDeviceLinkPayload,
   validateDevicePortPayload,
   validatePortConnectionPayload,
+  validatePortDirectionForConnection,
 } = require('../device/connectivity.validation');
 const { validateFiberCoreRangeForConnection } = require('../device/fiber-core-policy.service');
 const { buildOdpCoreChainSummary } = require('../device/odp-chain.service');
@@ -600,6 +601,7 @@ async function validatePortConnectionOperationalState(payload, existing = null) 
   if (toActive) throw createHttpError(400, 'to_port_id is already used by an active/planned connection');
 
   await validateFiberCoreRangeForConnection(payload, existing);
+  await validatePortDirectionForConnection(payload, existing);
 }
 
 function shouldHoldDeviceForSuperadminApproval(req, object) {

@@ -8,6 +8,7 @@ const {
 } = require('../../shared/resource.service');
 const { RESOURCE_CONFIG } = require('../resource/resource.registry');
 const { validateFiberCoreRangeForConnection } = require('../device/fiber-core-policy.service');
+const { validatePortDirectionForConnection } = require('../device/connectivity.validation');
 
 const STATUS = {
   UNVALIDATED: 'unvalidated',
@@ -1631,6 +1632,7 @@ async function validatePortConnectionApplyPayload(payload, existing = null) {
   if (toActive) throw createHttpError(400, 'to_port_id is already used by an active/planned connection');
 
   await validateFiberCoreRangeForConnection(payload, existing);
+  await validatePortDirectionForConnection(payload, existing);
 }
 
 function hasConnectionCoreRange(connection = {}) {

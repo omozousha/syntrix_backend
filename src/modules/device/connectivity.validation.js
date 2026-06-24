@@ -1,4 +1,5 @@
 const { createHttpError } = require('../../utils/httpError');
+const { executeHasura } = require('../../config/hasura');
 
 const LINK_STATUS = new Set(['planning', 'active', 'inactive', 'cutover']);
 const PORT_STATUS = new Set(['idle', 'used', 'reserved', 'down', 'maintenance']);
@@ -85,6 +86,86 @@ function validateDevicePortPayload(payload, mode = 'create') {
 
 }
 
+async function loadDevicePortDirectionValidationContext(portId) {
+  if (!portId) return null;
+  const query = `
+    query LoadDevicePortDirectionContext($id: uuid!) {
+      item: device_ports_by_pk(id: $id) {
+        id
+        device_id
+        direction
+        port_type
+      }
+    }
+  `;
+  const data = await executeHasura(query, { id: portId });
+  return data.item || null;
+}
+
+async function loadDeviceTypeById(deviceId) {
+  if (!deviceId) return null;
+  const query = `
+    query LoadDeviceTypeById($id: uuid!) {
+      item: devices_by_pk(id: $id) {
+        id
+        device_type_key
+      }
+    }
+  `;
+  const data = await executeHasura(query, { id: deviceId });
+  return data.item || null;
+}
+
+async function validatePortDirectionForConnection(payload, existing = null) {
+  const fromPortId = payload.from_port_id || existing?.from_port_id;
+  const toPortId = payload.to_port_id || existing?.to_port_id;
+  if (!fromPortId || !toPortId) return;
+
+  const [fromPort, toPort] = await Promise.all([
+    loadDevicePortDirectionValidationContext(fromPortId),
+    loadDevicePortDirectionValidationContext(toPortId),
+  ]);
+  if (!fromPort || !toPort) return;
+
+  const [fromDevice, toDevice] = await Promise.all([
+    fromPort.device_id ? loadDeviceTypeById(fromPort.device_id) : Promise.resolve(null),
+    toPort.device_id ? loadDeviceTypeById(toPort.device_id) : Promise.resolve(null),
+  ]);
+  if (!fromDevice || !toDevice) return;
+
+  const fromType = String(fromDevice.device_type_key || '').toUpperCase();
+  const toType = String(toDevice.device_type_key || '').toUpperCase();
+  const fromDirection = String(fromPort.direction || '').toLowerCase();
+  const toDirection = String(toPort.direction || '').toLowerCase();
+  const hasFromDirection = Boolean(fromDirection) && fromDirection !== 'bidirectional';
+  const hasToDirection = Boolean(toDirection) && toDirection !== 'bidirectional';
+
+  // OTB -> ODC feeder connection: from port (OTB) should be 'out', to port (ODC) should be 'in'
+  if (fromType === 'OTB' && toType === 'ODC') {
+    if (hasFromDirection && fromDirection !== 'out') {
+      throw createHttpError(400, 'OTB feeder port must have direction=out for ODC connection');
+    }
+    if (hasToDirection && toDirection !== 'in') {
+      throw createHttpError(400, 'ODC feeder/input port must have direction=in for OTB connection');
+    }
+    return;
+  }
+
+  // ODC -> ODP distribution connection: from port (ODC) should be 'out', to port (ODP) should be 'in'
+  if (fromType === 'ODC' && toType === 'ODP') {
+    if (hasFromDirection && fromDirection !== 'out') {
+      throw createHttpError(400, 'ODC distribution port must have direction=out for ODP connection');
+    }
+    if (hasToDirection && toDirection !== 'in') {
+      throw createHttpError(400, 'ODP upstream/input port must have direction=in for ODC connection');
+    }
+    return;
+  }
+
+  // For unknown device type pairs, direction validation is skipped
+  // until specific rules are defined for that device combination
+}
+
 function validatePortConnectionPayload(payload, mode = 'create') {
   if (mode === 'create') {
     ['region_id', 'from_port_id', 'to_port_id'].forEach((field) => {
@@ -133,4 +214,5 @@ module.exports = {
   validateDeviceLinkPayload,
   validateDevicePortPayload,
   validatePortConnectionPayload,
+  validatePortDirectionForConnection,
 };

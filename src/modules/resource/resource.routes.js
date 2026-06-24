@@ -1183,7 +1183,7 @@ function summarizeOdcBucket(items) {
   };
 }
 
-function buildOdcRelationSummary(device, ports, enrichedConnections) {
+async function buildOdcRelationSummary(device, ports, enrichedConnections) {
   const typeKey = String(device?.device_type_key || '').toUpperCase();
   if (typeKey !== 'ODC') return null;
 
@@ -1218,6 +1218,22 @@ function buildOdcRelationSummary(device, ports, enrichedConnections) {
 
   // Collect cable references from upstream/downstream ODC connections
   const cableUsage = [...upstream, ...downstream].filter((item) => item.cable_device);
+  // Count unique downstream ODP devices and their customer assignments
+  let downstreamOdpCount = 0;
+  let affectedCustomerCount = 0;
+  const odpDeviceIds = Array.from(
+    new Set(
+      downstream
+        .filter((item) => String(item.peer_device?.device_type_key || "").toUpperCase() === "ODP")
+        .map((item) => item.peer_device?.id)
+        .filter(Boolean),
+    ),
+  );
+  if (odpDeviceIds.length > 0) {
+    const odpPorts = await loadPortsByDeviceIds(odpDeviceIds);
+    downstreamOdpCount = odpDeviceIds.length;
+    affectedCustomerCount = odpPorts.filter((port) => port.is_active !== false && !port.deleted_at && port.customer_id).length;
+  }
 
   return {
     device_type_key: typeKey,
@@ -4056,7 +4072,7 @@ resourceRouter.get('/topology/devices/:id/summary', authenticate, requireRole('a
     const enrichedConnections = await enrichPortConnections(connections);
     const coreManagementRows = await loadCoreManagementByDeviceId(device.id, limit);
     const enrichedCoreManagement = await enrichCoreManagementRows(coreManagementRows);
-    const odcRelations = buildOdcRelationSummary(device, ports, enrichedConnections);
+    const odcRelations = await buildOdcRelationSummary(device, ports, enrichedConnections);
 
     const cableDeviceIds = Array.from(new Set([
       String(device.device_type_key || '').toUpperCase() === 'CABLE' ? device.id : null,
