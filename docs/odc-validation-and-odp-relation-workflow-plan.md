@@ -651,75 +651,85 @@ Kapan endpoint baru boleh dibuat:
 - perlu action domain baru yang bukan resource CRUD, bukan validation request, dan bukan topology trace;
 - semua opsi reuse sudah dicatat dan ditolak di plan sebelum implementasi.
 
-### Phase 1 - Contract Audit
+### Phase 1 - Contract Audit ✅
 
 Todo:
 
-- [ ] Audit current ODC `device_ports` template and role naming.
-- [ ] Audit ODP input/upstream port convention.
-- [ ] Audit OTB/POP port convention for feeder output.
-- [ ] Audit existing `/topology/devices/:id/summary` response for ODC downstream labels.
-- [ ] Audit existing `/topology/devices/:id/summary` response for ODC upstream OTB labels.
-- [ ] Audit existing `/topology/trace` response for full chain OTB -> ODC -> ODP.
-- [ ] Audit generic `/portConnections` resource flow for relation create/update/archive.
-- [ ] Audit validation payload apply whitelist for ODC-specific fields.
+- [x] Audit current ODC `device_ports` template and role naming.
+- [x] Audit ODP input/upstream port convention.
+- [x] Audit OTB/POP port convention for feeder output.
+- [x] Audit existing `/topology/devices/:id/summary` response for ODC downstream labels.
+- [x] Audit existing `/topology/devices/:id/summary` response for ODC upstream OTB labels.
+- [x] Audit existing `/topology/trace` response for full chain OTB -> ODC -> ODP.
+- [x] Audit generic `/portConnections` resource flow for relation create/update/archive.
+- [x] Audit validation payload apply whitelist for ODC-specific fields.
 
 Checker:
 
-- [ ] Gap table tersedia untuk backend, frontend, and Syntrix-One.
-- [ ] Tidak ada runtime change.
+- [x] Gap table tersedia untuk backend, frontend, and Syntrix-One.
+- [x] Tidak ada runtime change.
 
-### Phase 2 - ODC Validation Payload Contract
+**Gap Table:**
+
+| # | Area | Gap | Dampak | Prioritas |
+|---|------|-----|--------|-----------|
+| G1 | ODC port role | Tidak ada `port_role` explicit (feeder vs distribution) — cuma andelin `direction` | Validasi port direction sudah jalan, tapi operator bisa salah set direction | Rendah |
+| G2 | ODP port convention | Tidak ada standardisasi port index untuk upstream input | Konsistensi tergantung operator | Rendah |
+| G3 | Summary response | ✅ **Terselesaikan** — Backend: port_summary (feeder/distribution/active) + core_summary (mappings/cores_used/unique_cables). Frontend: cards di OdcRelationSummary menampilkan breakdown port & core usage. | — | ✅ |
+| G4 | Trace endpoint | ✅ **Terselesaikan** — `device_type_key` per edge + `odp_chains` chain completeness | — | ✅ |
+| G5 | Apply whitelist | ✅ Tidak ada gap — sesuai plan | — | ✅ |
+
+### Phase 2 - ODC Validation Payload Contract ✅
 
 Todo:
 
-- [ ] Add ODC-specific payload normalizer fields.
-- [ ] Add ODC-specific apply whitelist.
-- [ ] Preserve generic `technical_validation` fallback.
-- [ ] Ensure unsupported ODC relation fields are review-only, not directly applied.
+- [x] Add ODC-specific payload normalizer fields.
+- [x] Add ODC-specific apply whitelist.
+- [x] Preserve generic `technical_validation` fallback.
+- [x] Ensure unsupported ODC relation fields are review-only, not directly applied.
 
 Checker:
 
-- [ ] ODC payload stores general/cabinet/port/core/evidence sections.
-- [ ] ODC validation cannot write unrelated device fields.
-- [ ] Existing ODP validation still passes.
+- [x] ODC payload stores general/cabinet/port/core/evidence sections.
+- [x] ODC validation cannot write unrelated device fields.
+- [x] Existing ODP validation still passes.
 
-### Phase 3 - ODC Upstream and Downstream Topology Summary
+### Phase 3 - ODC Upstream and Downstream Topology Summary ✅
 
 Todo:
 
 - [x] Extend existing `/topology/devices/:id/summary` with upstream OTB/POP summary for ODC.
 - [x] Extend existing `/topology/devices/:id/summary` with downstream ODP summary for ODC.
 - [x] Include `labels.from`, `labels.to`, `labels.route`, `labels.cable`, and `labels.core_range`.
-- [ ] Include downstream ODP count and affected customer count if role permits.
-- [ ] Reuse existing `/topology/trace` for full-chain verification; enrich response only if edge labels are missing.
+- [x] Include downstream ODP count and affected customer count if role permits.
+- [x] Reuse existing `/topology/trace` for full-chain verification; enrich response only if edge labels are missing.
 
 Checker:
 
-- [ ] Detail ODC can render upstream OTB/source without UUID.
-- [ ] Detail ODC can render ODP downstream list without UUID.
-- [ ] Trace Topology can use existing trace endpoint without new ODC-specific trace endpoint.
-- [ ] Adminregion region guard applies.
-- [ ] Superadmin sees all accessible topology.
+- [x] Detail ODC can render upstream OTB/source without UUID.
+- [x] Detail ODC can render ODP downstream list without UUID.
+- [x] Trace Topology can use existing trace endpoint without new ODC-specific trace endpoint.
+- [x] Adminregion region guard applies.
+- [x] Superadmin sees all accessible topology.
 
-### Phase 4 - OTB -> ODC and ODC -> ODP Relation Validation Rules
+### Phase 4 - OTB -> ODC and ODC -> ODP Relation Validation Rules ✅
 
 Todo:
 
-- [ ] Enforce OTB/POP feeder port to ODC feeder/input port when port role data exists.
-- [ ] Enforce ODC output/distribution port to ODP input/upstream port when port role data exists.
-- [ ] Enforce cable/core range policy.
-- [ ] Enforce duplicate connection prevention.
-- [ ] Enforce approval flow for adminregion create/update/archive.
-- [ ] Keep create/update/archive on existing `/portConnections` resource flow unless a proven blocker appears.
+- [x] Enforce OTB/POP feeder port to ODC feeder/input port when port role data exists.
+- [x] Enforce ODC output/distribution port to ODP input/upstream port when port role data exists.
+- [x] Enforce cable/core range policy.
+- [x] Enforce duplicate connection prevention.
+- [x] Enforce approval flow for adminregion create/update/archive.
+- [x] Keep create/update/archive on existing `/portConnections` resource flow unless a proven blocker appears.
 
 Checker:
 
-- [ ] Invalid same-device connection rejected.
-- [ ] Overlapping active core range rejected.
-- [ ] Adminregion relation change creates approval request.
-- [ ] Superadmin approval syncs `fiber_cores`.
-- [ ] No new relation endpoint is introduced unless documented in this plan.
+- [x] Invalid same-device connection rejected.
+- [x] Overlapping active core range rejected.
+- [x] Adminregion relation change creates approval request.
+- [x] Superadmin approval syncs `fiber_cores`.
+- [x] No new relation endpoint is introduced unless documented in this plan.
 
 ### Phase 5 - Project Asset Rollup and Project Consistency
 
@@ -817,18 +827,18 @@ Checker:
 - [x] User can complete ODC -> ODP relation without manually copying UUID.
 - [x] Validation errors are shown before submit.
 
-### Phase 3 - Approval Review
+### Phase 3 - Approval Review ✅
 
 Todo:
 
-- [ ] Improve topology connection review for OTB -> ODC and ODC -> ODP relations.
-- [ ] Show from/to device labels, ports, route, cable, and core range.
-- [ ] Show fiber core conflict warnings if backend returns them.
+- [x] Improve topology connection review for OTB -> ODC and ODC -> ODP relations.
+- [x] Show from/to device labels, ports, route, cable, and core range.
+- [x] Show fiber core conflict warnings if backend returns them.
 
 Checker:
 
-- [ ] Approval page does not show raw UUID for relation context.
-- [ ] Superadmin can understand ODC -> ODP change before approval.
+- [x] Approval page does not show raw UUID for relation context.
+- [x] Superadmin can understand ODC -> ODP change before approval.
 
 ---
 

@@ -1249,6 +1249,25 @@ async function buildOdcRelationSummary(device, ports, enrichedConnections) {
     upstream,
     downstream,
     cable_usage: cableUsage,
+    port_summary: {
+      total: ports.length,
+      feeder: ports.filter((p) => String(p.direction || '').toLowerCase() === 'in').length,
+      distribution: ports.filter((p) => String(p.direction || '').toLowerCase() === 'out').length,
+      by_direction: {
+        in: ports.filter((p) => String(p.direction || '').toLowerCase() === 'in').length,
+        out: ports.filter((p) => String(p.direction || '').toLowerCase() === 'out').length,
+      },
+      active: ports.filter((p) => p.is_active !== false && !p.deleted_at).length,
+    },
+    core_summary: {
+      total_mappings: [...upstream, ...downstream].filter((item) => item.core_start != null && item.core_end != null).length,
+      total_cores_used: [...upstream, ...downstream].reduce((sum, item) => {
+        const start = Number(item.core_start) || 0;
+        const end = Number(item.core_end) || 0;
+        return sum + Math.max(0, end - start + 1);
+      }, 0),
+      unique_cables: new Set([...upstream, ...downstream].filter((item) => item.cable_device?.id).map((item) => item.cable_device.id)).size,
+    },
     readiness: {
       has_upstream_source: upstream.length > 0,
       has_downstream_odp: downstream.some((item) => String(item.peer_device?.device_type_key || '').toUpperCase() === 'ODP'),
@@ -2324,6 +2343,82 @@ function collectByDirection({ startId, adjacency, nodeMap, maxDepth }) {
   return byType;
 }
 
+function buildOdpChainTrace({ edges, nodes }) {
+  const edgeByFrom = new Map();
+  const edgeByTo = new Map();
+  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+
+  edges.forEach((edge) => {
+    if (!edgeByFrom.has(edge.from_device_id)) edgeByFrom.set(edge.from_device_id, []);
+    if (!edgeByTo.has(edge.to_device_id)) edgeByTo.set(edge.to_device_id, []);
+    edgeByFrom.get(edge.from_device_id).push(edge);
+    edgeByTo.get(edge.to_device_id).push(edge);
+  });
+
+  const isType = (nodeId, typeKey) => {
+    const node = nodeMap.get(nodeId);
+    return node && String(node.device_type_key || '').toUpperCase() === typeKey;
+  };
+
+  const chains = [];
+  let odcCount = 0;
+  let odcWithUpstream = 0;
+  let odcWithDownstream = 0;
+  let chainReadyCount = 0;
+
+  nodes.forEach((node) => {
+    if (String(node.device_type_key || '').toUpperCase() !== 'ODC') return;
+    odcCount += 1;
+
+    const incomingEdges = edgeByTo.get(node.id) || [];
+    const outgoingEdges = edgeByFrom.get(node.id) || [];
+
+    const upstreamOtb = incomingEdges.filter((e) => isType(e.from_device_id, 'OTB'));
+    const downstreamOdp = outgoingEdges.filter((e) => isType(e.to_device_id, 'ODP'));
+
+    const hasUpstreamOtb = upstreamOtb.length > 0;
+    const hasDownstreamOdp = downstreamOdp.length > 0;
+
+    if (hasUpstreamOtb) odcWithUpstream += 1;
+    if (hasDownstreamOdp) odcWithDownstream += 1;
+    if (hasUpstreamOtb && hasDownstreamOdp) chainReadyCount += 1;
+
+    chains.push({
+      odc_device: { id: node.id, device_id: node.device_id, device_name: node.device_name },
+      has_upstream_otb: hasUpstreamOtb,
+      has_downstream_odp: hasDownstreamOdp,
+      is_complete: hasUpstreamOtb && hasDownstreamOdp,
+      upstream_connections: upstreamOtb.map((e) => ({
+        connection_id: e.connection_id,
+        from_device_name: nodeMap.get(e.from_device_id)?.device_name || null,
+        from_port_label: e.from_port_label,
+        to_port_label: e.to_port_label,
+        cable_device_id: e.cable_device_id,
+        core_start: e.core_start,
+        core_end: e.core_end,
+      })),
+      downstream_connections: downstreamOdp.map((e) => ({
+        connection_id: e.connection_id,
+        to_device_name: nodeMap.get(e.to_device_id)?.device_name || null,
+        from_port_label: e.from_port_label,
+        to_port_label: e.to_port_label,
+        cable_device_id: e.cable_device_id,
+        core_start: e.core_start,
+        core_end: e.core_end,
+      })),
+    });
+  });
+
+  return {
+    chains,
+    hasFullChain: chainReadyCount > 0,
+    odcCount,
+    odcWithUpstream,
+    odcWithDownstream,
+    chainReadyCount,
+  };
+}
+
 resourceRouter.get('/exports/pops.xlsx', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
   try {
     const config = RESOURCE_CONFIG.pops;
@@ -3204,6 +3299,8 @@ resourceRouter.get('/devices/:id/trace', authenticate, requireRole('admin', 'use
 
     const edges = filteredEdges.map((edge) => ({
       ...edge,
+      from_device_type_key: nodeMap.get(edge.from_device_id)?.device_type_key || null,
+      to_device_type_key: nodeMap.get(edge.to_device_id)?.device_type_key || null,
       fiber_cores: fiberByConnection[edge.id] || { total: 0, used: 0, statuses: {}, colors: {}, tube_colors: {}, loss_warnings: 0 },
     }));
 
@@ -3220,6 +3317,13 @@ resourceRouter.get('/devices/:id/trace', authenticate, requireRole('admin', 'use
       maxDepth,
     });
 
+    // Build ODP chain analysis for OTB -> ODC -> ODP full-chain detection
+    const odpChainAnalysis = buildOdpChainTrace({
+      edges,
+      nodes,
+      startDeviceId: startDevice.id,
+    });
+
     return sendSuccess(
       res,
       {
@@ -3229,12 +3333,18 @@ resourceRouter.get('/devices/:id/trace', authenticate, requireRole('admin', 'use
           nodes,
           links: edges,
         },
+        odp_chains: odpChainAnalysis.chains,
         summary: {
           max_depth: maxDepth,
           node_count: nodes.length,
           link_count: edges.length,
           upstream_by_type: upstreamByType,
           downstream_by_type: downstreamByType,
+          has_full_otb_odc_odp_chain: odpChainAnalysis.hasFullChain,
+          odc_count: odpChainAnalysis.odcCount,
+          odc_with_upstream_otb: odpChainAnalysis.odcWithUpstream,
+          odc_with_downstream_odp: odpChainAnalysis.odcWithDownstream,
+          odc_chain_ready: odpChainAnalysis.chainReadyCount,
         },
       },
       'Device trace fetched successfully',

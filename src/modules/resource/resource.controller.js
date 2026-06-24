@@ -620,6 +620,60 @@ function shouldNotifyValidatorsForDirectDeviceCreate(req, item, approvalRequest)
   return String(item.validation_status || '').toLowerCase() !== 'valid';
 }
 
+async function loadPortConnectionDeviceContext(object) {
+  const fromPortId = object.from_port_id;
+  const toPortId = object.to_port_id;
+  if (!fromPortId || !toPortId) return {};
+
+  const query = `
+    query LoadPortConnectionDeviceContext($fromPortId: uuid!, $toPortId: uuid!) {
+      from_port: device_ports_by_pk(id: $fromPortId) {
+        id
+        port_label
+        port_index
+        direction
+        device {
+          id
+          device_name
+          device_type_key
+        }
+      }
+      to_port: device_ports_by_pk(id: $toPortId) {
+        id
+        port_label
+        port_index
+        direction
+        device {
+          id
+          device_name
+          device_type_key
+        }
+      }
+    }
+  `;
+
+  try {
+    const data = await executeHasura(query, { fromPortId, toPortId });
+    const fromPort = data.from_port;
+    const toPort = data.to_port;
+
+    return {
+      upstream_device_name: fromPort?.device?.device_name || null,
+      upstream_device_type_key: fromPort?.device?.device_type_key || null,
+      upstream_device_id: fromPort?.device?.id || null,
+      upstream_port_label: fromPort?.port_label || null,
+      upstream_port_direction: fromPort?.direction || null,
+      odp_device_name: toPort?.device?.device_name || null,
+      odp_device_type_key: toPort?.device?.device_type_key || null,
+      odp_device_id: toPort?.device?.id || null,
+      odp_port_label: toPort?.port_label || null,
+      odp_port_direction: toPort?.direction || null,
+    };
+  } catch {
+    return {};
+  }
+}
+
 async function loadAssetReferenceContext(payload = {}) {
   const variables = {
     regionIds: payload.region_id ? [payload.region_id] : [],
@@ -978,6 +1032,9 @@ async function create(req, res, next) {
       const pendingEntityId = randomUUID();
       const relationContext = await loadAssetReferenceContext(object);
       const payloadSnapshot = buildAdminRegionCreateResourcePayload(req.resourceName, pendingEntityId, object, relationContext);
+      if (req.resourceName === 'portConnections') {
+        payloadSnapshot.context = await loadPortConnectionDeviceContext(object);
+      }
       const approvalRequest = await submitAdminRegionAssetRequest({
         req,
         entityId: pendingEntityId,
@@ -1208,6 +1265,9 @@ async function update(req, res, next) {
     if (shouldHoldCreateForSuperadminApproval(req, { region_id: existing.region_id })) {
       const relationContext = await loadAssetReferenceContext({ ...existing, ...changes });
       const payloadSnapshot = buildAdminRegionChangeResourcePayload(req.resourceName, 'update', existing, changes, relationContext);
+      if (req.resourceName === 'portConnections') {
+        payloadSnapshot.context = await loadPortConnectionDeviceContext({ ...existing, ...changes });
+      }
       const approvalRequest = await submitAdminRegionAssetRequest({
         req,
         entityId: existing.id,
@@ -1332,6 +1392,9 @@ async function remove(req, res, next) {
       const operation = req.resourceConfig.softDelete ? 'archive' : 'delete';
       const relationContext = await loadAssetReferenceContext(existing);
       const payloadSnapshot = buildAdminRegionChangeResourcePayload(req.resourceName, operation, existing, {}, relationContext);
+      if (req.resourceName === 'portConnections') {
+        payloadSnapshot.context = await loadPortConnectionDeviceContext(existing);
+      }
       const approvalRequest = await submitAdminRegionAssetRequest({
         req,
         entityId: existing.id,
