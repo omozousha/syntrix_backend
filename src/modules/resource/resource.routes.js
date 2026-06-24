@@ -1188,7 +1188,6 @@ function buildOdcRelationSummary(device, ports, enrichedConnections) {
   const odcPortIds = new Set(ports.map((port) => port.id).filter(Boolean));
   const upstream = [];
   const downstream = [];
-  const cableUsage = [];
 
   enrichedConnections.forEach((connection) => {
     const fromPortIsOdc = odcPortIds.has(connection.from_port_id);
@@ -1213,25 +1212,10 @@ function buildOdcRelationSummary(device, ports, enrichedConnections) {
         connection.to_device,
       ));
     }
-
-    if (connection.cable_device_id === device.id) {
-      cableUsage.push({
-        id: connection.id,
-        connection_id: connection.connection_id,
-        status: connection.status,
-        connection_type: connection.connection_type,
-        from_device: buildDeviceRef(connection.from_device),
-        to_device: buildDeviceRef(connection.to_device),
-        from_port: buildPortRef(connection.from_port),
-        to_port: buildPortRef(connection.to_port),
-        route: buildRouteRef(connection.route),
-        core_start: connection.core_start,
-        core_end: connection.core_end,
-        fiber_count: connection.fiber_count,
-        labels: connection.labels || null,
-      });
-    }
   });
+
+  // Collect cable references from upstream/downstream ODC connections
+  const cableUsage = [...upstream, ...downstream].filter((item) => item.cable_device);
 
   return {
     device_type_key: typeKey,

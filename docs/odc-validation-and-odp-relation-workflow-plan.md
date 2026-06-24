@@ -725,21 +725,21 @@ Checker:
 
 Todo:
 
-- [ ] Reuse `devices.project_id` for ODC, ODP, CABLE, OTB, and JC project ownership.
-- [ ] Add/read project asset rollup from existing generic resources before introducing a new endpoint.
-- [ ] Count project assets by `device_type_key` for ODC, ODP, CABLE, OTB, and JC.
-- [ ] Summarize cable/core capacity for CABLE rows linked to the project.
-- [ ] Summarize topology relation counts where from/to/cable devices belong to the project.
-- [ ] Add warning metadata for topology relations whose endpoint/cable projects differ.
-- [ ] Keep cross-project relation as warning-first, not hard-block, unless business rule later requires blocking.
+- [x] Reuse `devices.project_id` for ODC, ODP, CABLE, OTB, and JC project ownership.
+- [x] Add/read project asset rollup from existing generic resources before introducing a new endpoint.
+- [x] Count project assets by `device_type_key` for ODC, ODP, CABLE, OTB, and JC.
+- [x] Summarize cable/core capacity for CABLE rows linked to the project.
+- [x] Summarize topology relation counts where from/to/cable devices belong to the project.
+- [x] Add warning metadata for topology relations whose endpoint/cable projects differ.
+- [x] Keep cross-project relation as warning-first, not hard-block, unless business rule later requires blocking.
 
 Checker:
 
-- [ ] Project detail can show linked ODC, ODP, and CABLE rows without raw UUID.
-- [ ] ODC/ODP/CABLE detail shows active project label/link from `devices.project_id`.
-- [ ] No new project relation table is introduced.
-- [ ] Legacy assets with empty `project_id` remain visible and auditable.
-- [ ] Project scope can be filtered by region/POP without bypassing role guard.
+- [x] Project detail can show linked ODC, ODP, and CABLE rows without raw UUID.
+- [x] ODC/ODP/CABLE detail shows active project label/link from `devices.project_id`.
+- [x] No new project relation table is introduced.
+- [x] Legacy assets with empty `project_id` remain visible and auditable.
+- [x] Project scope can be filtered by region/POP without bypassing role guard.
 
 ---
 
@@ -769,30 +769,30 @@ Todo:
 - [x] Show linked ODC, ODP, CABLE, OTB, and JC from `devices.project_id`.
 - [x] Show asset counts by type and operational/validation status.
 - [x] Show cable/core capacity summary for project cables.
-- [ ] Show project route/as-built document links from existing project/resource fields.
+- [x] Show project route/as-built document links from existing project/resource fields.
 - [x] Show warning if project has no linked passive assets.
-- [ ] Keep attachments/documents on project detail as project evidence hub.
+- [x] Keep attachments/documents on project detail as project evidence hub.
 
 Checker:
 
 - [x] Project detail user can find all ODC/ODP/CABLE assets for the project without opening each device list manually.
 - [x] Asset rows show readable inventory id/name/type/status, not raw UUID.
 - [x] Project detail links back to device detail and topology trace where available.
-- [ ] Region-scoped users only see project assets inside allowed region scope.
+- [x] Region-scoped users only see project assets inside allowed region scope.
 
 ### Phase 1 - ODC Detail Section
 
 Todo:
 
 - [x] Add ODC technical section component.
-- [ ] Show cabinet, port, splitter, core, upstream OTB, and downstream ODP summary.
+- [x] Show cabinet, port, splitter, core, upstream OTB, and downstream ODP summary.
 - [x] Show relation-ready labels from topology summary.
 - [x] Add action: `Create Feeder Relation` from ODC detail.
 - [x] Add action: `Create ODP Relation` from ODC detail.
 
 Checker:
 
-- [ ] ODC detail does not show ODP-only labels.
+- [x] ODC detail does not show ODP-only labels.
 - [x] Upstream OTB relation list shows names, ports, route, cable, and core range.
 - [x] Downstream ODP relation list shows names, ports, route, cable, and core range.
 - [x] Empty state explains how to create relation.
