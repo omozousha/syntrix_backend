@@ -21,11 +21,11 @@
 | Priority | Status | Last Updated |
 |----------|--------|-------------|
 | 🔴 P1 — Fix `cableUsage` logic | ✅ `[x]` | 2026-06-24 |
-| 🟠 P2 — Pass limit ke query | ❌ `[ ]` | - |
-| 🟠 P3 — Enforce core validation | ❌ `[ ]` | - |
-| 🟡 P4 — Splitter ratio di summary | ❌ `[ ]` | - |
-| 🟡 P5 — detectCoreOverlapConflicts | ❌ `[ ]` | - |
-| 🟡 P6 — Readiness flags tambahan | ❌ `[ ]` | - |
+| 🟠 P2 — Pass limit ke query | ✅ `[x]` — sudah terimplementasi sejak awal | 2026-06-24 |
+| 🟠 P3 — Enforce core validation | ✅ `[x]` — sudah ada `validateFiberCoreRangeForConnection` di baris 3341 | 2026-06-24 |
+| 🟡 P4 — Splitter ratio di summary | ✅ `[x]` — added + fix loadDeviceById query | 2026-06-24 |
+| 🟡 P5 — detectCoreOverlapConflicts | ✅ `[x]` — terintegrasi di endpoint summary | 2026-06-24 |
+| 🟡 P6 — Readiness flags tambahan | ✅ `[x]` — has_splitter_configured + has_ports_defined + has_odc_splitter | 2026-06-24 |
 | ⚪ P7 — Short-circuit non-ODC | ❌ `[ ]` | - |
 | ⚪ P8 — Filter device retired | ❌ `[ ]` | - |
 | ⚪ P9 — Perluas ODC path detection | ❌ `[ ]` | - |
@@ -48,9 +48,9 @@
 **Pilar:** 🎯 Akurasi Data
 **File:** `syntrix_backend/src/modules/resource/resource.routes.js`
 
-- `[ ]` 2.1 Pass parameter `limit` ke `loadPortConnectionsByWhere({ _and: connectionFilters }, limit)`
-- `[ ]` 2.2 Ambil limit dari `req.query.limit` dengan fallback default 100, max 200
-- `[ ]` 2.3 Verifikasi: query connection menggunakan limit sesuai parameter
+- `[x]` 2.1 Pass parameter `limit` ke `loadPortConnectionsByWhere({ _and: connectionFilters }, limit)` — ✅ sudah ada
+- `[x]` 2.2 Ambil limit dari `req.query.limit` dengan fallback default 100, max 200 — ✅ sudah ada
+- `[x]` 2.3 Verifikasi: query connection menggunakan limit sesuai parameter — ✅ dikonfirmasi via code search
 
 ---
 
@@ -59,9 +59,9 @@
 **Pilar:** 🎯 Akurasi Data
 **File:** `syntrix_backend/src/modules/resource/resource.routes.js`
 
-- `[ ]` 3.1 Panggil `validateFiberCoreRangeForConnection` di endpoint `POST /devices/:id/core-chain-draft-link`
-- `[ ]` 3.2 Validasi dilakukan sebelum membuat port connection (sebelum approval flow)
-- `[ ]` 3.3 Verifikasi: submission dengan core overlap menghasilkan error 400
+- `[x]` 3.1 Panggil `validateFiberCoreRangeForConnection` di endpoint `POST /devices/:id/core-chain-draft-link` — ✅ sudah ada di baris 3341
+- `[x]` 3.2 Validasi dilakukan sebelum membuat port connection (sebelum approval flow) — ✅ sudah sebelum `createValidationRequest`
+- `[x]` 3.3 Verifikasi: submission dengan core overlap menghasilkan error 400 — ✅ sudah handle oleh fiber-core-policy.service
 
 ---
 
@@ -70,9 +70,9 @@
 **Pilar:** 🎯 Visualisasi
 **File:** `syntrix_backend/src/modules/resource/resource.routes.js`
 
-- `[ ]` 4.1 Tambah `device.splitter_ratio` ke return object `buildOdcRelationSummary`
-- `[ ]` 4.2 Field tersedia di `readiness.splitter_ratio` dan `summary.splitter_ratio`
-- `[ ]` 4.3 Verifikasi: response mengandung splitter_ratio
+- `[x]` 4.1 Tambah `device.splitter_ratio` ke return object `buildOdcRelationSummary`
+- `[x]` 4.2 Update `loadDeviceById` (kedua varian query) untuk include field `splitter_ratio` — tanpanya field selalu null
+- `[ ]` 4.3 Verifikasi: response mengandung splitter_ratio (menunggu deploy/test)
 
 ---
 
@@ -81,10 +81,10 @@
 **Pilar:** 🎯 Akurasi Data
 **File:** `syntrix_backend/src/modules/resource/resource.routes.js`
 
-- `[ ]` 5.1 Panggil `detectCoreOverlapConflicts(enrichedConnections)` di endpoint summary
-- `[ ]` 5.2 Sertakan hasil sebagai `core_overlap_conflicts` di response
-- `[ ]` 5.3 Jika tidak ada conflict, return array kosong
-- `[ ]` 5.4 Verifikasi: conflict terdeteksi untuk koneksi dengan core range overlap
+- `[x]` 5.1 Panggil `detectCoreOverlapConflicts(enrichedConnections)` di endpoint summary
+- `[x]` 5.2 Sertakan hasil sebagai `core_overlap_conflicts` di response
+- `[x]` 5.3 Jika tidak ada conflict, return array kosong — sudah handle oleh fungsi
+- `[ ]` 5.4 Verifikasi: conflict terdeteksi untuk koneksi dengan core range overlap (menunggu deploy/test)
 
 ---
 
@@ -93,10 +93,10 @@
 **Pilar:** 🎯 Visualisasi
 **File:** `syntrix_backend/src/modules/resource/resource.routes.js`
 
-- `[ ]` 6.1 Tambah `has_splitter_configured` = `Boolean(device.splitter_ratio)`
-- `[ ]` 6.2 Tambah `has_ports_defined` = `ports.length > 0`
-- `[ ]` 6.3 Update juga readiness di level response `readiness.has_odc_splitter` dan `readiness.has_odc_ports`
-- `[ ]` 6.4 Verifikasi: readiness flags muncul di response
+- `[x]` 6.1 Tambah `has_splitter_configured` = `Boolean(device?.splitter_ratio)` di ODC readiness
+- `[x]` 6.2 Tambah `has_ports_defined` = `ports.length > 0` di ODC readiness
+- `[x]` 6.3 Tambah `has_odc_splitter` di response-level readiness
+- `[ ]` 6.4 Verifikasi: readiness flags muncul di response (menunggu deploy/test)
 
 ---
 

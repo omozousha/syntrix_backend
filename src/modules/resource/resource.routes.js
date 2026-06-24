@@ -225,6 +225,7 @@ async function loadDeviceById(deviceId, options = {}) {
         device_name
         device_type_key
         total_ports
+        splitter_ratio
         region_id
         pop_id
         project_id
@@ -242,6 +243,7 @@ async function loadDeviceById(deviceId, options = {}) {
         device_name
         device_type_key
         total_ports
+        splitter_ratio
         region_id
         pop_id
         project_id
@@ -1219,6 +1221,7 @@ function buildOdcRelationSummary(device, ports, enrichedConnections) {
 
   return {
     device_type_key: typeKey,
+    splitter_ratio: device?.splitter_ratio || null,
     summary: {
       upstream: summarizeOdcBucket(upstream),
       downstream: summarizeOdcBucket(downstream),
@@ -4019,6 +4022,7 @@ resourceRouter.get('/topology/devices/:id/summary', authenticate, requireRole('a
       ...coreManagementRows.map((item) => item.cable_device_id),
     ].filter(Boolean)));
     const fiberCores = await loadFiberCoresByCableDeviceIds(cableDeviceIds, Math.min(limit * 10, 1000));
+    const coreOverlapConflicts = detectCoreOverlapConflicts(enrichedConnections);
 
     const payload = {
       scope: {
@@ -4041,6 +4045,7 @@ resourceRouter.get('/topology/devices/:id/summary', authenticate, requireRole('a
         items: enrichedCoreManagement,
       },
       odc_relations: odcRelations,
+      core_overlap_conflicts: coreOverlapConflicts,
       fiber_cores: {
         summary: buildFiberCoreSummary(fiberCores),
         cable_device_ids: cableDeviceIds,
@@ -4055,6 +4060,7 @@ resourceRouter.get('/topology/devices/:id/summary', authenticate, requireRole('a
         has_odc_downstream_odp: odcRelations?.readiness?.has_downstream_odp || false,
         has_odc_cable_context: odcRelations?.readiness?.has_cable_context || false,
         has_odc_core_mapping: odcRelations?.readiness?.has_core_mapping || false,
+        has_odc_splitter: odcRelations?.readiness?.has_splitter_configured || false,
         trace_endpoint: `/api/v1/devices/${device.id}/trace`,
       },
     };
