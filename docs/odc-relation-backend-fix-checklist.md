@@ -26,9 +26,9 @@
 | 🟡 P4 — Splitter ratio di summary | ✅ `[x]` — added + fix loadDeviceById query | 2026-06-24 |
 | 🟡 P5 — detectCoreOverlapConflicts | ✅ `[x]` — terintegrasi di endpoint summary | 2026-06-24 |
 | 🟡 P6 — Readiness flags tambahan | ✅ `[x]` — has_splitter_configured + has_ports_defined + has_odc_splitter | 2026-06-24 |
-| ⚪ P7 — Short-circuit non-ODC | ❌ `[ ]` | - |
-| ⚪ P8 — Filter device retired | ❌ `[ ]` | - |
-| ⚪ P9 — Perluas ODC path detection | ❌ `[ ]` | - |
+| ⚪ P7 — Short-circuit non-ODC | ✅ `[x]` | 2026-06-24 |
+| ⚪ P8 — Filter device retired | ✅ `[x]` | 2026-06-24 |
+| ⚪ P9 — Perluas ODC path detection | ✅ `[x]` | 2026-06-24 |
 
 ---
 
@@ -105,9 +105,9 @@
 **Pilar:** 🎯 Efisiensi Input
 **File:** `syntrix_backend/src/modules/resource/resource.routes.js`
 
-- `[ ]` 7.1 Early return jika device type bukan ODC — skip loading connections, core_management, fiber_cores
-- `[ ]` 7.2 Tetap return basic device info + ports (tanpa data topology mahal)
-- `[ ]` 7.3 Verifikasi: non-ODC device response lebih ringan
+- `[x]` 7.1 Early return jika device type bukan ODC — skip loading connections, core_management, fiber_cores
+- `[x]` 7.2 Tetap return basic device info + ports (tanpa data topology mahal)
+- `[ ]` 7.3 Verifikasi: non-ODC device response lebih ringan (menunggu deploy/test)
 
 ---
 
@@ -116,9 +116,9 @@
 **Pilar:** 🎯 Akurasi Data
 **File:** `syntrix_backend/src/modules/resource/resource.routes.js`
 
-- `[ ]` 8.1 Tambah filter `status !== 'retired'` dan `status !== 'inactive'` di endpoint summary
-- `[ ]` 8.2 Return 404 jika device retired/inactive
-- `[ ]` 8.3 Verifikasi: retired device tidak bisa diakses
+- `[x]` 8.1 Tambah filter `status !== 'retired'` dan `status !== 'inactive'` di endpoint summary
+- `[x]` 8.2 Return 404 jika device retired/inactive
+- `[ ]` 8.3 Verifikasi: retired device tidak bisa diakses (menunggu deploy/test)
 
 ---
 
@@ -127,9 +127,9 @@
 **Pilar:** 🎯 Akurasi Data
 **File:** `syntrix_backend/src/modules/device/odp-chain.service.js`
 
-- `[ ]` 9.1 Tambah `OTB` ke `ODC_DEVICE_TYPES` atau evaluasi apakah rename fungsi diperlukan
-- `[ ]` 9.2 Pertimbangan: fungsi `hasOdcPathFromPorts` juga harus deteksi OTB sebagai upstream source
-- `[ ]` 9.3 Verifikasi: path detection mencakup OTB
+- `[x]` 9.1 Tambah `OTB` ke `ODC_DEVICE_TYPES` — fungsi `hasOdcPathFromPorts` otomatis deteksi OTB
+- `[x]` 9.2 Update suggestion text 'connect-to-odc-path': title & description sekarang mencakup ODC/OTB
+- `[ ]` 9.3 Verifikasi: path detection mencakup OTB (menunggu deploy/test)
 
 ---
 

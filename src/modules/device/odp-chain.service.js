@@ -1,6 +1,8 @@
 const { executeHasura } = require('../../config/hasura');
 
-const ODC_DEVICE_TYPES = new Set(['ODC']);
+// ODC_DEVICE_TYPES mencakup device yang berfungsi sebagai upstream source dalam rantai ODP
+// ODC = Optical Distribution Cabinet, OTB = Optical Termination Box
+const ODC_DEVICE_TYPES = new Set(['ODC', 'OTB']);
 
 async function loadDeviceById(deviceId) {
   const query = `
@@ -372,8 +374,8 @@ async function buildOdpCoreChainDraft(deviceId) {
   if (missing.includes('has_odc_source_path')) {
     suggestions.push({
       key: 'connect-to-odc-path',
-      title: 'Pastikan path menuju ODC',
-      description: 'Bangun chain berjenjang (ODC -> splitter -> distribusi -> ODP) sampai trace menemukan ODC.',
+      title: 'Pastikan path menuju ODC/OTB',
+      description: 'Bangun chain berjenjang (ODC/OTB -> splitter -> distribusi -> ODP) sampai trace menemukan upstream source.',
       severity: 'high',
     });
   }

@@ -3983,12 +3983,54 @@ resourceRouter.get('/topology/devices/:id/summary', authenticate, requireRole('a
     if (!device) {
       throw createHttpError(404, 'Device not found');
     }
+    // P8: Filter retired/inactive device
+    const deviceStatus = String(device.status || '').toLowerCase();
+    if (deviceStatus === 'retired' || deviceStatus === 'inactive') {
+      throw createHttpError(404, 'Device not found');
+    }
 
     const scope = getRegionalTopologyScope(req.auth);
     assertTopologyRegionAccess(scope, device.region_id, 'You do not have access to this device region');
 
     const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 200);
     const ports = await loadPortsByDeviceIds([device.id]);
+
+    // P7: Short-circuit non-ODC — skip expensive topology queries
+    const deviceTypeKey = String(device.device_type_key || '').toUpperCase();
+    if (deviceTypeKey !== 'ODC') {
+      const basicPayload = {
+        scope: {
+          role: req.auth.role,
+          region_id: device.region_id,
+          device_id: device.id,
+          limit,
+        },
+        device,
+        ports: {
+          summary: buildPortSummary(ports),
+          items: ports,
+        },
+        connections: { summary: null, items: [] },
+        core_management: { summary: null, items: [] },
+        odc_relations: null,
+        core_overlap_conflicts: [],
+        fiber_cores: { summary: null, cable_device_ids: [], items: [] },
+        readiness: {
+          has_ports: ports.length > 0,
+          has_connections: false,
+          has_core_summary: false,
+          has_fiber_core_inventory: false,
+          has_odc_upstream: false,
+          has_odc_downstream_odp: false,
+          has_odc_cable_context: false,
+          has_odc_core_mapping: false,
+          has_odc_splitter: false,
+          trace_endpoint: `/api/v1/devices/${device.id}/trace`,
+        },
+      };
+      return sendSuccess(res, basicPayload, 'Device topology summary fetched successfully');
+    }
+
     const portIds = ports.map((port) => port.id).filter(Boolean);
     const connectionConditions = [
       { cable_device_id: { _eq: device.id } },
