@@ -9,6 +9,7 @@ const { resourceRouter } = require('./src/modules/resource/resource.routes');
 const { importRouter } = require('./src/modules/import/import.routes');
 const { validationRouter } = require('./src/modules/validation/validation.routes');
 const { notificationRouter } = require('./src/modules/notifications/notification.routes');
+const { cableRouter } = require('./src/modules/cable/cable.routes');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -50,6 +51,7 @@ app.use('/api/v1/imports', importRouter);
 app.use('/api/v1/me', notificationRouter);
 app.use('/api/v1/validation-requests', validationRouter);
 app.use('/api/v1', resourceRouter);
+app.use('/api/v1/cables', cableRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
