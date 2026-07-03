@@ -186,9 +186,9 @@ const RESOURCE_CONFIG = {
   coreCapacities: {
     table: 'core_capacities',
     pk: 'id',
-    listFields: ['id', 'core_capacity_id', 'core_capacity_value', 'label', 'description', 'sort_order', 'is_active', 'deleted_at', 'deleted_by_user_id', 'created_at', 'updated_at'],
-    insertFields: ['core_capacity_value', 'label', 'description', 'sort_order', 'is_active'],
-    updateFields: ['core_capacity_value', 'label', 'description', 'sort_order', 'is_active'],
+    listFields: ['id', 'core_capacity_id', 'core_capacity_value', 'label', 'description', 'sort_order', 'is_active', 'allowed_route_type_keys', 'deleted_at', 'deleted_by_user_id', 'created_at', 'updated_at'],
+    insertFields: ['core_capacity_value', 'label', 'description', 'sort_order', 'is_active', 'allowed_route_type_keys'],
+    updateFields: ['core_capacity_value', 'label', 'description', 'sort_order', 'is_active', 'allowed_route_type_keys'],
     searchColumns: ['label', 'description', 'core_capacity_value'],
     filterKeys: ['is_active'],
     defaultOrderBy: [{ sort_order: 'asc' }, { core_capacity_value: 'asc' }],
