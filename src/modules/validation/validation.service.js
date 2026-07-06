@@ -1261,6 +1261,18 @@ const DEVICE_TYPE_APPLY_FIELDS = {
     'capacity_core',
     'used_core',
   ],
+  OTB: [
+    ...GENERIC_DEVICE_APPLY_FIELDS,
+    'capacity_core',
+    'used_core',
+    'total_ports',
+    'used_ports',
+  ],
+  JC: [
+    ...GENERIC_DEVICE_APPLY_FIELDS,
+    'capacity_core',
+    'used_core',
+  ],
   SWITCH: [
     ...GENERIC_DEVICE_APPLY_FIELDS,
     'management_ip',
@@ -1274,7 +1286,7 @@ const DEVICE_TYPE_APPLY_FIELDS = {
     'used_ports',
   ],
 };
-const PORT_APPLY_DEVICE_TYPES = new Set(['ODP', 'ODC', 'OLT', 'ONT', 'SWITCH', 'ROUTER']);
+const PORT_APPLY_DEVICE_TYPES = new Set(['ODP', 'ODC', 'OLT', 'ONT', 'SWITCH', 'ROUTER', 'OTB']);
 
 function normalizeDeviceTypeKey(value) {
   const normalized = String(value || '').trim().toUpperCase();

@@ -84,6 +84,7 @@ async function main() {
     }
 
     const pop = await axios.post(`${apiBase}/pops`, {
+      pop_code: 'SMK',
       pop_name: `POP Smoke ${Date.now()}`,
       region_id: regionId,
       status_pop: 'active',
