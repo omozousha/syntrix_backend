@@ -14,7 +14,9 @@ const { sendSuccess } = require('../../utils/response');
 const { buildWhereClause, listResources } = require('../../shared/resource.service');
 const { createAuditLog } = require('../../shared/audit.service');
 const { buildOdpCoreChainSummary, buildOdpCoreChainDraft } = require('../device/odp-chain.service');
+const { buildOdcCoreChainSummary } = require('../device/odc-chain.service');
 const { validateFiberCoreRangeForConnection } = require('../device/fiber-core-policy.service');
+const { validatePortDirectionForConnection, validatePortConnectionPayload, validateDevicePortPayload, validateDeviceLinkPayload } = require('../device/connectivity.validation');
 const { createRedirectToNotAllowedError, isRedirectToNotAllowed } = require('../auth/auth.service');
 const { getPagination } = require('../../utils/pagination');
 const { normalizeRoleName, isSuperAdminRole, isRegionalRole } = require('../../utils/roles');
@@ -483,6 +485,88 @@ async function syncDevicePortUsage(deviceId) {
 
   return { total_ports: totalPorts, used_ports: usedPorts };
 }
+
+// Sync used_core pada device berdasarkan fiber_cores aktif yang ter-assign ke koneksi.
+// Dipanggil setelah setiap mutasi port_connection agar field used_core selalu akurat.
+async function syncDeviceCoreUsage(deviceId) {
+  if (!deviceId) return null;
+
+  // Dapatkan semua port device ini, lalu cari koneksi aktif yang pakai cable yang punya core
+  // Strategy: hitung dari port_connections yang terkait device ini dengan cable_device_id terisi
+  const query = `
+    query SyncDeviceCoreUsage($deviceId: uuid!) {
+      device: devices_by_pk(id: $deviceId) {
+        id
+        capacity_core
+      }
+      ports: device_ports(where: { device_id: { _eq: $deviceId }, deleted_at: { _is_null: true } }) {
+        id
+      }
+    }
+  `;
+  const data = await executeHasura(query, { deviceId });
+  if (!data.device?.id) return null;
+
+  const portIds = (data.ports || []).map((p) => p.id);
+  if (!portIds.length) {
+    await executeHasura(
+      `mutation ClearDeviceCoreUsage($id: uuid!) {
+        update_devices_by_pk(pk_columns: { id: $id }, _set: { used_core: 0 }) { id used_core }
+      }`,
+      { id: deviceId },
+    );
+    return { used_core: 0, capacity_core: Number(data.device.capacity_core || 0) };
+  }
+
+  // Hitung total core yang dipakai lewat port_connections aktif
+  const coreQuery = `
+    query CountUsedCores($portIds: [uuid!]!) {
+      connections: port_connections(
+        where: {
+          _or: [
+            { from_port_id: { _in: $portIds } }
+            { to_port_id: { _in: $portIds } }
+          ]
+          status: { _in: ["active", "planned", "cutover"] }
+          cable_device_id: { _is_null: false }
+          core_start: { _is_null: false }
+          core_end: { _is_null: false }
+        }
+      ) {
+        id
+        core_start
+        core_end
+        cable_device_id
+      }
+    }
+  `;
+  const coreData = await executeHasura(coreQuery, { portIds });
+  const connections = coreData.connections || [];
+
+  // De-dup per (cable_device_id, core range) agar tidak hitung dua kali
+  let usedCore = 0;
+  const seen = new Set();
+  for (const conn of connections) {
+    if (conn.core_start == null || conn.core_end == null) continue;
+    const key = `${conn.cable_device_id}:${conn.core_start}:${conn.core_end}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    usedCore += Math.max(0, Number(conn.core_end) - Number(conn.core_start) + 1);
+  }
+
+  const capacityCore = Number(data.device.capacity_core || 0);
+  const finalUsedCore = Math.min(usedCore, capacityCore > 0 ? capacityCore : usedCore);
+
+  await executeHasura(
+    `mutation SyncDeviceUsedCore($id: uuid!, $usedCore: Int!) {
+      update_devices_by_pk(pk_columns: { id: $id }, _set: { used_core: $usedCore }) { id used_core }
+    }`,
+    { id: deviceId, usedCore: finalUsedCore },
+  );
+
+  return { used_core: finalUsedCore, capacity_core: capacityCore };
+}
+
 
 async function findActiveProvisionPortsRequest(deviceId, profileName) {
   const query = `
@@ -3388,6 +3472,24 @@ resourceRouter.get('/devices/:id/core-chain-draft', authenticate, requireRole('a
   }
 });
 
+// ── GET /devices/:id/odc-chain-summary — ODC Chain Readiness Summary ─────────
+resourceRouter.get('/devices/:id/odc-chain-summary', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const device = await loadDeviceById(req.params.id);
+    if (!device) throw createHttpError(404, 'Device not found');
+
+    const scope = getRegionalTopologyScope(req.auth);
+    assertTopologyRegionAccess(scope, device.region_id, 'You do not have access to this device region');
+
+    const summary = await buildOdcCoreChainSummary(req.params.id);
+    if (!summary) throw createHttpError(404, 'Device not found');
+
+    return sendSuccess(res, summary, 'ODC core chain summary fetched successfully');
+  } catch (error) {
+    return next(error);
+  }
+});
+
 resourceRouter.post('/devices/:id/core-chain-draft-link', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
   try {
     const odpDevice = await loadDeviceById(req.params.id);
@@ -3466,6 +3568,11 @@ resourceRouter.post('/devices/:id/core-chain-draft-link', authenticate, requireR
         throw createHttpError(400, 'Cable device region must match ODP region');
       }
     }
+
+    // Validasi arah port: pastikan dari upstream (ODC/OTB out) ke ODP (in)
+    await validatePortDirectionForConnection(
+      { from_port_id: upstreamPort.id, to_port_id: odpPort.id },
+    );
 
     await validateFiberCoreRangeForConnection({
       cable_device_id: cableDeviceId,
@@ -4098,6 +4205,287 @@ resourceRouter.get('/topology/port-connections/:id', authenticate, requireRole('
     }
 
     return sendSuccess(res, item, 'Port connection fetched successfully');
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// ── POST /topology/port-connections — Create Port Connection ──────────────────
+resourceRouter.post('/topology/port-connections', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const scope = getRegionalTopologyScope(req.auth);
+    const body = req.body || {};
+
+    // Validasi payload struktur dasar
+    validatePortConnectionPayload(body, 'create');
+
+    const fromPortId = String(body.from_port_id || '').trim();
+    const toPortId = String(body.to_port_id || '').trim();
+    const regionId = String(body.region_id || '').trim();
+    const cableDeviceId = body.cable_device_id ? String(body.cable_device_id).trim() : null;
+    const coreStart = body.core_start != null && body.core_start !== '' ? Number(body.core_start) : null;
+    const coreEnd = body.core_end != null && body.core_end !== '' ? Number(body.core_end) : null;
+    const fiberCount = body.fiber_count != null && body.fiber_count !== '' ? Number(body.fiber_count) : null;
+    const connectionType = body.connection_type ? String(body.connection_type).trim() : 'fiber';
+    const status = body.status ? String(body.status).trim() : 'planned';
+    const notes = body.notes ? String(body.notes).trim() : null;
+
+    // Cek akses region
+    assertTopologyRegionAccess(scope, regionId, 'You do not have access to this region');
+
+    // Load port & validasi eksistensi
+    const [fromPort, toPort] = await Promise.all([loadPortById(fromPortId), loadPortById(toPortId)]);
+    if (!fromPort || !toPort) throw createHttpError(404, 'One or both ports not found');
+    if (fromPort.deleted_at || toPort.deleted_at) throw createHttpError(400, 'Cannot connect deleted port');
+
+    // Cek region mismatch
+    if (fromPort.region_id && toPort.region_id && fromPort.region_id !== toPort.region_id) {
+      throw createHttpError(400, 'Port region mismatch between from_port and to_port');
+    }
+
+    // Validasi cable device jika ada
+    if (cableDeviceId) {
+      const cable = await loadDeviceById(cableDeviceId);
+      if (!cable) throw createHttpError(404, 'Cable device not found');
+      if (String(cable.device_type_key || '').toUpperCase() !== 'CABLE') {
+        throw createHttpError(400, 'cable_device_id must reference a device with device_type_key CABLE');
+      }
+      if (cable.region_id && cable.region_id !== regionId) {
+        throw createHttpError(400, 'Cable device region must match connection region');
+      }
+    }
+
+    // Validasi arah port (OTB→ODC, ODC→ODP, dll.)
+    await validatePortDirectionForConnection({ from_port_id: fromPortId, to_port_id: toPortId });
+
+    // Validasi fiber core: anti-overlap, anti-double-map
+    await validateFiberCoreRangeForConnection({ cable_device_id: cableDeviceId, core_start: coreStart, core_end: coreEnd });
+
+    // Cek apakah koneksi sudah ada di antara dua port ini
+    const existing = await loadConnectionByPortPair(fromPortId, toPortId);
+    if (existing) {
+      return sendSuccess(res, { created: false, existing_connection: existing }, 'Port connection already exists between these ports');
+    }
+
+    // Untuk non-admin: buat approval request
+    if (req.auth.role !== 'admin') {
+      const pendingConnectionId = randomUUID();
+      const payloadSnapshot = {
+        source: 'adminregion-create-resource',
+        operation: 'create',
+        resource_name: 'portConnections',
+        resource_label: 'Port Connection',
+        portConnection: { id: pendingConnectionId, region_id: regionId, from_port_id: fromPortId, to_port_id: toPortId, connection_type: connectionType, status, cable_device_id: cableDeviceId, core_start: coreStart, core_end: coreEnd, fiber_count: fiberCount, notes },
+        resource_payload: { region_id: regionId, from_port_id: fromPortId, to_port_id: toPortId, connection_type: connectionType, status, cable_device_id: cableDeviceId, core_start: coreStart, core_end: coreEnd, fiber_count: fiberCount, notes },
+      };
+      const approvalRequest = await createValidationRequest({
+        entityType: 'portConnection',
+        entityId: pendingConnectionId,
+        regionId,
+        submittedByUserId: req.auth.appUser.id,
+        currentStatus: VALIDATION_STATUS.PENDING_ASYNC,
+        payloadSnapshot,
+        checklist: {},
+        findingNote: 'Create port connection request by adminregion.',
+      });
+      await insertValidationRequestLog({
+        requestId: approvalRequest.id,
+        actionType: VALIDATION_ACTION.RESUBMIT_ADMINREGION,
+        actorUserId: req.auth.appUser.id,
+        actorRole: req.auth.role === 'user_region' ? 'validator' : 'adminregion',
+        beforeStatus: VALIDATION_STATUS.UNVALIDATED,
+        afterStatus: VALIDATION_STATUS.PENDING_ASYNC,
+        note: 'Create port connection request submitted to superadmin.',
+        payloadPatch: payloadSnapshot,
+      });
+      return sendSuccess(res, { created: false, approval_request: approvalRequest }, 'Port connection request submitted for approval', 201);
+    }
+
+    // Admin: langsung insert
+    const mutation = `
+      mutation CreatePortConnection($object: port_connections_insert_input!) {
+        inserted: insert_port_connections_one(object: $object) {
+          id
+          connection_id
+          region_id
+          from_port_id
+          to_port_id
+          connection_type
+          status
+          cable_device_id
+          core_start
+          core_end
+          fiber_count
+          notes
+          created_at
+        }
+      }
+    `;
+    const result = await executeHasura(mutation, {
+      object: { region_id: regionId, from_port_id: fromPortId, to_port_id: toPortId, connection_type: connectionType, status, cable_device_id: cableDeviceId, core_start: coreStart, core_end: coreEnd, fiber_count: fiberCount, notes },
+    });
+    const inserted = result.inserted;
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'create:topology/port-connections',
+      entityType: 'port_connections',
+      entityId: inserted.id,
+      beforeData: null,
+      afterData: inserted,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+    // Sync used_core untuk kedua sisi device yang terhubung
+    await Promise.allSettled([
+      syncDeviceCoreUsage(fromPort.device_id),
+      fromPort.device_id !== toPort.device_id ? syncDeviceCoreUsage(toPort.device_id) : Promise.resolve(),
+    ]);
+    return sendSuccess(res, { created: true, connection: inserted }, 'Port connection created successfully', 201);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// ── PATCH /topology/port-connections/:id — Update Port Connection ─────────────
+resourceRouter.patch('/topology/port-connections/:id', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const scope = getRegionalTopologyScope(req.auth);
+    const connectionId = req.params.id;
+
+    // Load existing connection dulu
+    const connections = await loadPortConnectionsByWhere({ _and: [{ id: { _eq: connectionId } }] }, 1);
+    const existing = connections[0] || null;
+    if (!existing) throw createHttpError(404, 'Port connection not found');
+
+    assertTopologyRegionAccess(scope, existing.region_id, 'You do not have access to this region');
+
+    // Validasi payload update
+    validatePortConnectionPayload(req.body || {}, 'update');
+
+    const body = req.body || {};
+    const cableDeviceId = 'cable_device_id' in body ? (body.cable_device_id ? String(body.cable_device_id).trim() : null) : existing.cable_device_id;
+    const coreStart = 'core_start' in body ? (body.core_start != null && body.core_start !== '' ? Number(body.core_start) : null) : existing.core_start;
+    const coreEnd = 'core_end' in body ? (body.core_end != null && body.core_end !== '' ? Number(body.core_end) : null) : existing.core_end;
+
+    // Validasi cable device jika diubah
+    if ('cable_device_id' in body && cableDeviceId) {
+      const cable = await loadDeviceById(cableDeviceId);
+      if (!cable) throw createHttpError(404, 'Cable device not found');
+      if (String(cable.device_type_key || '').toUpperCase() !== 'CABLE') {
+        throw createHttpError(400, 'cable_device_id must reference a device with device_type_key CABLE');
+      }
+    }
+
+    // Re-validasi fiber core range (excl. koneksi ini sendiri)
+    await validateFiberCoreRangeForConnection(
+      { cable_device_id: cableDeviceId, core_start: coreStart, core_end: coreEnd },
+      { id: connectionId, cable_device_id: existing.cable_device_id, core_start: existing.core_start, core_end: existing.core_end },
+    );
+
+    const allowedUpdateFields = ['status', 'connection_type', 'cable_device_id', 'core_start', 'core_end', 'fiber_count', 'notes'];
+    const patch = {};
+    for (const field of allowedUpdateFields) {
+      if (field in body) patch[field] = body[field] != null && body[field] !== '' ? body[field] : null;
+    }
+    if (!Object.keys(patch).length) throw createHttpError(400, 'No valid fields to update');
+
+    const mutation = `
+      mutation UpdatePortConnection($id: uuid!, $patch: port_connections_set_input!) {
+        updated: update_port_connections_by_pk(pk_columns: { id: $id }, _set: $patch) {
+          id
+          connection_id
+          region_id
+          from_port_id
+          to_port_id
+          connection_type
+          status
+          cable_device_id
+          core_start
+          core_end
+          fiber_count
+          notes
+          updated_at
+        }
+      }
+    `;
+    const result = await executeHasura(mutation, { id: connectionId, patch });
+    const updated = result.updated;
+    if (!updated) throw createHttpError(500, 'Failed to update port connection');
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'update:topology/port-connections',
+      entityType: 'port_connections',
+      entityId: connectionId,
+      beforeData: existing,
+      afterData: updated,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+    // Sync used_core untuk device yang port-nya terlibat dalam koneksi ini
+    const affectedPorts = await Promise.allSettled([
+      loadPortById(existing.from_port_id),
+      loadPortById(existing.to_port_id),
+    ]);
+    const fromDevId = affectedPorts[0]?.value?.device_id || null;
+    const toDevId = affectedPorts[1]?.value?.device_id || null;
+    await Promise.allSettled([
+      fromDevId ? syncDeviceCoreUsage(fromDevId) : Promise.resolve(),
+      toDevId && toDevId !== fromDevId ? syncDeviceCoreUsage(toDevId) : Promise.resolve(),
+    ]);
+    return sendSuccess(res, updated, 'Port connection updated successfully');
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// ── DELETE /topology/port-connections/:id — Archive/Delete Port Connection ────
+resourceRouter.delete('/topology/port-connections/:id', authenticate, requireRole('admin'), async (req, res, next) => {
+  try {
+    const scope = getRegionalTopologyScope(req.auth);
+    const connectionId = req.params.id;
+
+    const connections = await loadPortConnectionsByWhere({ _and: [{ id: { _eq: connectionId } }] }, 1);
+    const existing = connections[0] || null;
+    if (!existing) throw createHttpError(404, 'Port connection not found');
+
+    assertTopologyRegionAccess(scope, existing.region_id, 'You do not have access to this region');
+
+    // Soft delete: ubah status ke inactive
+    const mutation = `
+      mutation ArchivePortConnection($id: uuid!) {
+        updated: update_port_connections_by_pk(pk_columns: { id: $id }, _set: { status: "inactive" }) {
+          id
+          connection_id
+          status
+          updated_at
+        }
+      }
+    `;
+    const result = await executeHasura(mutation, { id: connectionId });
+    const archived = result.updated;
+    if (!archived) throw createHttpError(500, 'Failed to archive port connection');
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'delete:topology/port-connections',
+      entityType: 'port_connections',
+      entityId: connectionId,
+      beforeData: existing,
+      afterData: archived,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+    // Sync used_core setelah koneksi di-archive
+    const archivedPorts = await Promise.allSettled([
+      loadPortById(existing.from_port_id),
+      loadPortById(existing.to_port_id),
+    ]);
+    const archFromDevId = archivedPorts[0]?.value?.device_id || null;
+    const archToDevId = archivedPorts[1]?.value?.device_id || null;
+    await Promise.allSettled([
+      archFromDevId ? syncDeviceCoreUsage(archFromDevId) : Promise.resolve(),
+      archToDevId && archToDevId !== archFromDevId ? syncDeviceCoreUsage(archToDevId) : Promise.resolve(),
+    ]);
+    return sendSuccess(res, archived, 'Port connection archived (status set to inactive)');
   } catch (error) {
     return next(error);
   }
@@ -5886,4 +6274,20 @@ resourceRouter.get('/resource-config/:resourceName', authenticate, requireRole('
   }
 });
 
-module.exports = { resourceRouter };
+module.exports = {
+  resourceRouter,
+  loadDeviceById,
+  loadPortById,
+  syncDevicePortUsage,
+  getRegionalTopologyScope,
+  assertTopologyRegionAccess,
+  loadDevicePortTemplate,
+  loadDevicePortsByDeviceId,
+  resolveTraceEndpoint,
+  loadPortConnections,
+  loadPortsByIds,
+  loadDevicesByIds,
+  loadFiberCoresByConnectionIds,
+  loadRoutesByIds,
+  buildPortConnectionLabel
+};

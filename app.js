@@ -6,6 +6,7 @@ const { corsMiddleware, helmetMiddleware, authRateLimiter, apiRateLimiter } = re
 const { authRouter } = require('./src/modules/auth/auth.routes');
 const { dashboardRouter } = require('./src/modules/dashboard/dashboard.routes');
 const { resourceRouter } = require('./src/modules/resource/resource.routes');
+const { deviceRouter } = require('./src/modules/device/device.routes');
 const { importRouter } = require('./src/modules/import/import.routes');
 const { validationRouter } = require('./src/modules/validation/validation.routes');
 const { notificationRouter } = require('./src/modules/notifications/notification.routes');
@@ -51,6 +52,7 @@ app.use('/api/v1/imports', importRouter);
 app.use('/api/v1/me', notificationRouter);
 app.use('/api/v1/validation-requests', validationRouter);
 app.use('/api/v1', resourceRouter);
+app.use('/api/v1', deviceRouter);
 app.use('/api/v1/cables', cableRouter);
 
 app.use(notFoundHandler);
