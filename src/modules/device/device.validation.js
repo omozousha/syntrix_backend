@@ -87,11 +87,9 @@ function validateDevicePayload(payload, mode = 'create') {
     }
   }
 
-  if (DEVICE_TYPE_PORT_REQUIRED.has(typeKey) || DEVICE_TYPE_CORE_AND_PORT_REQUIRED.has(typeKey)) {
-    if (mode === 'create' && payload.total_ports == null) {
-      throw createHttpError(400, `total_ports is required for device_type_key ${typeKey}`);
-    }
-  }
+  // total_ports tidak lagi required di create — port akan di-provision dari template secara otomatis
+  // atau di-set kemudian via detail form / port provisioning
+  // Total ports tetap bisa dikirim optional; jika tidak dikirim, backend auto-fill dari template
 
   if (typeKey === 'ODP' && mode === 'create' && !payload.splitter_ratio) {
     throw createHttpError(400, 'splitter_ratio is required for device_type_key ODP');

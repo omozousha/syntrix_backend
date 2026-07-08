@@ -1101,6 +1101,13 @@ async function create(req, res, next) {
     }
 
     let approvalRequest = null;
+
+    // ── Post-create topology: front/rear port connections ──────────────
+    let topologyResult = null;
+    if (req.resourceName === 'devices' && !shouldHoldDeviceForSuperadminApproval(req, object)) {
+      topologyResult = await processDeviceTopologyAfterCreate({ req, item, body: req.body });
+    }
+
     if (shouldHoldDeviceForSuperadminApproval(req, object)) {
       try {
         item = await updateResource(req.resourceConfig, item.id, {
@@ -1535,6 +1542,106 @@ async function purge(req, res, next) {
   } catch (error) {
     return next(error);
   }
+}
+
+// ── Post-create topology processing ───────────────────────────────────────
+// Processes front/rear port connections after device creation.
+// Invoked from create() when front_device_id and/or rear_device_id are provided.
+// Creates port_connections between the new device's provisioned ports and selected peer ports.
+
+async function processDeviceTopologyAfterCreate({ req, item, body }) {
+  const frontDeviceId = String(body.front_device_id || '').trim();
+  const frontPortId = String(body.front_port_id || '').trim();
+  const rearDeviceId = String(body.rear_device_id || '').trim();
+  const rearPortId = String(body.rear_port_id || '').trim();
+
+  if (!frontDeviceId && !rearDeviceId) return null;
+
+  const results = { front: null, rear: null };
+
+  // Get provisioned ports of the new device (idle, in order)
+  const devicePorts = await loadDevicePortsByDeviceId(item.id);
+  const idlePorts = devicePorts.filter((p) => p.status === 'idle');
+  let nextPortIndex = 0;
+
+  const getNextIdlePort = () => {
+    const port = idlePorts[nextPortIndex];
+    if (port) nextPortIndex += 1;
+    return port;
+  };
+
+  async function createConnection(fromPortId, toPortId, directionLabel) {
+    if (!fromPortId || !toPortId) return null;
+
+    const connectionId = randomUUID();
+    const mutation = `
+      mutation CreateTopologyConnection($object: port_connections_insert_input!) {
+        inserted: insert_port_connections_one(object: $object) {
+          id
+          connection_id
+          from_port_id
+          to_port_id
+          status
+        }
+      }
+    `;
+
+    const result = await executeHasura(mutation, {
+      object: {
+        id: connectionId,
+        region_id: item.region_id,
+        from_port_id: fromPortId,
+        to_port_id: toPortId,
+        connection_type: 'fiber',
+        status: 'active',
+      },
+    });
+
+    return result.inserted || null;
+  }
+
+  // Front connection: peer port → new device port (upstream to device)
+  if (frontDeviceId && frontPortId) {
+    const newDevicePort = getNextIdlePort();
+    if (newDevicePort) {
+      // Connection: front_port → new_device_port
+      results.front = await createConnection(frontPortId, newDevicePort.id, 'front');
+    }
+  }
+
+  // Rear connection: new device port → rear port (device to downstream)
+  if (rearDeviceId && rearPortId) {
+    const newDevicePort = getNextIdlePort();
+    if (newDevicePort) {
+      // Connection: new_device_port → rear_port
+      results.rear = await createConnection(newDevicePort.id, rearPortId, 'rear');
+    }
+  }
+
+  // Sync port usage after creating connections
+  if (results.front || results.rear) {
+    await syncDevicePortUsage(item.id);
+  }
+
+  await createAuditLog({
+    actorUserId: req.auth.appUser.id,
+    actionName: 'create:topology-connections',
+    entityType: 'devices',
+    entityId: item.id,
+    beforeData: null,
+    afterData: {
+      front_device_id: frontDeviceId || null,
+      front_port_id: frontPortId || null,
+      rear_device_id: rearDeviceId || null,
+      rear_port_id: rearPortId || null,
+      front_connection: results.front?.connection_id || null,
+      rear_connection: results.rear?.connection_id || null,
+    },
+    ipAddress: req.ip,
+    userAgent: req.get('user-agent'),
+  });
+
+  return results;
 }
 
 module.exports = { list, getById, create, update, remove, restore, purge };
