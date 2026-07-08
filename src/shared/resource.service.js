@@ -306,6 +306,7 @@ async function enrichDeviceRelationsWithSql(data) {
         'am.id::text as model_ref_id',
         'am.model_code as model_code',
         'am.model_name as model_name',
+        'am.tray_config as model_tray_config',
         'am.brand_id::text as model_brand_id',
         'am.manufacturer_id::text as model_manufacturer_id'
       );
@@ -434,6 +435,7 @@ async function enrichDeviceRelationsWithSql(data) {
           id: row.model_ref_id,
           model_code: row.model_code,
           model_name: row.model_name,
+          tray_config: row.model_tray_config,
           brand_id: row.model_brand_id,
           manufacturer_id: row.model_manufacturer_id,
         }),
