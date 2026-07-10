@@ -89,6 +89,9 @@ async function loadDevicePortsByDeviceId(deviceId) {
         order_by: [{ port_index: asc }]
       ) {
         id
+        id
+        region_id
+        device_id
         port_index
         status
         customer_id
@@ -539,11 +542,49 @@ async function loadConnectionPortEndpoint(portId) {
         port_label
         status
         deleted_at
+        device {
+          id
+          device_type_key
+          pop_id
+          project_id
+          region_id
+        }
       }
     }
   `;
   const data = await executeHasura(query, { id: portId });
   return data.item || null;
+}
+
+function validateTopologyPeerDeviceType(currentDeviceType, peerDeviceType, direction) {
+  const type = String(currentDeviceType || '').toUpperCase();
+  const peer = String(peerDeviceType || '').toUpperCase();
+  if (!type || !peer) return;
+
+  // Temporary fallback until topology relation rules are sourced from Master Data.
+  const rules = {
+    OTB: { front: ['OLT', 'SWITCH'], rear: ['ODC', 'JC'] },
+    ODC: { front: ['OTB'], rear: ['ODP'] },
+    JC: { front: ['OTB', 'ODC', 'JC'], rear: ['ODP', 'JC', 'HH', 'MH'] },
+    ODP: { front: ['ODC', 'JC'], rear: ['ONT'] },
+    CABLE: { front: ['OTB', 'ODC', 'JC'], rear: ['ODC', 'ODP', 'JC', 'HH', 'MH'] },
+  };
+
+  const allowed = rules[type]?.[direction];
+  if (allowed && !allowed.includes(peer)) {
+    throw createHttpError(400, `${direction} device type ${peer} is not allowed for ${type}`);
+  }
+}
+
+async function syncDevicePortUsageForConnection(connection) {
+  if (!connection?.from_port_id || !connection?.to_port_id) return [];
+  const [fromPort, toPort] = await Promise.all([
+    loadConnectionPortEndpoint(connection.from_port_id),
+    loadConnectionPortEndpoint(connection.to_port_id),
+  ]);
+  const deviceIds = Array.from(new Set([fromPort?.device_id, toPort?.device_id].filter(Boolean)));
+  await Promise.all(deviceIds.map((deviceId) => syncDevicePortUsage(deviceId)));
+  return deviceIds;
 }
 
 async function findActiveConnectionByPort(portId, excludeConnectionId = null) {
@@ -597,8 +638,8 @@ async function validatePortConnectionOperationalState(payload, existing = null) 
     findActiveConnectionByPort(fromPort.id, existing?.id),
     findActiveConnectionByPort(toPort.id, existing?.id),
   ]);
-  if (fromActive) throw createHttpError(400, 'from_port_id is already used by an active/planned connection');
-  if (toActive) throw createHttpError(400, 'to_port_id is already used by an active/planned connection');
+  if (fromActive) throw createHttpError(409, 'from_port_id is already used by an active/planned connection');
+  if (toActive) throw createHttpError(409, 'to_port_id is already used by an active/planned connection');
 
   await validateFiberCoreRangeForConnection(payload, existing);
   await validatePortDirectionForConnection(payload, existing);
@@ -1103,10 +1144,24 @@ async function create(req, res, next) {
     let approvalRequest = null;
 
     // ── Post-create topology: front/rear port connections ──────────────
-    let topologyResult = null;
-    if (req.resourceName === 'devices' && !shouldHoldDeviceForSuperadminApproval(req, object)) {
+  let topologyResult = null;
+  if (req.resourceName === 'devices' && !shouldHoldDeviceForSuperadminApproval(req, object)) {
+    try {
       topologyResult = await processDeviceTopologyAfterCreate({ req, item, body: req.body });
+    } catch (topologyError) {
+      try {
+        await deleteResource(req.resourceConfig, item.id);
+      } catch {
+        // Best effort rollback; keep topology error for caller.
+      }
+
+      const statusCode = topologyError.status || topologyError.statusCode || 500;
+      throw createHttpError(
+        statusCode,
+        `Device creation rolled back because topology processing failed: ${topologyError.message || 'unknown error'}`,
+      );
     }
+  }
 
     if (shouldHoldDeviceForSuperadminApproval(req, object)) {
       try {
@@ -1312,6 +1367,10 @@ async function update(req, res, next) {
     if (req.resourceName === 'portConnections') {
       portConnectionFiberSyncResult = await syncFiberCoresForPortConnection(item, existing);
     }
+    await Promise.all([
+      syncDevicePortUsageForConnection(existing),
+      syncDevicePortUsageForConnection(item),
+    ]);
     await createAuditLog({
       actorUserId: req.auth.appUser.id,
       actionName: `update:${req.resourceName}`,
@@ -1432,6 +1491,8 @@ async function remove(req, res, next) {
     }
     if (req.resourceName === 'devicePorts') {
       await syncDevicePortUsage(existing.device_id);
+  if (req.resourceName === 'portConnections')
+    await syncDevicePortUsageForConnection(existing)
     }
 
     await createAuditLog({
@@ -1555,23 +1616,64 @@ async function processDeviceTopologyAfterCreate({ req, item, body }) {
   const rearDeviceId = String(body.rear_device_id || '').trim();
   const rearPortId = String(body.rear_port_id || '').trim();
 
-  if (!frontDeviceId && !rearDeviceId) return null;
+  const hasFront = Boolean(frontDeviceId || frontPortId);
+  const hasRear = Boolean(rearDeviceId || rearPortId);
+  if (!hasFront && !hasRear) return null;
+
+  if (hasFront && (!frontDeviceId || !frontPortId)) {
+    throw createHttpError(400, 'front_device_id and front_port_id must be provided together');
+  }
+  if (hasRear && (!rearDeviceId || !rearPortId)) {
+    throw createHttpError(400, 'rear_device_id and rear_port_id must be provided together');
+  }
 
   const results = { front: null, rear: null };
+  const currentDeviceType = String(item.device_type_key || '').toUpperCase();
 
-  // Get provisioned ports of the new device (idle, in order)
   const devicePorts = await loadDevicePortsByDeviceId(item.id);
-  const idlePorts = devicePorts.filter((p) => p.status === 'idle');
+  const idlePorts = devicePorts.filter((p) => String(p.status || '').toLowerCase() === 'idle');
   let nextPortIndex = 0;
 
-  const getNextIdlePort = () => {
+  const getNextIdlePort = (directionLabel) => {
     const port = idlePorts[nextPortIndex];
-    if (port) nextPortIndex += 1;
+    if (!port) {
+      throw createHttpError(
+        409,
+        `Device does not have an idle local port for ${directionLabel} topology connection`,
+      );
+    }
+    nextPortIndex += 1;
     return port;
   };
 
+  async function validatePeerPort({ peerDeviceId, peerPortId, direction }) {
+    const peerPort = await loadConnectionPortEndpoint(peerPortId);
+    if (!peerPort) throw createHttpError(404, `${direction} port not found`);
+    if (peerPort.deleted_at) throw createHttpError(400, `${direction} port is deleted`);
+    if (String(peerPort.device_id) !== String(peerDeviceId)) {
+      throw createHttpError(400, `${direction} port does not belong to selected ${direction} device`);
+    }
+    if (peerPort.region_id && item.region_id && peerPort.region_id !== item.region_id) {
+      throw createHttpError(400, `${direction} port must be in the same region as the new device`);
+    }
+    if (String(peerPort.status || '').toLowerCase() !== 'idle') {
+      throw createHttpError(409, `${direction} port is not idle`);
+    }
+    const peerType = String(peerPort.device?.device_type_key || '').toUpperCase();
+    validateTopologyPeerDeviceType(currentDeviceType, peerType, direction);
+    return peerPort;
+  }
+
   async function createConnection(fromPortId, toPortId, directionLabel) {
-    if (!fromPortId || !toPortId) return null;
+    const payload = {
+      region_id: item.region_id,
+      from_port_id: fromPortId,
+      to_port_id: toPortId,
+      connection_type: directionLabel === 'front' ? 'feeder' : 'distribution',
+      status: 'active',
+    };
+
+    await validatePortConnectionOperationalState(payload);
 
     const connectionId = randomUUID();
     const mutation = `
@@ -1589,39 +1691,34 @@ async function processDeviceTopologyAfterCreate({ req, item, body }) {
     const result = await executeHasura(mutation, {
       object: {
         id: connectionId,
-        region_id: item.region_id,
-        from_port_id: fromPortId,
-        to_port_id: toPortId,
-        connection_type: 'fiber',
-        status: 'active',
+        ...payload,
       },
     });
 
     return result.inserted || null;
   }
 
-  // Front connection: peer port → new device port (upstream to device)
-  if (frontDeviceId && frontPortId) {
-    const newDevicePort = getNextIdlePort();
-    if (newDevicePort) {
-      // Connection: front_port → new_device_port
-      results.front = await createConnection(frontPortId, newDevicePort.id, 'front');
-    }
+  if (hasFront) {
+    await validatePeerPort({ peerDeviceId: frontDeviceId, peerPortId: frontPortId, direction: 'front' });
+    const newDevicePort = getNextIdlePort('front');
+    results.front = await createConnection(frontPortId, newDevicePort.id, 'front');
+    if (!results.front) throw createHttpError(500, 'Failed to create front topology connection');
   }
 
-  // Rear connection: new device port → rear port (device to downstream)
-  if (rearDeviceId && rearPortId) {
-    const newDevicePort = getNextIdlePort();
-    if (newDevicePort) {
-      // Connection: new_device_port → rear_port
-      results.rear = await createConnection(newDevicePort.id, rearPortId, 'rear');
-    }
+  if (hasRear) {
+    await validatePeerPort({ peerDeviceId: rearDeviceId, peerPortId: rearPortId, direction: 'rear' });
+    const newDevicePort = getNextIdlePort('rear');
+    results.rear = await createConnection(newDevicePort.id, rearPortId, 'rear');
+    if (!results.rear) throw createHttpError(500, 'Failed to create rear topology connection');
   }
 
-  // Sync port usage after creating connections
-  if (results.front || results.rear) {
-    await syncDevicePortUsage(item.id);
-  }
+  const affectedDeviceIds = new Set([item.id]);
+  await Promise.all(
+    [results.front, results.rear].filter(Boolean).map(async (connection) => {
+      const synced = await syncDevicePortUsageForConnection(connection);
+      synced.forEach((deviceId) => affectedDeviceIds.add(deviceId));
+    }),
+  );
 
   await createAuditLog({
     actorUserId: req.auth.appUser.id,
@@ -1636,6 +1733,7 @@ async function processDeviceTopologyAfterCreate({ req, item, body }) {
       rear_port_id: rearPortId || null,
       front_connection: results.front?.connection_id || null,
       rear_connection: results.rear?.connection_id || null,
+      synced_device_ids: Array.from(affectedDeviceIds),
     },
     ipAddress: req.ip,
     userAgent: req.get('user-agent'),
