@@ -7,6 +7,12 @@ const { createHttpError } = require('../../utils/httpError');
 const { createAuditLog } = require('../../shared/audit.service');
 const { validateDevicePortPayload } = require('./connectivity.validation');
 const { parseSplitterRatioPorts } = require('../../utils/splitterRatio');
+const {
+  evaluateDeviceLinkBudget,
+  loadEstimateForDevice,
+  normalizeEstimateInput,
+  loadDeviceContext,
+} = require('./link-budget.service');
 
 const {
   loadDeviceById,
@@ -380,6 +386,181 @@ deviceRouter.post('/devices/:id/provision-ports', authenticate, requireRole('adm
       },
       'Ports provisioned successfully from template',
     );
+  } catch (error) {
+    return next(error);
+  }
+});
+
+
+
+// 5. POST /devices/:id/link-budget/calculate — Calculate link budget
+deviceRouter.post('/devices/:id/link-budget/calculate', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const device = await loadDeviceById(req.params.id);
+    if (!device) throw createHttpError(404, 'Device not found');
+
+    const scope = getRegionalTopologyScope(req.auth);
+    assertTopologyRegionAccess(scope, device.region_id, 'You do not have access to this device region');
+
+    const body = req.body || {};
+    const segments = Array.isArray(body.segments) ? body.segments : [];
+    const splitterProfileIds = Array.isArray(body.splitter_profile_ids) ? body.splitter_profile_ids : [];
+    const splitterRatios = Array.isArray(body.splitter_ratios) ? body.splitter_ratios : [];
+    const gponClass = body.gpon_class || null;
+    const engineeringMarginOverride = body.engineering_margin_db ?? null;
+    const measuredLossDb = body.measured_loss_db ?? null;
+
+    const evaluation = await evaluateDeviceLinkBudget({
+      device,
+      splitterProfileIds,
+      splitterRatios,
+      segments,
+      gponClass,
+      engineeringMarginOverride,
+      measuredLossDb,
+    });
+
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'calculate:link-budget',
+      entityType: 'devices',
+      entityId: device.id,
+      beforeData: null,
+      afterData: {
+        ...evaluation,
+        persisted: false,
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return sendSuccess(res, evaluation, 'Link budget calculated successfully');
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// 6. GET /devices/:id/link-budget — Stored link budget estimate
+deviceRouter.get('/devices/:id/link-budget', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const device = await loadDeviceById(req.params.id);
+    if (!device) throw createHttpError(404, 'Device not found');
+
+    const scope = getRegionalTopologyScope(req.auth);
+    assertTopologyRegionAccess(scope, device.region_id, 'You do not have access to this device region');
+
+    const estimate = await loadEstimateForDevice(device.id);
+    const context = await loadDeviceContext(device.id);
+
+    return sendSuccess(res, {
+      device: {
+        id: device.id,
+        device_id: device.device_id,
+        device_name: device.device_name,
+        device_type_key: device.device_type_key,
+        region_id: device.region_id,
+      },
+      context: context ? { device_type_key: context.device_type_key, region_id: context.region_id } : null,
+      estimate: estimate || null,
+    }, 'Link budget estimate fetched successfully');
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// 7. PUT /devices/:id/link-budget — Upsert link budget estimate
+deviceRouter.put('/devices/:id/link-budget', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const device = await loadDeviceById(req.params.id);
+    if (!device) throw createHttpError(404, 'Device not found');
+
+    const scope = getRegionalTopologyScope(req.auth);
+    assertTopologyRegionAccess(scope, device.region_id, 'You do not have access to this device region');
+
+    const normalized = normalizeEstimateInput(req.body || {});
+    const existing = await loadEstimateForDevice(device.id);
+
+    const object = {
+      device_id: device.id,
+      region_id: device.region_id,
+      ...normalized,
+      notes: normalized.notes != null ? normalized.notes : existing?.notes || null,
+      engineering_margin_db: normalized.engineering_margin_db != null
+        ? normalized.engineering_margin_db
+        : existing?.engineering_margin_db ?? 3.0,
+      warnings: normalized.warnings != null
+        ? normalized.warnings
+        : (Array.isArray(existing?.warnings) ? existing.warnings : []),
+      updated_by_user_id: req.auth.appUser.id,
+      updated_at: new Date().toISOString(),
+    };
+
+    let result;
+    if (existing) {
+      result = await executeHasura(`
+        mutation UpdateLinkBudgetEstimate($id: uuid!, $set: link_budget_estimates_set_input!) {
+          item: update_link_budget_estimates_by_pk(pk_columns: { id: $id }, _set: $set) {
+            id
+            estimate_id
+            device_id
+            region_id
+            calculated_loss_db
+            measured_loss_db
+            ont_rx_power_dbm
+            olt_tx_power_dbm
+            engineering_margin_db
+            measurement_date
+            measurement_method
+            evidence_attachment_id
+            gpon_class
+            gpon_budget_db
+            warnings
+            notes
+            updated_at
+          }
+        }
+      `, { id: existing.id, set: object });
+    } else {
+      result = await executeHasura(`
+        mutation InsertLinkBudgetEstimate($object: link_budget_estimates_insert_input!) {
+          item: insert_link_budget_estimates_one(object: $object) {
+            id
+            estimate_id
+            device_id
+            region_id
+            calculated_loss_db
+            measured_loss_db
+            ont_rx_power_dbm
+            olt_tx_power_dbm
+            engineering_margin_db
+            measurement_date
+            measurement_method
+            evidence_attachment_id
+            gpon_class
+            gpon_budget_db
+            warnings
+            notes
+            updated_at
+          }
+        }
+      `, { object: { ...object, id: randomUUID() } });
+    }
+
+    const upserted = result?.item;
+    if (!upserted) throw createHttpError(500, 'Failed to persist link budget estimate');
+
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'upsert:link-budget',
+      entityType: 'devices',
+      entityId: device.id,
+      beforeData: existing || null,
+      afterData: upserted,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return sendSuccess(res, upserted, 'Link budget estimate saved successfully');
   } catch (error) {
     return next(error);
   }

@@ -31,6 +31,10 @@ const {
 const { validateFiberCoreRangeForConnection } = require('../device/fiber-core-policy.service');
 const { buildOdpCoreChainSummary } = require('../device/odp-chain.service');
 const {
+  hasTopologyCreateInput,
+  createDeviceWithTopology,
+} = require('../device/topology-create.service');
+const {
   STATUS: VALIDATION_STATUS,
   ACTION: VALIDATION_ACTION,
   createRequest: createValidationRequest,
@@ -1104,38 +1108,67 @@ async function create(req, res, next) {
       }
     }
 
-    let item = await createResource(req.resourceConfig, object);
-
+    const isAtomicTopologyCreate = (
+      req.resourceName === 'devices'
+      && !shouldHoldDeviceForSuperadminApproval(req, object)
+      && hasTopologyCreateInput(req.body)
+    );
+    let atomicTopologyCreateResult = null;
+    let item;
     let provisioningResult = null;
     let fiberSyncResult = null;
-    if (req.resourceName === 'devices') {
-      if (!item.device_name && item.device_id) {
-        item = await updateResource(req.resourceConfig, item.id, {
-          device_name: item.device_id,
-        });
-      }
-      try {
-        provisioningResult = await provisionPortsFromTemplate(item);
-        if (provisioningResult?.enabled) {
-          await syncDevicePortUsage(item.id);
-        }
-        fiberSyncResult = await syncFiberCoresForCableDevice(item);
-      } catch (provisionError) {
-        try {
-          await deleteResource(req.resourceConfig, item.id);
-        } catch {
-          // Best effort rollback; keep original error for caller.
-        }
+    let topologyResult = null;
 
-        throw createHttpError(
-          500,
-          `Device creation rolled back because auto-provision ports failed: ${provisionError.message || 'unknown error'}`,
-        );
+    if (isAtomicTopologyCreate) {
+      atomicTopologyCreateResult = await createDeviceWithTopology({
+        device: object,
+        body: req.body,
+        audit: {
+          actorUserId: req.auth.appUser.id,
+          ipAddress: req.ip,
+          userAgent: req.get('user-agent'),
+        },
+      });
+      item = await getResourceById(req.resourceConfig, atomicTopologyCreateResult.deviceId);
+      if (!item) {
+        throw createHttpError(500, 'Topology-aware device create committed but the created device could not be loaded');
+      }
+      provisioningResult = atomicTopologyCreateResult.provisioning;
+      fiberSyncResult = atomicTopologyCreateResult.fiberSync;
+      topologyResult = atomicTopologyCreateResult.topology;
+    } else {
+      item = await createResource(req.resourceConfig, object);
+
+      if (req.resourceName === 'devices') {
+        if (!item.device_name && item.device_id) {
+          item = await updateResource(req.resourceConfig, item.id, {
+            device_name: item.device_id,
+          });
+        }
+        try {
+          provisioningResult = await provisionPortsFromTemplate(item);
+          if (provisioningResult?.enabled) {
+            await syncDevicePortUsage(item.id);
+          }
+          fiberSyncResult = await syncFiberCoresForCableDevice(item);
+        } catch (provisionError) {
+          try {
+            await deleteResource(req.resourceConfig, item.id);
+          } catch {
+            // Best effort rollback remains only for legacy non-topology creates.
+          }
+
+          throw createHttpError(
+            500,
+            `Device creation rolled back because auto-provision ports failed: ${provisionError.message || 'unknown error'}`,
+          );
+        }
+      }
+      if (req.resourceName === 'devicePorts') {
+        await syncDevicePortUsage(item.device_id);
       }
     }
-    if (req.resourceName === 'devicePorts') {
-      await syncDevicePortUsage(item.device_id);
-    }
+
     let portConnectionFiberSyncResult = null;
     if (req.resourceName === 'portConnections') {
       portConnectionFiberSyncResult = await syncFiberCoresForPortConnection(item);
@@ -1143,25 +1176,29 @@ async function create(req, res, next) {
 
     let approvalRequest = null;
 
-    // ── Post-create topology: front/rear port connections ──────────────
-  let topologyResult = null;
-  if (req.resourceName === 'devices' && !shouldHoldDeviceForSuperadminApproval(req, object)) {
-    try {
-      topologyResult = await processDeviceTopologyAfterCreate({ req, item, body: req.body });
-    } catch (topologyError) {
+    // Legacy post-create topology flow is retained for device creates without
+    // topology input. Topology-aware creates use one Hasura mutation above.
+    if (
+      req.resourceName === 'devices'
+      && !shouldHoldDeviceForSuperadminApproval(req, object)
+      && !isAtomicTopologyCreate
+    ) {
       try {
-        await deleteResource(req.resourceConfig, item.id);
-      } catch {
-        // Best effort rollback; keep topology error for caller.
-      }
+        topologyResult = await processDeviceTopologyAfterCreate({ req, item, body: req.body });
+      } catch (topologyError) {
+        try {
+          await deleteResource(req.resourceConfig, item.id);
+        } catch {
+          // Best effort rollback remains only for legacy non-topology creates.
+        }
 
-      const statusCode = topologyError.status || topologyError.statusCode || 500;
-      throw createHttpError(
-        statusCode,
-        `Device creation rolled back because topology processing failed: ${topologyError.message || 'unknown error'}`,
-      );
+        const statusCode = topologyError.status || topologyError.statusCode || 500;
+        throw createHttpError(
+          statusCode,
+          `Device creation rolled back because topology processing failed: ${topologyError.message || 'unknown error'}`,
+        );
+      }
     }
-  }
 
     if (shouldHoldDeviceForSuperadminApproval(req, object)) {
       try {
@@ -1218,32 +1255,37 @@ async function create(req, res, next) {
       }
     }
 
-    await createAuditLog({
-      actorUserId: req.auth.appUser.id,
-      actionName: `create:${req.resourceName}`,
-      entityType: req.resourceName,
-      entityId: item.id,
-      beforeData: null,
-      afterData: (() => {
-        if (req.resourceName === 'devices') {
-          return {
-          ...item,
-          auto_provision: provisioningResult || { enabled: false, createdCount: 0 },
-          fiber_core_sync: fiberSyncResult || { enabled: false },
-          ...(approvalRequest ? { approval_request_id: approvalRequest.request_id || approvalRequest.id } : {}),
-          };
-        }
-        if (req.resourceName === 'portConnections') {
-          return {
-            ...item,
-            fiber_core_sync: portConnectionFiberSyncResult || { enabled: false },
-          };
-        }
-        return item;
-      })(),
-      ipAddress: req.ip,
-      userAgent: req.get('user-agent'),
-    });
+    // The atomic topology mutation writes both resource and topology audit rows
+    // in the same database transaction. All other create paths keep the
+    // existing best-effort audit behavior.
+    if (!isAtomicTopologyCreate) {
+      await createAuditLog({
+        actorUserId: req.auth.appUser.id,
+        actionName: `create:${req.resourceName}`,
+        entityType: req.resourceName,
+        entityId: item.id,
+        beforeData: null,
+        afterData: (() => {
+          if (req.resourceName === 'devices') {
+            return {
+              ...item,
+              auto_provision: provisioningResult || { enabled: false, createdCount: 0 },
+              fiber_core_sync: fiberSyncResult || { enabled: false },
+              ...(approvalRequest ? { approval_request_id: approvalRequest.request_id || approvalRequest.id } : {}),
+            };
+          }
+          if (req.resourceName === 'portConnections') {
+            return {
+              ...item,
+              fiber_core_sync: portConnectionFiberSyncResult || { enabled: false },
+            };
+          }
+          return item;
+        })(),
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent'),
+      });
+    }
 
     if (shouldNotifyValidatorsForDirectDeviceCreate(req, item, approvalRequest)) {
       await notifyValidationTaskCreated({
