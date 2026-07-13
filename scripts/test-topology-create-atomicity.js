@@ -118,9 +118,11 @@ async function getPorts(deviceId) {
 }
 
 async function loadConnectionsForPort(portId) {
-  const response = await api(`/portConnections?from_port_id=${portId}&limit=100`);
+  const limit = 200;
+  const response = await api(`/topology/port-connections?limit=${limit}`);
   await assertStatus(response, 200, `load connections for ${portId}`);
-  return response.data?.data || [];
+  const items = response.data?.data?.items || [];
+  return items.filter((connection) => connection.from_port_id === portId || connection.to_port_id === portId);
 }
 
 async function findDeviceByName(name) {
@@ -248,6 +250,177 @@ async function testConcurrentConflict({ olt, odc }) {
   assert(activeConnections.length === 1, `expected one active connection after race, got ${activeConnections.length}`);
 }
 
+async function testAutoProvisioningWithoutTotalPorts() {
+  const template = await ensureTemplate('OTB', 12);
+  const expectedPorts = template?.total_ports ? Number(template.total_ports) : 12;
+  const name = `Topology Auto Prov ${Date.now()}`;
+  const response = await api('/devices', {
+    method: 'POST',
+    body: {
+      device_name: name,
+      asset_group: 'passive',
+      device_type_key: 'OTB',
+      region_id: state.regionId,
+      status: 'installed',
+      capacity_core: 12
+      // total_ports omitted!
+    },
+  });
+  await assertStatus(response, 201, 'atomic OTB create without total_ports');
+  const otb = response.data?.data;
+  assert(otb?.id, 'did not return OTB id');
+  state.devices.add(otb.id);
+
+  const ports = await getPorts(otb.id);
+  assert(ports.length === expectedPorts, `expected ${expectedPorts} ports to be provisioned, got ${ports.length}`);
+}
+
+async function testValidationMismatchAndInvalidPairs({ olt, odc, oltPort, odcPort }) {
+  // BE-04: Peer port belongs to different device
+  const nameMismatch = `Topology Dev Mismatch ${Date.now()}`;
+  const responseMismatch = await api('/devices', {
+    method: 'POST',
+    body: {
+      device_name: nameMismatch,
+      asset_group: 'passive',
+      device_type_key: 'OTB',
+      region_id: state.regionId,
+      status: 'installed',
+      capacity_core: 12,
+      total_ports: 4,
+      front_device_id: odc.id, // ODC device, but OLT port!
+      front_port_id: oltPort.id,
+    },
+  });
+  await assertStatus(responseMismatch, 400, 'create OTB with front device/port mismatch');
+
+  // BE-05: Invalid device type pair
+  const odp = await createDevice({ deviceTypeKey: 'ODP', name: `Topology Test ODP ${Date.now()}`, totalPorts: 8 });
+  const [odpPort] = await getPorts(odp.id);
+
+  const nameInvalidPair = `Topology Invalid Pair ${Date.now()}`;
+  const responseInvalidPair = await api('/devices', {
+    method: 'POST',
+    body: {
+      device_name: nameInvalidPair,
+      asset_group: 'passive',
+      device_type_key: 'OTB',
+      region_id: state.regionId,
+      status: 'installed',
+      capacity_core: 12,
+      total_ports: 4,
+      front_device_id: odp.id, // OTB front cannot be ODP!
+      front_port_id: odpPort.id,
+    },
+  });
+  await assertStatus(responseInvalidPair, 400, 'create OTB with ODP front (invalid pair)');
+}
+
+async function testNoLocalIdlePort({ olt, odc }) {
+  // We create a device with total_ports: 1, but connect both front and rear (requires 2 ports).
+  const oltPorts = await getPorts(olt.id);
+  const odcPorts = await getPorts(odc.id);
+  const idleOltPort = oltPorts.find((p) => p.status === 'idle');
+  const idleOdcPort = odcPorts.find((p) => p.status === 'idle');
+
+  if (!idleOltPort || !idleOdcPort) {
+    console.log('BE-06 skipped: not enough idle peer ports');
+    return;
+  }
+
+  const name = `Topology No Local Idle ${Date.now()}`;
+  const response = await api('/devices', {
+    method: 'POST',
+    body: {
+      device_name: name,
+      asset_group: 'passive',
+      device_type_key: 'OTB',
+      region_id: state.regionId,
+      status: 'installed',
+      capacity_core: 12,
+      total_ports: 1, // Only 1 local port!
+      front_device_id: olt.id,
+      front_port_id: idleOltPort.id,
+      rear_device_id: odc.id,
+      rear_port_id: idleOdcPort.id,
+    },
+  });
+  await assertStatus(response, 409, 'create topology with insufficient local ports');
+}
+
+async function testDisconnectUsageSync() {
+  const olt = await createDevice({ deviceTypeKey: 'OLT', name: `Topology Sync OLT ${Date.now()}` });
+  const odc = await createDevice({ deviceTypeKey: 'ODC', name: `Topology Sync ODC ${Date.now()}` });
+  const [oltPort] = await getPorts(olt.id);
+  const [odcPort] = await getPorts(odc.id);
+
+  const otb = await createDevice({
+    deviceTypeKey: 'OTB',
+    name: `Topology Sync OTB ${Date.now()}`,
+    totalPorts: 4,
+  });
+
+  // Verify initial counts
+  const oltInitial = (await api(`/devices/${olt.id}`)).data?.data;
+  assert(oltInitial.used_ports === 0, 'OLT used_ports should be 0');
+
+  // Let's connect them manually
+  const conn = await api('/topology/port-connections', {
+    method: 'POST',
+    body: {
+      region_id: state.regionId,
+      from_port_id: oltPort.id,
+      to_port_id: (await getPorts(otb.id))[0].id,
+      connection_type: 'fiber',
+      status: 'active',
+    },
+  });
+  await assertStatus(conn, 201, 'create manual connection');
+  const connection = conn.data?.data?.connection || conn.data?.data;
+
+  // Verify updated counts
+  const oltAfter = (await api(`/devices/${olt.id}`)).data?.data;
+  assert(oltAfter.used_ports === 1, `OLT used_ports should be 1, got ${oltAfter.used_ports}`);
+
+  // Delete/disconnect
+  const deleted = await api(`/topology/port-connections/${connection.id}`, {
+    method: 'DELETE',
+  });
+  await assertStatus(deleted, 200, 'delete manual connection');
+
+  // Verify synced back
+  const oltFinal = (await api(`/devices/${olt.id}`)).data?.data;
+  assert(oltFinal.used_ports === 0, `OLT used_ports should be 0 after delete, got ${oltFinal.used_ports}`);
+}
+
+async function testTraceAndLinkBudget(otb) {
+  // BE-10 & BE-11: trace
+  const trace = await api(`/devices/${otb.id}/trace?max_depth=6`);
+  await assertStatus(trace, 200, 'fetch device trace');
+  const summary = trace.data?.data?.summary;
+  assert(summary, 'missing trace summary');
+  assert(summary.node_count >= 3, `expected at least 3 nodes in trace, got ${summary.node_count}`);
+
+  // BE-12: calculate link budget
+  const budget = await api(`/devices/${otb.id}/link-budget/calculate`, {
+    method: 'POST',
+    body: {
+      splitter_ratios: ['1:4', '1:8'],
+      segments: [
+        { label: 'Feeder', distance_km: 1.2, splice_count: 2, connector_count: 2 },
+      ],
+      gpon_class: 'B_plus',
+      engineering_margin_db: 3.0,
+      measured_loss_db: 22.5,
+    },
+  });
+  await assertStatus(budget, 200, 'calculate link budget');
+  const budgetData = budget.data?.data;
+  assert(budgetData.calculated_loss_db > 0, 'calculated_loss_db should be positive');
+  assert(budgetData.margin_db !== undefined, 'missing margin_db');
+  assert(Array.isArray(budgetData.warnings), 'warnings should be an array');
+}
+
 async function cleanup() {
   for (const deviceId of state.devices) {
     try {
@@ -286,6 +459,37 @@ async function main() {
     const fixtures = await testSuccessAndPeerSync();
     await testAtomicFailureLeavesNoOrphan(fixtures);
     await testConcurrentConflict(fixtures);
+    await testAutoProvisioningWithoutTotalPorts();
+    await testValidationMismatchAndInvalidPairs(fixtures);
+    await testNoLocalIdlePort(fixtures);
+    await testDisconnectUsageSync();
+
+    // Skenario Trace & Link Budget: create a dedicated connected OTB
+    const traceOlt = await createDevice({ deviceTypeKey: 'OLT', name: `Trace OLT ${Date.now()}` });
+    const traceOdc = await createDevice({ deviceTypeKey: 'ODC', name: `Trace ODC ${Date.now()}` });
+    const [traceOltPort] = await getPorts(traceOlt.id);
+    const [traceOdcPort] = await getPorts(traceOdc.id);
+    const traceOtb = await api('/devices', {
+      method: 'POST',
+      body: {
+        device_name: `Trace OTB ${Date.now()}`,
+        asset_group: 'passive',
+        device_type_key: 'OTB',
+        region_id: state.regionId,
+        status: 'installed',
+        capacity_core: 12,
+        total_ports: 4,
+        front_device_id: traceOlt.id,
+        front_port_id: traceOltPort.id,
+        rear_device_id: traceOdc.id,
+        rear_port_id: traceOdcPort.id,
+      },
+    });
+    await assertStatus(traceOtb, 201, 'create connected OTB for trace/budget');
+    const freshOtb = traceOtb.data?.data;
+    if (freshOtb?.id) state.devices.add(freshOtb.id);
+    await testTraceAndLinkBudget(freshOtb);
+
     console.log('Topology atomicity integration test PASSED');
   } catch (error) {
     console.error('Topology atomicity integration test FAILED:', error.message || error);

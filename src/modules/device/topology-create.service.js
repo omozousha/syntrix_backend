@@ -239,11 +239,13 @@ function buildConnectionObjects({ device, topology, localPorts }) {
 
 function topologyCreateError(error) {
   const message = String(error?.message || error?.response?.data?.error || error?.response?.data?.message || 'Topology create failed');
-  if (message.includes('TOPOLOGY_PORT_UNAVAILABLE') || message.includes('already has an active connection')) {
+  const detailsStr = JSON.stringify(error?.details || error?.response?.data?.details || '');
+  const combined = message + ' ' + detailsStr;
+  if (combined.includes('TOPOLOGY_PORT_UNAVAILABLE') || combined.includes('already has an active connection')) {
     return createHttpError(409, 'Port sudah digunakan oleh koneksi lain. Silakan refresh daftar port dan pilih port lain.');
   }
-  if (message.includes('TOPOLOGY_PORT_INVALID')) {
-    return createHttpError(400, message.replace(/^.*TOPOLOGY_PORT_INVALID:\s*/, ''));
+  if (combined.includes('TOPOLOGY_PORT_INVALID')) {
+    return createHttpError(400, combined.replace(/^.*TOPOLOGY_PORT_INVALID:\s*/, ''));
   }
   return error;
 }

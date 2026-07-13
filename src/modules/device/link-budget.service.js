@@ -1,3 +1,4 @@
+const { randomUUID } = require('crypto');
 const { executeHasura, executeHasuraSql, sqlLiteral } = require('../../config/hasura');
 const { createHttpError } = require('../../utils/httpError');
 
@@ -374,10 +375,83 @@ function normalizeEstimateInput(body = {}) {
   return result;
 }
 
+async function saveLinkBudgetEstimate({ deviceId, regionId, input, userId }) {
+  const normalized = normalizeEstimateInput(input || {});
+  const existing = await loadEstimateForDevice(deviceId);
+
+  const object = {
+    device_id: deviceId,
+    region_id: regionId,
+    ...normalized,
+    notes: normalized.notes !== undefined ? normalized.notes : existing?.notes || null,
+    engineering_margin_db: normalized.engineering_margin_db !== undefined
+      ? normalized.engineering_margin_db
+      : existing?.engineering_margin_db ?? 3.0,
+    warnings: normalized.warnings !== undefined
+      ? normalized.warnings
+      : (Array.isArray(existing?.warnings) ? existing.warnings : []),
+    updated_by_user_id: userId,
+    updated_at: new Date().toISOString(),
+  };
+
+  let result;
+  if (existing) {
+    result = await executeHasura(`
+      mutation UpdateLinkBudgetEstimateFromService($id: uuid!, $set: link_budget_estimates_set_input!) {
+        item: update_link_budget_estimates_by_pk(pk_columns: { id: $id }, _set: $set) {
+          id
+          estimate_id
+          device_id
+          region_id
+          calculated_loss_db
+          measured_loss_db
+          ont_rx_power_dbm
+          olt_tx_power_dbm
+          engineering_margin_db
+          measurement_date
+          measurement_method
+          evidence_attachment_id
+          gpon_class
+          gpon_budget_db
+          warnings
+          notes
+          updated_at
+        }
+      }
+    `, { id: existing.id, set: object });
+  } else {
+    result = await executeHasura(`
+      mutation InsertLinkBudgetEstimateFromService($object: link_budget_estimates_insert_input!) {
+        item: insert_link_budget_estimates_one(object: $object) {
+          id
+          estimate_id
+          device_id
+          region_id
+          calculated_loss_db
+          measured_loss_db
+          ont_rx_power_dbm
+          olt_tx_power_dbm
+          engineering_margin_db
+          measurement_date
+          measurement_method
+          evidence_attachment_id
+          gpon_class
+          gpon_budget_db
+          warnings
+          notes
+          updated_at
+        }
+      }
+    `, { object: { ...object, id: randomUUID() } });
+  }
+  return result?.item || null;
+}
+
 module.exports = {
   evaluateDeviceLinkBudget,
   loadEstimateForDevice,
   normalizeEstimateInput,
   buildLinkBudgetInput,
   loadDeviceContext,
+  saveLinkBudgetEstimate,
 };

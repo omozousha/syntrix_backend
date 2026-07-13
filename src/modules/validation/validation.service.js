@@ -8,6 +8,7 @@ const {
 } = require('../../shared/resource.service');
 const { RESOURCE_CONFIG } = require('../resource/resource.registry');
 const { validateFiberCoreRangeForConnection } = require('../device/fiber-core-policy.service');
+const { saveLinkBudgetEstimate } = require('../device/link-budget.service');
 const { validatePortDirectionForConnection } = require('../device/connectivity.validation');
 
 const STATUS = {
@@ -1870,6 +1871,15 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
   try {
     if (Object.keys(deviceChanges).length > 0) {
       await updateDeviceById(request.entity_id, deviceChanges);
+    }
+
+    if (payload.link_budget && typeof payload.link_budget === 'object') {
+      await saveLinkBudgetEstimate({
+        deviceId: request.entity_id,
+        regionId: before.device.region_id,
+        input: payload.link_budget,
+        userId: actorUserId,
+      });
     }
 
     for (const portPatch of payloadPorts) {

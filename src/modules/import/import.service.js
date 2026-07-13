@@ -168,16 +168,19 @@ function mapRowToEntity(entityType, row, defaults = {}) {
   const pick = (...keys) => keys.map((key) => row[key]).find((value) => value !== undefined && value !== null && String(value).trim() !== '');
 
   if (entityType === 'devices') {
+    const deviceTypeKey = pick('device_type_key', 'device_type', 'Device Type', 'device type') || defaults.device_type_key || 'OLT';
+    const isOdp = String(deviceTypeKey).toUpperCase() === 'ODP';
+
     return applyResourceNameNormalization('devices', {
-      device_name: pick('device_name', 'Device Name', 'name', 'Name'),
-      asset_group: pick('asset_group', 'Asset Group') || 'active',
-      device_type_key: pick('device_type_key', 'device_type', 'Device Type') || 'OLT',
-      region_id: pick('region_id', 'Region ID') || defaults.region_id || null,
-      pop_id: pick('pop_id', 'POP ID') || defaults.pop_id || null,
+      device_name: pick('device_name', 'Device Name', 'name', 'Name', 'device name'),
+      asset_group: pick('asset_group', 'Asset Group') || defaults.asset_group || (isOdp ? 'passive' : 'active'),
+      device_type_key: deviceTypeKey,
+      region_id: pick('region_id', 'Region ID', 'region', 'Region') || defaults.region_id || null,
+      pop_id: pick('pop_id', 'POP ID', 'pop', 'POP') || defaults.pop_id || null,
       project_id: pick('project_id', 'Project ID') || defaults.project_id || null,
       category_asset: pick('category_asset', 'Category Asset') || null,
       bast_id: pick('bast_id', 'Bast ID') || null,
-      status: pick('status', 'Status') || 'draft',
+      status: pick('status', 'Status') || defaults.status || 'installed',
       validation_status: pick('validation_status', 'Validation Status') || 'unvalidated',
       validation_date: pick('validation_date', 'Validation Date', 'Tanggal Validasi') || null,
       longitude: pick('longitude', 'Longitude'),
@@ -185,11 +188,11 @@ function mapRowToEntity(entityType, row, defaults = {}) {
       address: pick('address', 'Address') || null,
       serial_number: pick('serial_number', 'Serial Number') || null,
       management_ip: pick('management_ip', 'Management IP') || null,
-      total_ports: pick('total_ports', 'Total Ports'),
-      used_ports: pick('used_ports', 'Used Ports'),
-      capacity_core: pick('capacity_core', 'Capacity Core'),
-      used_core: pick('used_core', 'Used Core'),
-      splitter_ratio: pick('splitter_ratio', 'Splitter Ratio') || null,
+      total_ports: pick('total_ports', 'Total Ports', 'kapasitas odp', 'capacity_core'),
+      used_ports: pick('used_ports', 'Used Ports') || 0,
+      capacity_core: pick('capacity_core', 'Capacity Core') || 16,
+      used_core: pick('used_core', 'Used Core') || 0,
+      splitter_ratio: pick('splitter_ratio', 'Splitter Ratio', 'kapasitas splitter'),
       custom_fields: row,
     });
   }

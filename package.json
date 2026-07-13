@@ -17,7 +17,9 @@
     "check:ci-env": "node scripts/check-ci-env.js",
     "test:pop-flow": "node scripts/test-pop-form-import.js",
     "test:topology-create-atomicity": "node scripts/test-topology-create-atomicity.js",
-    "test:topology-flow-validation": "node scripts/test-topology-flow-validation.js"
+    "test:topology-flow-validation": "node scripts/test-topology-flow-validation.js",
+    "test:uat-topology": "node scripts/test-uat-scenarios.js",
+    "test:odp-bulk-import": "node scripts/test-odp-bulk-import.js"
   },
   "keywords": [],
   "author": "",
