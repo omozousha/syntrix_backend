@@ -69,47 +69,110 @@ function getAllowedImportEntitiesByRole(role) {
 
 async function resolveRegionReferences(rows) {
   const rawRefs = rows
-    .map((row) => row.region_id)
+    .map((row) => row.region_id || row.region || row['Region ID'] || row['Region'] || row['region'])
     .filter((value) => value !== undefined && value !== null && String(value).trim() !== '');
 
   const refs = [...new Set(rawRefs.map((value) => String(value).trim()))];
-  const unresolvedNames = refs.filter((value) => !isUuid(value));
-
-  if (!unresolvedNames.length) {
-    return rows;
-  }
+  if (!refs.length) return rows;
 
   const query = `
-    query ResolveRegions($names: [String!]) {
-      regions(where: { _or: [{ region_name: { _in: $names } }, { region_id: { _in: $names } }] }) {
+    query ResolveAllRegions {
+      regions {
         id
-        region_name
         region_id
+        region_name
       }
     }
   `;
 
-  const data = await executeHasura(query, { names: unresolvedNames });
+  const data = await executeHasura(query);
   const regionMap = new Map();
 
   for (const region of data.regions || []) {
-    regionMap.set(String(region.region_name).trim().toLowerCase(), region.id);
-    regionMap.set(String(region.region_id).trim().toLowerCase(), region.id);
+    const regId = region.id || region.region_id;
+    regionMap.set(String(region.id).toLowerCase(), regId);
+    regionMap.set(String(region.region_id).toLowerCase(), regId);
+    regionMap.set(String(region.region_name).trim().toLowerCase(), regId);
+
+    // Normalization mapping layer (jabar, JAWA BARAT -> Jawa Barat)
+    const normName = String(region.region_name).toLowerCase();
+    if (normName.includes("jawa barat") || normName === "jabar") {
+      regionMap.set("jabar", regId);
+      regionMap.set("jawa barat", regId);
+      regionMap.set("jawa_barat", regId);
+    }
+    if (normName.includes("jawa timur") || normName === "jatim") {
+      regionMap.set("jatim", regId);
+      regionMap.set("jawa timur", regId);
+      regionMap.set("jawa_timur", regId);
+    }
+    if (normName.includes("jawa tengah") || normName === "jateng") {
+      regionMap.set("jateng", regId);
+      regionMap.set("jawa tengah", regId);
+      regionMap.set("jawa_tengah", regId);
+    }
+    if (normName.includes("jakarta") || normName === "dki") {
+      regionMap.set("dki", regId);
+      regionMap.set("jakarta", regId);
+      regionMap.set("dki jakarta", regId);
+    }
   }
 
   return rows.map((row) => {
-    const value = row.region_id;
-    if (value == null || value === '') {
-      return row;
-    }
+    const value = row.region_id || row.region || row['Region ID'] || row['Region'] || row['region'];
+    if (value == null || value === '') return row;
 
-    const normalized = String(value).trim();
+    const normalized = String(value).trim().toLowerCase();
     if (isUuid(normalized)) {
-      return row;
+      return { ...row, region_id: value };
     }
 
-    const resolved = regionMap.get(normalized.toLowerCase());
-    return resolved ? { ...row, region_id: resolved } : row;
+    const resolved = regionMap.get(normalized);
+    return { ...row, region_id: resolved || value };
+  });
+}
+
+async function resolvePopReferences(rows) {
+  const rawRefs = rows
+    .map((row) => row.pop_id || row.pop || row['POP ID'] || row['POP'] || row['pop'] || row['pop_code'] || row['POP Code'])
+    .filter((value) => value !== undefined && value !== null && String(value).trim() !== '');
+
+  const refs = [...new Set(rawRefs.map((value) => String(value).trim()))];
+  if (!refs.length) return rows;
+
+  const query = `
+    query ResolveAllPops {
+      pops {
+        id
+        pop_id
+        pop_name
+        pop_code
+      }
+    }
+  `;
+
+  const data = await executeHasura(query);
+  const popMap = new Map();
+
+  for (const pop of data.pops || []) {
+    const popIdUuid = pop.id || pop.pop_id;
+    popMap.set(String(pop.id).toLowerCase(), popIdUuid);
+    popMap.set(String(pop.pop_id).toLowerCase(), popIdUuid);
+    popMap.set(String(pop.pop_name).trim().toLowerCase(), popIdUuid);
+    popMap.set(String(pop.pop_code).trim().toLowerCase(), popIdUuid);
+  }
+
+  return rows.map((row) => {
+    const value = row.pop_id || row.pop || row['POP ID'] || row['POP'] || row['pop'] || row['pop_code'] || row['POP Code'];
+    if (value == null || value === '') return row;
+
+    const normalized = String(value).trim().toLowerCase();
+    if (isUuid(normalized)) {
+      return { ...row, pop_id: value };
+    }
+
+    const resolved = popMap.get(normalized);
+    return { ...row, pop_id: resolved || value };
   });
 }
 
@@ -198,9 +261,12 @@ importRouter.post('/ingest', authenticate, requireRole('admin', 'user_region', '
       parsedRows = parseKmlOrKmz(req.file.buffer, sourceFormat);
     }
 
-    if (['devices', 'pops', 'projects'].includes(entityType)) {
-      parsedRows = await resolveRegionReferences(parsedRows);
+  if (['devices', 'pops', 'projects'].includes(entityType)) {
+    parsedRows = await resolveRegionReferences(parsedRows);
+    if (entityType === 'devices') {
+      parsedRows = await resolvePopReferences(parsedRows);
     }
+  }
 
     if (parsedRows.length > env.importMaxRows) {
       throw createHttpError(400, `Import file has ${parsedRows.length} rows, exceeds max IMPORT_MAX_ROWS=${env.importMaxRows}`);
