@@ -153,6 +153,7 @@ async function resolvePopReferences(rows) {
 
   const data = await executeHasura(query);
   const popMap = new Map();
+  const unresolved = new Set();
 
   for (const pop of data.pops || []) {
     const popIdUuid = pop.id || pop.pop_id;
@@ -172,8 +173,16 @@ async function resolvePopReferences(rows) {
     }
 
     const resolved = popMap.get(normalized);
-    return { ...row, pop_id: resolved || value };
-  });
+    if (resolved) {
+      return { ...row, pop_id: resolved };
+    }
+    // DO NOT fall back to the raw text — that would cause a UUID column
+    // type mismatch at insert time and produce an opaque "invalid input
+    // syntax for type uuid" error on Hasura. Mark unresolved so the
+    // upstream check can surface a clear actionable error message.
+    unresolved.add(String(value));
+    return { ...row, _pop_unresolved: String(value) };
+  }).map((row) => row);
 }
 
 async function storeImportAttachment(req, file, sourceFormat) {
@@ -306,6 +315,43 @@ importRouter.post('/ingest', authenticate, requireRole('admin', 'user_region', '
         validateMappedEntity(entityType, mapped, index);
         return mapped;
       });
+
+      // Defensive check: surface a clear 400 error if any row references a POP
+      // or Region identifier that could not be resolved to a UUID. This stops
+      // opaque Hasura "invalid input syntax for type uuid" errors that would
+      // otherwise hide the root cause from operators.
+      if (entityType === 'devices') {
+        const unresolvedPops = [];
+        const unresolvedRegions = [];
+        const originalRows = Array.isArray(parsedRows)
+          ? parsedRows
+          : Object.values(parsedRows);
+        mappedObjects.forEach((mapped, idx) => {
+          const row = originalRows[idx] || {};
+          const popUnresolved = row._pop_unresolved;
+          if (popUnresolved) {
+            unresolvedPops.push(`Baris ${idx + 1}: POP "${popUnresolved}" tidak ditemukan`);
+          } else {
+            const originalPop =
+              row.pop_id || row.pop || row['POP ID'] || row['POP'] || row.pop_code || row['POP Code'] || '';
+            if (originalPop && !mapped.pop_id) {
+              unresolvedPops.push(`Baris ${idx + 1}: POP "${originalPop}" tidak ditemukan`);
+            }
+          }
+          const originalRegion =
+            row.region_id || row.region || row['Region ID'] || row['Region'] || '';
+          if (originalRegion && !mapped.region_id) {
+            unresolvedRegions.push(`Baris ${idx + 1}: Region "${originalRegion}" tidak ditemukan`);
+          }
+        });
+        const allUnresolved = [...unresolvedPops, ...unresolvedRegions];
+        if (allUnresolved.length) {
+          throw createHttpError(
+            400,
+            `Beberapa identifier POP/Region tidak ditemukan di database: ${allUnresolved.join('; ')}. Pastikan POP dan Region terdaftar dengan benar sebelum melakukan import.`,
+          );
+        }
+      }
 
       appliedRows = await bulkInsertEntity(entityType, mappedObjects);
     }
