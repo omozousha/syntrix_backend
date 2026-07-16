@@ -282,6 +282,52 @@ importRouter.post('/ingest', authenticate, requireRole('admin', 'user_region', '
       // Hasura constraint errors.
       await validateOdpTypeReferences(parsedRows);
     }
+
+    // ODP bulk-import regional authorization:
+    // - adminregion (user_all_region): every resolved region_id must be inside
+    //   the user's allowed region scope.
+    // - superadmin (admin): the file must resolve to exactly one unique region_id.
+    // - any other role: untouched (validator already blocked by requireRole).
+    if (entityType === 'devices' && applyImport && parsedRows.length) {
+      const targetResolvedRegionIds = Array.from(
+        new Set(
+          parsedRows
+            .map((row) => {
+              const raw = row.region_id
+                || row.region
+                || row['Region ID']
+                || row['Region'];
+              if (raw == null || raw === '') return null;
+              return isUuid(String(raw).trim()) ? String(raw).trim() : null;
+            })
+            .filter(Boolean),
+        ),
+      );
+
+      if (req.auth.role === 'user_all_region') {
+        const allowed = new Set((req.auth.regions || []).filter(Boolean));
+        const outOfScope = targetResolvedRegionIds.filter((id) => !allowed.has(id));
+        if (outOfScope.length) {
+          throw createHttpError(
+            403,
+            `adminregion hanya boleh mengimpor baris untuk region scope-nya. Region di luar scope: ${outOfScope.join(', ')}.`,
+          );
+        }
+      } else if (req.auth.role === 'admin') {
+        if (targetResolvedRegionIds.length === 0) {
+          throw createHttpError(
+            400,
+            'Berkas tidak memiliki kolom region yang dapat di-resolve; tidak dapat melakukan import untuk role admin.',
+          );
+        }
+        if (targetResolvedRegionIds.length > 1) {
+          throw createHttpError(
+            400,
+            `Berkas berisi lebih dari satu region (${targetResolvedRegionIds.length} region). Untuk role admin, satu file harus berisi tepat satu region.`,
+          );
+        }
+      }
+    }
   }
 
     if (parsedRows.length > env.importMaxRows) {
