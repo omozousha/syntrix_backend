@@ -19,7 +19,8 @@
     "test:topology-create-atomicity": "node scripts/test-topology-create-atomicity.js",
     "test:topology-flow-validation": "node scripts/test-topology-flow-validation.js",
     "test:uat-topology": "node scripts/test-uat-scenarios.js",
-    "test:odp-bulk-import": "node scripts/test-odp-bulk-import.js"
+    "test:odp-bulk-import": "node scripts/test-odp-bulk-import.js",
+    "test:odp-validators": "node scripts/test-odp-validators.js"
   },
   "keywords": [],
   "author": "",

@@ -239,21 +239,146 @@ function mapRowToEntity(entityType, row, defaults = {}) {
   throw createHttpError(400, `Import apply is not yet supported for entity_type ${entityType}`);
 }
 
+const ODPR_DEVICE_STATUSES = new Set([
+  'draft',
+  'installed',
+  'active',
+  'inactive',
+  'maintenance',
+  'retired',
+]);
+
+/**
+ * Validate an ODP-imported row against the ODP-specific business rules.
+ * Throws createHttpError(400) with a row-scoped message when invalid.
+ *
+ * @param {Object} rawRow      original row object read from the parsed spreadsheet
+ * @param {number} rowIndex   0-based row index (1-based label will be displayed)
+ */
+function validateOdpImportRow(rawRow, rowIndex) {
+  const rowNumber = rowIndex + 1;
+  const errors = [];
+
+  const pick = (...keys) =>
+    keys.map((key) => rawRow[key]).find(
+      (v) => v !== undefined && v !== null && String(v).trim() !== '',
+    );
+
+  // 1. Required fields
+  const deviceName = pick('device_name', 'Device Name', 'name', 'Name', 'device name');
+  if (!deviceName || !String(deviceName).trim()) {
+    errors.push('Kolom "device name" wajib diisi');
+  }
+
+  const regionId = pick('region_id', 'Region ID', 'region', 'Region');
+  if (!regionId || !String(regionId).trim()) {
+    errors.push('Kolom "region" wajib diisi');
+  }
+
+  const popId = pick('pop_id', 'POP ID', 'pop', 'POP', 'pop_code', 'POP Code');
+  if (!popId || !String(popId).trim()) {
+    errors.push('Kolom "POP" wajib diisi');
+  }
+
+  // 2. Status enum
+  const status = String(pick('status', 'Status') || '').toLowerCase().trim();
+  if (!ODPR_DEVICE_STATUSES.has(status)) {
+    errors.push(
+      `status harus salah satu dari: ${Array.from(ODPR_DEVICE_STATUSES).join('/')}`,
+    );
+  }
+
+  // 3. Coordinate range
+  const longitude = Number(pick('longitude', 'Longitude'));
+  if (
+    !Number.isFinite(longitude) ||
+    longitude < -180 ||
+    longitude > 180
+  ) {
+    errors.push('longitude harus -180..180');
+  }
+  const latitude = Number(pick('latitude', 'Latitude'));
+  if (
+    !Number.isFinite(latitude) ||
+    latitude < -90 ||
+    latitude > 90
+  ) {
+    errors.push('latitude harus -90..90');
+  }
+
+  // 4. Capacity integer > 0
+  const totalPorts = Number(pick('kapasitas odp', 'total_ports', 'Total Ports'));
+  if (!Number.isFinite(totalPorts) || totalPorts <= 0) {
+    errors.push('kapasitas odp harus integer > 0');
+  }
+
+  // 5. Splitter ratio format
+  const splitterRatio = String(pick('kapasitas splitter', 'splitter_ratio', 'Splitter Ratio') || '').trim();
+  if (splitterRatio && !/^1:\d+$/.test(splitterRatio)) {
+    errors.push('kapasitas splitter harus format 1:N (contoh 1:8)');
+  }
+
+  if (errors.length === 0) return;
+  throw createHttpError(
+    400,
+    `Baris ${rowNumber} (ODP) tidak valid: ${errors.join('; ')}`,
+  );
+}
+
+/**
+ * Validate that any `odp_type` references in raw rows refer to a known master
+ * `odp_types.odp_type_name`. Fetches the master list once and short-circuits
+ * rows whose `odp_type` cell is empty.
+ *
+ * @param {Object[]} rows    parsed rows (still raw, not mapped)
+ * @returns {Object[]}       same array reference (validation only mutates nothing)
+ */
+async function validateOdpTypeReferences(rows) {
+  const odpTypes = rows
+    .map((row) => {
+      const raw = row?.odp_type || row?.['odp_type_name'] || row?.['Tipe ODP'];
+      return typeof raw === 'string' ? raw.trim() : '';
+    })
+    .filter((value) => value !== '');
+
+  // Nothing to validate (rows are all blank / ODP-type-less)
+  if (!odpTypes.length) return rows;
+
+  const unique = Array.from(new Set(odpTypes));
+  const query = `
+    query ResolveOdpTypes($names: [String!]) {
+      odp_types(where: { odp_type_name: { _in: $names }, deleted_at: { _is_null: true } }) {
+        odp_type_name
+      }
+    }
+  `;
+  const data = await executeHasura(query, { names: unique });
+  const known = new Set((data?.odp_types || []).map((row) => String(row.odp_type_name).toLowerCase()));
+
+  const missing = unique.filter((name) => !known.has(name.toLowerCase()));
+  if (missing.length === 0) return rows;
+
+  throw createHttpError(
+    400,
+    `Nilai Tipe ODP berikut belum terdaftar di master odp_types: ${missing.join(', ')}. Buat tipe ODP terlebih dahulu sebelum melakukan import.`,
+  );
+}
+
 function validateMappedEntity(entityType, mappedRow, index) {
   if (entityType === 'devices' && (!mappedRow.device_name || !mappedRow.region_id)) {
-    throw createHttpError(400, `Row ${index + 1} is missing device_name or region_id`);
+    throw createHttpError(400, `Baris ${index + 1} (devices) tidak valid: device_name atau region_id kosong`);
   }
 
   if (entityType === 'pops' && (!mappedRow.pop_name || !mappedRow.region_id || !mappedRow.pop_code)) {
-    throw createHttpError(400, `Row ${index + 1} is missing pop_name or region_id or pop_code`);
+    throw createHttpError(400, `Baris ${index + 1} (pops) tidak valid: pop_name, region_id atau pop_code kosong`);
   }
 
   if (entityType === 'projects' && (!mappedRow.project_name || !mappedRow.region_id)) {
-    throw createHttpError(400, `Row ${index + 1} is missing project_name or region_id`);
+    throw createHttpError(400, `Baris ${index + 1} (projects) tidak valid: project_name atau region_id kosong`);
   }
 
   if (entityType === 'regions' && !mappedRow.region_name) {
-    throw createHttpError(400, `Row ${index + 1} is missing region_name`);
+    throw createHttpError(400, `Baris ${index + 1} (regions) tidak valid: region_name kosong`);
   }
 }
 
@@ -338,6 +463,8 @@ module.exports = {
   parseKmlOrKmz,
   mapRowToEntity,
   validateMappedEntity,
+  validateOdpImportRow,
+  validateOdpTypeReferences,
   insertImportJob,
   insertImportRows,
   updateImportJob,

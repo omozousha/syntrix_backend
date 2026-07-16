@@ -15,6 +15,8 @@ const {
   parseKmlOrKmz,
   mapRowToEntity,
   validateMappedEntity,
+  validateOdpImportRow,
+  validateOdpTypeReferences,
   insertImportJob,
   insertImportRows,
   updateImportJob,
@@ -274,6 +276,11 @@ importRouter.post('/ingest', authenticate, requireRole('admin', 'user_region', '
     parsedRows = await resolveRegionReferences(parsedRows);
     if (entityType === 'devices') {
       parsedRows = await resolvePopReferences(parsedRows);
+      // Server-side validation for ODP imports: confirm any explicit `odp_type`
+      // column values are registered in the master `odp_types` table. Failing
+      // fast here gives operators an actionable message instead of opaque
+      // Hasura constraint errors.
+      await validateOdpTypeReferences(parsedRows);
     }
   }
 
@@ -311,6 +318,17 @@ importRouter.post('/ingest', authenticate, requireRole('admin', 'user_region', '
     let appliedRows = 0;
     if (applyImport && parsedRows.length) {
       const mappedObjects = parsedRows.map((row, index) => {
+        // For ODP imports, run the dedicated ODP-field validator first so
+        // operators get a row-scoped actionable error listing every problem
+        // instead of a generic Hasura constraint failure.
+        const mappedDeviceTypeKey = String(
+          row.device_type_key || row.device_type || row['Device Type'] || row['device type'] || '',
+        )
+          .trim()
+          .toUpperCase();
+        if (entityType === 'devices' && mappedDeviceTypeKey === 'ODP') {
+          validateOdpImportRow(row, index);
+        }
         const mapped = mapRowToEntity(entityType, row, defaults);
         validateMappedEntity(entityType, mapped, index);
         return mapped;
