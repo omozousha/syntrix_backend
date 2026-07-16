@@ -83,6 +83,7 @@ async function resolveRegionReferences(rows) {
         id
         region_id
         region_name
+        region_code
       }
     }
   `;
@@ -90,33 +91,25 @@ async function resolveRegionReferences(rows) {
   const data = await executeHasura(query);
   const regionMap = new Map();
 
+  // Strict canonical lookup: the only acceptable in-row values are the
+  // master region UUID, the regional registry id (region_id), the
+  // region_code, or the literal regional_name. This avoids special-cased
+  // substring aliases like "DKI" -> "DKI Jakarta" which previously let
+  // operators submit ambiguous provincial labels and made debugging scope
+  // violations harder.
   for (const region of data.regions || []) {
-    const regId = region.id || region.region_id;
-    regionMap.set(String(region.id).toLowerCase(), regId);
-    regionMap.set(String(region.region_id).toLowerCase(), regId);
-    regionMap.set(String(region.region_name).trim().toLowerCase(), regId);
-
-    // Normalization mapping layer (jabar, JAWA BARAT -> Jawa Barat)
-    const normName = String(region.region_name).toLowerCase();
-    if (normName.includes("jawa barat") || normName === "jabar") {
-      regionMap.set("jabar", regId);
-      regionMap.set("jawa barat", regId);
-      regionMap.set("jawa_barat", regId);
+    const canonicalId = region.id || region.region_id;
+    if (!canonicalId) continue;
+    const regId = canonicalId;
+    regionMap.set(String(region.id).trim().toLowerCase(), regId);
+    if (region.region_id) {
+      regionMap.set(String(region.region_id).trim().toLowerCase(), regId);
     }
-    if (normName.includes("jawa timur") || normName === "jatim") {
-      regionMap.set("jatim", regId);
-      regionMap.set("jawa timur", regId);
-      regionMap.set("jawa_timur", regId);
+    if (region.region_name) {
+      regionMap.set(String(region.region_name).trim().toLowerCase(), regId);
     }
-    if (normName.includes("jawa tengah") || normName === "jateng") {
-      regionMap.set("jateng", regId);
-      regionMap.set("jawa tengah", regId);
-      regionMap.set("jawa_tengah", regId);
-    }
-    if (normName.includes("jakarta") || normName === "dki") {
-      regionMap.set("dki", regId);
-      regionMap.set("jakarta", regId);
-      regionMap.set("dki jakarta", regId);
+    if (region.region_code) {
+      regionMap.set(String(region.region_code).trim().toLowerCase(), regId);
     }
   }
 
