@@ -275,6 +275,132 @@ async function main() {
     }
   }
 
+  // ---------- 6. validateRegionUniqueness (Superadmin single-region per file constraint) ----------
+  if (fx.odpTypeName) {
+    const response = await postImport({
+      headers,
+      rows: [
+        {
+          'device name': 'ODP REGION A',
+          'device type': 'ODP',
+          'status': 'installed',
+          'region': fx.region.id, // Region 1
+          'POP': fx.pop.id,
+          'longitude': 106.84513,
+          'latitude': -6.21462,
+          'kapasitas odp': 8,
+          'kapasitas splitter': '1:8',
+          'odp_type': fx.odpTypeName,
+        },
+        {
+          'device name': 'ODP REGION B',
+          'device type': 'ODP',
+          'status': 'installed',
+          'region': '09c4221e-fe5b-4b9e-a33e-92c8c4a1a89a', // Region 2 (Jawa Timur)
+          'POP': fx.pop.id,
+          'longitude': 106.85120,
+          'latitude': -6.21800,
+          'kapasitas odp': 8,
+          'kapasitas splitter': '1:8',
+          'odp_type': fx.odpTypeName,
+        },
+      ],
+    });
+
+    const message = response.data?.data?.message || response.data?.message || '';
+    check(
+      'superadmin multi-region import block rejects (400) files with multiple regions',
+      response.status === 400 && message.includes('lebih dari satu region'),
+      `actual status=${response.status}, message=${message}`,
+    );
+  }
+
+  // ---------- 7. validateRegionScope (Adminregion out-of-scope block) ----------
+  if (fx.odpTypeName) {
+    // To mock user_all_region (adminregion), we log in as admin but call the endpoint
+    // by manually spoofing the payload or requesting with limited scopes.
+    // Wait, the auth token is issued by Nhost. We can't spoof req.auth.role unless
+    // we query with a mocked token or if the database has a user_all_region user.
+    // Let's query hasura for a user with 'user_all_region' role to test scope rejection.
+    const userQuery = `
+      query GetAdminRegionUser {
+        app_users(where: { role_name: { _eq: "user_all_region" } }, limit: 1) {
+          auth_user_id
+          email
+        }
+      }
+    `;
+    const userData = await executeHasura(userQuery);
+    const mockUser = userData?.app_users?.[0];
+
+    if (mockUser) {
+      console.log(`Found adminregion mock user: ${mockUser.email}`);
+      // Nhost allows logging in as the smoke user using the bootstrap secret
+      // or via client bypass if environment is development.
+      // Since localServer uses app.js, we can issue a direct request.
+      // Let's log in as the target user. Note: password for smoke users is the same in seed.
+      try {
+        const loginResp = await axios.post('/auth/login', {
+          email: mockUser.email,
+          password: 'UserAllRegion123!',
+        }).catch(() => null);
+
+        const arToken = loginResp?.data?.data?.session?.accessToken;
+        if (arToken) {
+          const arHeaders = { Authorization: `Bearer ${arToken}` };
+          // This user has limited region scope. We resolved regions to DKI/jabar, etc.
+          // Let's send a region that is NOT in their allowed scopes.
+          // We can fetch their allowed region scopes first to find a disallowed one.
+          const scopeQuery = `
+            query GetUserScopes($userId: uuid!) {
+              user_region_scopes(where: { app_user_id: { _eq: $userId } }) {
+                region_id
+              }
+              regions { id }
+            }
+          `;
+          const scopeData = await executeHasura(scopeQuery, { userId: mockUser.auth_user_id });
+          const allowedIds = new Set((scopeData?.user_region_scopes || []).map(s => s.region_id));
+          const allRegions = scopeData?.regions || [];
+          const outOfScopeRegion = allRegions.find(r => !allowedIds.has(r.id));
+
+          if (outOfScopeRegion) {
+            const response = await postImport({
+              headers: arHeaders,
+              rows: [
+                {
+                  'device name': 'ODP OUT OF SCOPE',
+                  'device type': 'ODP',
+                  'status': 'installed',
+                  'region': outOfScopeRegion.id,
+                  'POP': fx.pop.id,
+                  'longitude': 106.84513,
+                  'latitude': -6.21462,
+                  'kapasitas odp': 8,
+                  'kapasitas splitter': '1:8',
+                  'odp_type': fx.odpTypeName,
+                },
+              ],
+            });
+
+            const message = response.data?.data?.message || response.data?.message || '';
+            check(
+              'adminregion out-of-scope import block rejects (403) files with unauthorized regions',
+              response.status === 403 && message.includes('di luar scope-nya'),
+              `actual status=${response.status}, message=${message}`,
+            );
+          } else {
+            console.log('[SKIP] No out-of-scope region found to test adminregion block');
+          }
+        }
+      } catch (err) {
+        console.log('[SKIP] Failed to login as adminregion mock user:', err.message);
+      }
+    } else {
+      console.log('[SKIP] No adminregion mock user found in DB to test scope block');
+    }
+  }
+
   console.log(`\n--- ODP VALIDATOR SUITE [${passed.length} passed / ${failed.length} failed] ---`);
   if (failed.length) {
     console.log('Failures:');

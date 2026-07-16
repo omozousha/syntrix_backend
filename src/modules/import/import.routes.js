@@ -127,6 +127,58 @@ async function resolveRegionReferences(rows) {
   });
 }
 
+// Canonical region map for richer error messages and stricter validation.
+let canonicalRegionNamesByLower = new Map();
+let canonicalRegionNamesById = new Map();
+let canonicalRegionNamesLoadedAt = 0;
+const CANONICAL_REGION_NAMES_REFRESH_MS = 5 * 60 * 1000;
+
+async function loadCanonicalRegionNames() {
+  if (
+    canonicalRegionNamesById.size > 0 &&
+    Date.now() - canonicalRegionNamesLoadedAt < CANONICAL_REGION_NAMES_REFRESH_MS
+  ) {
+    return canonicalRegionNamesById;
+  }
+  try {
+    const query = `
+      query ResolveRegionNames {
+        regions {
+          id
+          region_id
+          region_code
+          region_name
+        }
+      }
+    `;
+    const data = await executeHasura(query);
+    const byId = new Map();
+    const byLower = new Map();
+    for (const r of data.regions || []) {
+      if (!r || !r.id || !r.region_name) continue;
+      byId.set(String(r.id), String(r.region_name));
+      const nameKey = String(r.region_name).trim().toLowerCase();
+      if (nameKey) byLower.set(nameKey, { id: String(r.id), name: String(r.region_name) });
+      if (r.region_code) {
+        const codeKey = String(r.region_code).trim().toLowerCase();
+        if (codeKey) byLower.set(codeKey, { id: String(r.id), name: String(r.region_name) });
+      }
+      if (r.region_id) {
+        const codexKey = String(r.region_id).trim().toLowerCase();
+        if (codexKey) byLower.set(codexKey, { id: String(r.id), name: String(r.region_name) });
+      }
+    }
+    canonicalRegionNamesByLower = byLower;
+    canonicalRegionNamesById = byId;
+    canonicalRegionNamesLoadedAt = Date.now();
+    return byId;
+  } catch (error) {
+    return canonicalRegionNamesById && canonicalRegionNamesById.size > 0
+      ? canonicalRegionNamesById
+      : new Map();
+  }
+}
+
 async function resolvePopReferences(rows) {
   const rawRefs = rows
     .map((row) => row.pop_id || row.pop || row['POP ID'] || row['POP'] || row['pop'] || row['pop_code'] || row['POP Code'])
@@ -282,41 +334,69 @@ importRouter.post('/ingest', authenticate, requireRole('admin', 'user_region', '
     // - superadmin (admin): the file must resolve to exactly one unique region_id.
     // - any other role: untouched (validator already blocked by requireRole).
     if (entityType === 'devices' && applyImport && parsedRows.length) {
+      // Collect ALL parsed region tokens (UUID or text label) and resolve
+      // them against the canonical regions table so we can build a useful
+      // actionable error message that includes both the offending raw
+      // values and the master region_name (if it resolves). Without this
+      // the operator is left guessing which row triggered the rejection.
+      const regionTokens = parsedRows.map((row) => {
+        const raw = row.region_id
+          || row.region
+          || row['Region ID']
+          || row['Region'];
+        const trimmed = raw == null ? '' : String(raw).trim();
+        if (!trimmed) return null;
+        return { raw: trimmed, isUuid: isUuid(trimmed) };
+      }).filter(Boolean);
+
       const targetResolvedRegionIds = Array.from(
         new Set(
-          parsedRows
-            .map((row) => {
-              const raw = row.region_id
-                || row.region
-                || row['Region ID']
-                || row['Region'];
-              if (raw == null || raw === '') return null;
-              return isUuid(String(raw).trim()) ? String(raw).trim() : null;
-            })
-            .filter(Boolean),
+          regionTokens
+            .filter((t) => t.isUuid)
+            .map((t) => t.raw.trim()),
         ),
+      );
+
+      const canonicalRegionNames = await loadCanonicalRegionNames().catch(
+        () => new Map(),
       );
 
       if (req.auth.role === 'user_all_region') {
         const allowed = new Set((req.auth.regions || []).filter(Boolean));
         const outOfScope = targetResolvedRegionIds.filter((id) => !allowed.has(id));
         if (outOfScope.length) {
+          const labels = outOfScope.map(
+            (id) => canonicalRegionNames.get(id) || id,
+          );
           throw createHttpError(
             403,
-            `adminregion hanya boleh mengimpor baris untuk region scope-nya. Region di luar scope: ${outOfScope.join(', ')}.`,
+            `adminregion hanya boleh mengimpor baris untuk region scope-nya. Region di luar scope: ${labels.join(', ')}.`,
           );
         }
       } else if (req.auth.role === 'admin') {
-        if (targetResolvedRegionIds.length === 0) {
+        // Resolve the per-row raw values into canonical regions,
+        // collecting the distinct master region names any row landed on.
+        const resolvedNames = new Set();
+        for (const t of regionTokens) {
+          if (t.isUuid) {
+            const name = canonicalRegionNames.get(t.raw.trim());
+            if (name) resolvedNames.add(name);
+          } else {
+            const key = t.raw.toLowerCase();
+            const hit = canonicalRegionNamesByLower.get(key);
+            if (hit) resolvedNames.add(hit.name);
+          }
+        }
+        if (targetResolvedRegionIds.length === 0 && resolvedNames.size === 0) {
           throw createHttpError(
             400,
             'Berkas tidak memiliki kolom region yang dapat di-resolve; tidak dapat melakukan import untuk role admin.',
           );
         }
-        if (targetResolvedRegionIds.length > 1) {
+        if (resolvedNames.size > 1) {
           throw createHttpError(
             400,
-            `Berkas berisi lebih dari satu region (${targetResolvedRegionIds.length} region). Untuk role admin, satu file harus berisi tepat satu region.`,
+            `Berkas berisi lebih dari satu region (${resolvedNames.size} region: ${Array.from(resolvedNames).join(', ')}). Untuk role admin, satu file harus berisi tepat satu region. Pisahkan per-region ke file terpisah.`,
           );
         }
       }
