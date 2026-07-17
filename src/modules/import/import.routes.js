@@ -83,7 +83,7 @@ async function resolveRegionReferences(rows) {
         id
         region_id
         region_name
-        region_code
+        inventory_region_code
       }
     }
   `;
@@ -93,10 +93,8 @@ async function resolveRegionReferences(rows) {
 
   // Strict canonical lookup: the only acceptable in-row values are the
   // master region UUID, the regional registry id (region_id), the
-  // region_code, or the literal regional_name. This avoids special-cased
-  // substring aliases like "DKI" -> "DKI Jakarta" which previously let
-  // operators submit ambiguous provincial labels and made debugging scope
-  // violations harder.
+  // inventory_region_code, or the literal regional_name. This avoids
+  // special-cased substring aliases.
   for (const region of data.regions || []) {
     const canonicalId = region.id || region.region_id;
     if (!canonicalId) continue;
@@ -108,8 +106,11 @@ async function resolveRegionReferences(rows) {
     if (region.region_name) {
       regionMap.set(String(region.region_name).trim().toLowerCase(), regId);
     }
-    if (region.region_code) {
-      regionMap.set(String(region.region_code).trim().toLowerCase(), regId);
+    if (region.inventory_region_code) {
+      regionMap.set(
+        String(region.inventory_region_code).trim().toLowerCase(),
+        regId,
+      );
     }
   }
 
@@ -146,7 +147,7 @@ async function loadCanonicalRegionNames() {
         regions {
           id
           region_id
-          region_code
+          inventory_region_code
           region_name
         }
       }
@@ -159,8 +160,8 @@ async function loadCanonicalRegionNames() {
       byId.set(String(r.id), String(r.region_name));
       const nameKey = String(r.region_name).trim().toLowerCase();
       if (nameKey) byLower.set(nameKey, { id: String(r.id), name: String(r.region_name) });
-      if (r.region_code) {
-        const codeKey = String(r.region_code).trim().toLowerCase();
+      if (r.inventory_region_code) {
+        const codeKey = String(r.inventory_region_code).trim().toLowerCase();
         if (codeKey) byLower.set(codeKey, { id: String(r.id), name: String(r.region_name) });
       }
       if (r.region_id) {
