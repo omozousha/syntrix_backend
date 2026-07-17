@@ -83,7 +83,6 @@ async function resolveRegionReferences(rows) {
         id
         region_id
         region_name
-        inventory_region_code
       }
     }
   `;
@@ -92,9 +91,8 @@ async function resolveRegionReferences(rows) {
   const regionMap = new Map();
 
   // Strict canonical lookup: the only acceptable in-row values are the
-  // master region UUID, the regional registry id (region_id), the
-  // inventory_region_code, or the literal regional_name. This avoids
-  // special-cased substring aliases.
+  // master region UUID, the regional registry id (region_id), or the
+  // literal regional_name. This avoids special-cased substring aliases.
   for (const region of data.regions || []) {
     const canonicalId = region.id || region.region_id;
     if (!canonicalId) continue;
@@ -106,12 +104,7 @@ async function resolveRegionReferences(rows) {
     if (region.region_name) {
       regionMap.set(String(region.region_name).trim().toLowerCase(), regId);
     }
-    if (region.inventory_region_code) {
-      regionMap.set(
-        String(region.inventory_region_code).trim().toLowerCase(),
-        regId,
-      );
-    }
+
   }
 
   return rows.map((row) => {
@@ -147,7 +140,6 @@ async function loadCanonicalRegionNames() {
         regions {
           id
           region_id
-          inventory_region_code
           region_name
         }
       }
@@ -160,10 +152,7 @@ async function loadCanonicalRegionNames() {
       byId.set(String(r.id), String(r.region_name));
       const nameKey = String(r.region_name).trim().toLowerCase();
       if (nameKey) byLower.set(nameKey, { id: String(r.id), name: String(r.region_name) });
-      if (r.inventory_region_code) {
-        const codeKey = String(r.inventory_region_code).trim().toLowerCase();
-        if (codeKey) byLower.set(codeKey, { id: String(r.id), name: String(r.region_name) });
-      }
+
       if (r.region_id) {
         const codexKey = String(r.region_id).trim().toLowerCase();
         if (codexKey) byLower.set(codexKey, { id: String(r.id), name: String(r.region_name) });
