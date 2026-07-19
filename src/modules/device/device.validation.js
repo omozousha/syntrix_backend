@@ -56,17 +56,27 @@ function validateDevicePayload(payload, mode = 'create') {
     }
   }
 
-  ensureNonNegativeInteger(payload.capacity_core, 'capacity_core');
-  ensureNonNegativeInteger(payload.used_core, 'used_core');
-  ensureNonNegativeInteger(payload.total_ports, 'total_ports');
-  ensureNonNegativeInteger(payload.used_ports, 'used_ports');
-
-  if (payload.capacity_core != null && payload.used_core != null && Number(payload.used_core) > Number(payload.capacity_core)) {
-    throw createHttpError(400, 'used_core cannot be greater than capacity_core');
+  // used_core / used_ports are no longer accepted from create flow.
+  // They are derived from topology / port synchronization after create.
+  if (mode === 'create') {
+    delete payload.used_core;
+    delete payload.used_ports;
   }
 
-  if (payload.total_ports != null && payload.used_ports != null && Number(payload.used_ports) > Number(payload.total_ports)) {
-    throw createHttpError(400, 'used_ports cannot be greater than total_ports');
+  ensureNonNegativeInteger(payload.capacity_core, 'capacity_core');
+  ensureNonNegativeInteger(payload.total_ports, 'total_ports');
+
+  if (mode !== 'create') {
+    ensureNonNegativeInteger(payload.used_core, 'used_core');
+    ensureNonNegativeInteger(payload.used_ports, 'used_ports');
+
+    if (payload.capacity_core != null && payload.used_core != null && Number(payload.used_core) > Number(payload.capacity_core)) {
+      throw createHttpError(400, 'used_core cannot be greater than capacity_core');
+    }
+
+    if (payload.total_ports != null && payload.used_ports != null && Number(payload.used_ports) > Number(payload.total_ports)) {
+      throw createHttpError(400, 'used_ports cannot be greater than total_ports');
+    }
   }
 
   if (payload.validation_status != null) {
