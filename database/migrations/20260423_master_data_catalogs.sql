@@ -118,7 +118,9 @@ values
   ('JC', 'JC', 'passive', 'Joint Closure', 60),
   ('ODC', 'ODC', 'passive', 'Optical Distribution Cabinet', 70),
   ('ODP', 'ODP', 'passive', 'Optical Distribution Point', 80),
-  ('CABLE', 'Cable', 'passive', 'Fiber cable asset', 90)
+  ('CABLE', 'Cable', 'passive', 'Fiber cable asset', 90),
+  ('HH', 'HH', 'passive', 'Hand Hole', 100),
+  ('MH', 'MH', 'passive', 'Man Hole', 110)
 on conflict (device_type_key) do update
 set
   device_type_name = excluded.device_type_name,
