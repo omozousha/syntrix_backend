@@ -6,13 +6,52 @@ const {
   getDeviceCoresPerTube,
 } = require('../../utils/fiberColor');
 
-const TOPOLOGY_PEER_RULES = {
-  OTB: { front: ['OLT', 'SWITCH'], rear: ['ODC', 'JC'] },
-  ODC: { front: ['OTB'], rear: ['ODP'] },
-  JC: { front: ['OTB', 'ODC', 'JC'], rear: ['ODP', 'JC', 'HH', 'MH'] },
-  ODP: { front: ['ODC', 'JC'], rear: ['ONT'] },
-  CABLE: { front: ['OTB', 'ODC', 'JC'], rear: ['ODC', 'ODP', 'JC', 'HH', 'MH'] },
-};
+async function loadTopologyRelationRules(sourceDeviceTypeKey, direction) {
+  const source = String(sourceDeviceTypeKey || '').toUpperCase();
+  const dir = String(direction || '').toLowerCase();
+  if (!source || !dir) return [];
+
+  const query = `
+    query LoadTopologyRelationRules($source: String!, $direction: String!) {
+      items: topology_relation_rules(
+        where: {
+          source_device_type_key: { _eq: $source }
+          direction: { _eq: $direction }
+          is_active: { _eq: true }
+          deleted_at: { _is_null: true }
+        }
+        order_by: [{ sort_order: asc }, { allowed_peer_device_type_key: asc }]
+      ) {
+        id
+        source_device_type_key
+        direction
+        allowed_peer_device_type_key
+        connection_role
+        route_type
+        requires_same_pop
+        requires_same_project
+        is_required_on_create
+      }
+    }
+  `;
+
+  try {
+    const data = await executeHasura(query, { source, direction: dir });
+    return data?.items || [];
+  } catch {
+    return [];
+  }
+}
+
+function assertPeerScope(rule, device, peerPort, direction) {
+  if (!rule) return;
+  if (rule.requires_same_pop && device.pop_id && peerPort.device?.pop_id && device.pop_id !== peerPort.device.pop_id) {
+    throw createHttpError(400, `${direction} device must be in the same POP as the new device`);
+  }
+  if (rule.requires_same_project && device.project_id && peerPort.device?.project_id && device.project_id !== peerPort.device.project_id) {
+    throw createHttpError(400, `${direction} device must be in the same project as the new device`);
+  }
+}
 
 function hasTopologyCreateInput(body = {}) {
   return Boolean(
@@ -94,13 +133,22 @@ async function loadPeerPort(portId) {
   return port;
 }
 
-function assertPeerType(currentDeviceType, peerDeviceType, direction) {
-  const current = String(currentDeviceType || '').toUpperCase();
-  const peer = String(peerDeviceType || '').toUpperCase();
-  const allowed = TOPOLOGY_PEER_RULES[current]?.[direction];
-  if (allowed && !allowed.includes(peer)) {
+async function assertPeerType(device, peerPort, direction) {
+  const current = String(device?.device_type_key || '').toUpperCase();
+  const peer = String(peerPort?.device?.device_type_key || '').toUpperCase();
+
+  const relationRules = await loadTopologyRelationRules(current, direction);
+  if (relationRules.length === 0) {
+    throw createHttpError(400, `No active topology relation rules found for ${current}/${direction}. Configure topology_relation_rules first.`);
+  }
+
+  const matchedRule = relationRules.find((rule) =>
+    String(rule.allowed_peer_device_type_key || '').toUpperCase() === peer,
+  );
+  if (!matchedRule) {
     throw createHttpError(400, `${direction} device type ${peer} is not allowed for ${current}`);
   }
+  assertPeerScope(matchedRule, device, peerPort, direction);
 }
 
 async function validateTopologyCreateInput({ device, body }) {
@@ -131,7 +179,7 @@ async function validateTopologyCreateInput({ device, body }) {
     if (String(port.status || '').toLowerCase() !== 'idle') {
       throw createHttpError(409, `${direction} port is not idle`);
     }
-    assertPeerType(device.device_type_key, port.device?.device_type_key, direction);
+    await assertPeerType(device, port, direction);
     return port;
   };
 

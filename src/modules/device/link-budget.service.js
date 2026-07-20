@@ -102,6 +102,43 @@ async function loadSplitterProfilesMap() {
   return map;
 }
 
+async function loadCableAttenuationOverrides(cableDeviceIds = []) {
+  const uniqueIds = Array.from(new Set((cableDeviceIds || []).filter((id) => isUuid(id))));
+  if (!uniqueIds.length) return new Map();
+
+  const idsLiteral = uniqueIds.map((id) => sqlLiteral(id)).join(', ');
+  const data = await executeHasuraSql(`
+    select
+      d.id::text as device_id,
+      d.cable_type,
+      ct.attenuation_1310_db_per_km::text as attenuation_1310_db_per_km,
+      ct.attenuation_1490_db_per_km::text as attenuation_1490_db_per_km,
+      ct.attenuation_1550_db_per_km::text as attenuation_1550_db_per_km
+    from public.devices d
+    left join public.cable_types ct
+      on ct.deleted_at is null
+     and (
+       lower(coalesce(ct.cable_type_name, '')) = lower(coalesce(d.cable_type, ''))
+       or lower(coalesce(ct.cable_type_code, '')) = lower(coalesce(d.cable_type, ''))
+     )
+    where d.id in (${idsLiteral});
+  `);
+
+  const header = data?.result?.[0] || [];
+  const rows = data?.result?.slice(1) || [];
+  const map = new Map();
+  rows.forEach((row) => {
+    const obj = Object.fromEntries(header.map((key, idx) => [key, row[idx]]));
+    map.set(String(obj.device_id), {
+      cable_type: obj.cable_type || null,
+      attenuation_1310_db_per_km: Number(obj.attenuation_1310_db_per_km || NaN),
+      attenuation_1490_db_per_km: Number(obj.attenuation_1490_db_per_km || NaN),
+      attenuation_1550_db_per_km: Number(obj.attenuation_1550_db_per_km || NaN),
+    });
+  });
+  return map;
+}
+
 function aggregateSplitterLoss({ splitterProfileIds, splitterRatios, splitterProfilesMap }) {
   const total = (splitterProfileIds || []).reduce((acc, id) => {
     if (!id) return acc;
@@ -171,6 +208,9 @@ async function buildLinkBudgetInput({ device, splitterProfileIds = [], splitterR
   }
   const parameters = await loadParameterMap();
   const splitterProfilesMap = await loadSplitterProfilesMap();
+  const cableAttenuationOverrides = await loadCableAttenuationOverrides(
+    (segments || []).map((segment) => segment?.cable_device_id).filter(Boolean),
+  );
 
   const splitterLoss = aggregateSplitterLoss({
     splitterProfileIds,
@@ -201,13 +241,30 @@ async function buildLinkBudgetInput({ device, splitterProfileIds = [], splitterR
     const segmentSplices = Math.max(0, Number(segment.splice_count ?? segment.spliceCount ?? 0) || 0);
     const segmentConnectors = Math.max(0, Number(segment.connector_count ?? segment.connectorCount ?? 0) || 0);
     if (!distanceKm && !segmentSplices && !segmentConnectors) return;
-    const segmentFiberLoss = distanceKm * attenuationPerKm;
+
+    const override = segment.cable_device_id ? cableAttenuationOverrides.get(String(segment.cable_device_id)) : null;
+    const wavelength = Number(segment.wavelength_nm || segment.wavelength || 1310);
+    let segmentAttenuation = attenuationPerKm;
+    if (override) {
+      if (wavelength >= 1540 && Number.isFinite(override.attenuation_1550_db_per_km)) {
+        segmentAttenuation = override.attenuation_1550_db_per_km;
+      } else if (wavelength >= 1490 && Number.isFinite(override.attenuation_1490_db_per_km)) {
+        segmentAttenuation = override.attenuation_1490_db_per_km;
+      } else if (Number.isFinite(override.attenuation_1310_db_per_km)) {
+        segmentAttenuation = override.attenuation_1310_db_per_km;
+      }
+    }
+
+    const segmentFiberLoss = distanceKm * segmentAttenuation;
     fiberLoss += segmentFiberLoss;
     spliceCount += segmentSplices;
     connectorCount += segmentConnectors;
     usedSegments.push({
       label: segment.label || null,
       cable_device_id: segment.cable_device_id || null,
+      cable_type: override?.cable_type || null,
+      wavelength_nm: Number.isFinite(wavelength) ? wavelength : 1310,
+      attenuation_db_per_km: Number(segmentAttenuation.toFixed(3)),
       distance_km: distanceKm,
       splice_count: segmentSplices,
       connector_count: segmentConnectors,
