@@ -263,9 +263,9 @@ const RESOURCE_CONFIG = {
   assetModels: {
     table: 'asset_models',
     pk: 'id',
-    listFields: ['id', 'model_code', 'model_name', 'asset_type_id', 'brand_id', 'manufacturer_id', 'description', 'specification_template', 'tray_config', 'deleted_at', 'deleted_by_user_id', 'created_at', 'updated_at'],
-    insertFields: ['model_name', 'asset_type_id', 'brand_id', 'manufacturer_id', 'description', 'specification_template', 'tray_config'],
-    updateFields: ['model_name', 'asset_type_id', 'brand_id', 'manufacturer_id', 'description', 'specification_template', 'tray_config'],
+    listFields: ['id', 'model_code', 'model_name', 'asset_type_id', 'brand_id', 'manufacturer_id', 'description', 'specification_template', 'tray_config', 'capacity_core', 'total_ports', 'deleted_at', 'deleted_by_user_id', 'created_at', 'updated_at'],
+    insertFields: ['model_name', 'asset_type_id', 'brand_id', 'manufacturer_id', 'description', 'specification_template', 'tray_config', 'capacity_core', 'total_ports'],
+    updateFields: ['model_name', 'asset_type_id', 'brand_id', 'manufacturer_id', 'description', 'specification_template', 'tray_config', 'capacity_core', 'total_ports'],
     searchColumns: ['model_name', 'model_code', 'description'],
     filterKeys: ['asset_type_id', 'brand_id', 'manufacturer_id'],
     defaultOrderBy: [{ model_name: 'asc' }],
