@@ -314,6 +314,7 @@ const RESOURCE_CONFIG = {
     softDelete: true,
   },
   linkBudgetParameters: {
+    table: 'link_budget_parameters',
     pk: 'id',
     listFields: ['id', 'parameter_id', 'parameter_key', 'parameter_label', 'parameter_value', 'unit', 'description', 'sort_order', 'is_active', 'created_at', 'updated_at'],
     insertFields: ['parameter_key', 'parameter_label', 'parameter_value', 'unit', 'description', 'sort_order', 'is_active'],

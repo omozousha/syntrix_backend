@@ -20,7 +20,8 @@
     "test:topology-flow-validation": "node scripts/test-topology-flow-validation.js",
     "test:uat-topology": "node scripts/test-uat-scenarios.js",
     "test:odp-bulk-import": "node scripts/test-odp-bulk-import.js",
-    "test:odp-validators": "node scripts/test-odp-validators.js"
+    "test:odp-validators": "node scripts/test-odp-validators.js",
+    "test:master-data-uat": "node scripts/test-master-data-uat.js"
   },
   "keywords": [],
   "author": "",
