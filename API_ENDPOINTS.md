@@ -298,6 +298,19 @@ Setiap resource di bawah ini saat ini mendukung metode:
   - baca: `admin`, `user_region`, `user_all_region`
   - tulis: `admin`, `user_region`, `user_all_region`
 
+### ODP-ONT Connections
+
+Endpoint khusus untuk relasi topologi hilir (ODP ke ONT via kabel drop).
+Menggunakan `port_connections` secara internal untuk konsistensi trace topology.
+
+- **Assign ONT ke ODP Port**
+  - metode: `POST /api/v1/devices/:odpPortId/assign-ont`
+  - akses: `admin`, `user_region`, `user_all_region`
+  - payload: `{ "ont_device_id": "uuid", "customer_id": "uuid (optional)" }`
+- **Disconnect ONT dari ODP Port**
+  - metode: `POST /api/v1/devices/:odpPortId/disconnect-ont`
+  - akses: `admin`, `user_region`, `user_all_region`
+
 ### Core Management
 
 - resource: `coreManagement`

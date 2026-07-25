@@ -8,6 +8,15 @@ const { createAuditLog } = require('../../shared/audit.service');
 const { validateDevicePortPayload } = require('./connectivity.validation');
 const { parseSplitterRatioPorts } = require('../../utils/splitterRatio');
 const {
+  findActiveConnection,
+  findOntIdlePort,
+  validateOdpOntPair,
+  createDropConnection,
+  updatePortDirect,
+  syncDeviceCoreUsage,
+  deleteConnection,
+} = require('./odp-ont-connection.service');
+const {
   evaluateDeviceLinkBudget,
   loadEstimateForDevice,
   normalizeEstimateInput,
@@ -566,6 +575,116 @@ deviceRouter.put('/devices/:id/link-budget', authenticate, requireRole('admin', 
   }
 });
 
+// ── POST /devices/:odpPortId/assign-ont — Assign ONT to ODP port via port_connections ──
+deviceRouter.post('/devices/:odpPortId/assign-ont', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const odpPortId = req.params.odpPortId;
+    const ontDeviceId = req.body?.ont_device_id ? String(req.body.ont_device_id) : '';
+    const customerId = req.body?.customer_id ? String(req.body.customer_id) : null;
 
+    if (!ontDeviceId) {
+      throw createHttpError(400, 'ont_device_id is required');
+    }
+
+    const odpPort = await loadPortById(odpPortId);
+    if (!odpPort) throw createHttpError(404, 'ODP port not found');
+    if (odpPort.deleted_at) throw createHttpError(400, 'Cannot assign to deleted port');
+
+    const scope = getRegionalTopologyScope(req.auth);
+    assertTopologyRegionAccess(scope, odpPort.region_id, 'You do not have access to this ODP port region');
+
+    const [odpDevice, ontDevice] = await Promise.all([
+      loadDeviceById(odpPort.device_id),
+      loadDeviceById(ontDeviceId),
+    ]);
+    if (!odpDevice) throw createHttpError(404, 'ODP device not found');
+    if (!ontDevice) throw createHttpError(404, 'ONT device not found');
+    if (String(ontDevice.device_type_key || '').toUpperCase() !== 'ONT') {
+      throw createHttpError(400, 'Target device must be ONT type');
+    }
+
+    const ontPort = await findOntIdlePort(ontDeviceId);
+    if (!ontPort) {
+      throw createHttpError(409, 'No idle port available on ONT device');
+    }
+
+    await validateOdpOntPair(odpPort, ontDevice, ontPort);
+
+    const connId = randomUUID();
+    const connection = await createDropConnection(odpPort, ontPort, connId);
+
+    await updatePortDirect(odpPort.id, {
+      status: 'used',
+      ont_device_id: ontDeviceId,
+      customer_id: customerId,
+    });
+    await updatePortDirect(ontPort.id, { status: 'used' });
+
+    await syncDeviceCoreUsage(odpPort.device_id);
+
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'assign:odp-ont-connection',
+      entityType: 'device_ports',
+      entityId: odpPort.id,
+      beforeData: { odp_port: odpPort, ont_device_id: null },
+      afterData: { connection, ont_device_id: ontDeviceId, customer_id: customerId },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return sendSuccess(res, { connection, odp_port_id: odpPort.id, ont_port_id: ontPort.id, ont_device_id: ontDeviceId }, 'ONT assigned to ODP port successfully', 201);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// ── POST /devices/:odpPortId/disconnect-ont — Disconnect ONT from ODP port ──
+deviceRouter.post('/devices/:odpPortId/disconnect-ont', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const odpPortId = req.params.odpPortId;
+
+    const odpPort = await loadPortById(odpPortId);
+    if (!odpPort) throw createHttpError(404, 'ODP port not found');
+    if (odpPort.deleted_at) throw createHttpError(400, 'Cannot disconnect from deleted port');
+
+    const scope = getRegionalTopologyScope(req.auth);
+    assertTopologyRegionAccess(scope, odpPort.region_id, 'You do not have access to this ODP port region');
+
+    const connection = await findActiveConnection(odpPortId);
+    if (!connection) {
+      throw createHttpError(404, 'No active ONT connection found on this ODP port');
+    }
+
+    const ontPortId = connection.to_port_id;
+    const ontDeviceId = odpPort.ont_device_id;
+
+    await deleteConnection(connection.id);
+
+    await updatePortDirect(odpPort.id, {
+      status: 'idle',
+      ont_device_id: null,
+      customer_id: null,
+    });
+    await updatePortDirect(ontPortId, { status: 'idle' });
+
+    await syncDeviceCoreUsage(odpPort.device_id);
+
+    await createAuditLog({
+      actorUserId: req.auth.appUser.id,
+      actionName: 'disconnect:odp-ont-connection',
+      entityType: 'device_ports',
+      entityId: odpPort.id,
+      beforeData: { connection, ont_device_id: ontDeviceId },
+      afterData: { odp_port_status: 'idle', ont_device_id: null },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return sendSuccess(res, { odp_port_id: odpPort.id, ont_port_id: ontPortId, ont_device_id: null }, 'ONT disconnected from ODP port successfully');
+  } catch (error) {
+    return next(error);
+  }
+});
 
 module.exports = { deviceRouter };
