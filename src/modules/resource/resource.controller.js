@@ -3,7 +3,7 @@ const { getPagination } = require('../../utils/pagination');
 const { sendSuccess } = require('../../utils/response');
 const { createHttpError } = require('../../utils/httpError');
 const { nhostStorageClient } = require('../../config/nhost');
-const { executeHasura } = require('../../config/hasura');
+const { executeHasura, executeHasuraSql } = require('../../config/hasura');
 const { createAuditLog } = require('../../shared/audit.service');
 const { applyResourceNameNormalization } = require('../../utils/nameNormalization');
 const {
@@ -996,6 +996,26 @@ async function list(req, res, next) {
     const { page, limit, offset } = getPagination(req.query);
     const where = buildWhereClause(config, req.query, req.auth);
     const data = await listResources(config, { where, limit, offset, orderBy: config.defaultOrderBy });
+
+    if (req.resourceName === 'deviceTypes') {
+      const counts = await executeHasura(`
+        query DeviceTypeCounts {
+          items: devices(where: { deleted_at: { _is_null: true } }) {
+            device_type_key
+          }
+        }
+      `, {}).catch(() => ({ items: [] }));
+
+      const countMap = {};
+      for (const row of (counts.items || [])) {
+        const key = String(row.device_type_key || 'UNKNOWN').toUpperCase();
+        countMap[key] = (countMap[key] || 0) + 1;
+      }
+      data.items = (data.items || []).map((item) => ({
+        ...item,
+        device_count: countMap[String(item.device_type_key || '').toUpperCase()] || 0,
+      }));
+    }
 
     return sendSuccess(res, data.items, `${req.resourceName} fetched successfully`, 200, {
       page,
