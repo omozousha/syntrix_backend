@@ -510,6 +510,11 @@ function validatePayloadByResource(resourceName, payload, mode = 'create') {
     return;
   }
 
+  if (resourceName === 'deviceTypes') {
+    validateDeviceTypePayload(payload, mode);
+    return;
+  }
+
   if (resourceName === 'deviceLinks') {
     validateDeviceLinkPayload(payload, mode);
     return;
@@ -522,6 +527,51 @@ function validatePayloadByResource(resourceName, payload, mode = 'create') {
 
   if (resourceName === 'portConnections') {
     validatePortConnectionPayload(payload, mode);
+  }
+}
+
+const TOPOLOGY_ROLES = new Set([
+  'source_active', 'termination_panel', 'distribution_point', 'access_point',
+  'splice_point', 'physical_cable', 'customer_endpoint', 'network_active', 'civil_structure',
+]);
+
+const LAYOUT_TYPES = new Set([
+  'tray', 'tube', 'core_grid', 'odp_operations', 'olt_slot', 'switch_grid', 'summary_only',
+]);
+
+function validateDeviceTypePayload(payload, mode = 'create') {
+  const typeKey = String(payload.device_type_key || '').trim().toUpperCase();
+  const typeName = String(payload.device_type_name || '').trim();
+  const assetGroup = String(payload.asset_group || '').trim().toLowerCase();
+
+  if (mode === 'create') {
+    if (!typeKey) throw createHttpError(400, 'Device Type Key wajib diisi.');
+    if (!typeName) throw createHttpError(400, 'Device Type Name wajib diisi.');
+    if (!assetGroup) throw createHttpError(400, 'Asset Group wajib dipilih (active atau passive).');
+  }
+
+  if (typeKey && !/^[A-Z][A-Z0-9_]*$/.test(typeKey)) {
+    throw createHttpError(400, 'Device Type Key hanya boleh huruf besar, angka, dan underscore. Harus diawali huruf.');
+  }
+
+  if (assetGroup && !['active', 'passive'].includes(assetGroup)) {
+    throw createHttpError(400, 'Asset Group harus "active" atau "passive".');
+  }
+
+  if (payload.topology_role != null && payload.topology_role !== '' && !TOPOLOGY_ROLES.has(payload.topology_role)) {
+    throw createHttpError(400, `Topology Role tidak valid. Pilihan: ${[...TOPOLOGY_ROLES].join(', ')}.`);
+  }
+
+  if (payload.layout_type != null && payload.layout_type !== '' && !LAYOUT_TYPES.has(payload.layout_type)) {
+    throw createHttpError(400, `Layout Type tidak valid. Pilihan: ${[...LAYOUT_TYPES].join(', ')}.`);
+  }
+
+  if (payload.inventory_type_code != null && payload.inventory_type_code !== '' && !/^\d{3}$/.test(payload.inventory_type_code)) {
+    throw createHttpError(400, 'Inventory Type Code harus 3 digit angka (contoh: 001).');
+  }
+
+  if (payload.sort_order != null && payload.sort_order !== '' && (!Number.isInteger(Number(payload.sort_order)) || Number(payload.sort_order) < 0)) {
+    throw createHttpError(400, 'Sort Order harus angka bulat >= 0.');
   }
 }
 

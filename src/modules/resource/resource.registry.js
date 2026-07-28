@@ -279,7 +279,7 @@ const RESOURCE_CONFIG = {
     listFields: ['id', 'device_type_key', 'device_type_name', 'asset_group', 'icon_name', 'topology_role', 'is_passive', 'is_active_device', 'supports_ports', 'supports_splitter', 'supports_core_management', 'supports_joint_closure', 'layout_type', 'default_front_label', 'default_rear_label', 'is_assignable', 'description', 'sort_order', 'is_active', 'deleted_at', 'deleted_by_user_id', 'created_at', 'updated_at'],
     optionalListFields: ['inventory_type_code'],
     insertFields: ['device_type_key', 'device_type_name', 'asset_group', 'icon_name', 'topology_role', 'is_passive', 'is_active_device', 'supports_ports', 'supports_splitter', 'supports_core_management', 'supports_joint_closure', 'layout_type', 'default_front_label', 'default_rear_label', 'is_assignable', 'description', 'sort_order', 'is_active'],
-    updateFields: ['device_type_key', 'device_type_name', 'asset_group', 'icon_name', 'topology_role', 'is_passive', 'is_active_device', 'supports_ports', 'supports_splitter', 'supports_core_management', 'supports_joint_closure', 'layout_type', 'default_front_label', 'default_rear_label', 'is_assignable', 'description', 'sort_order', 'is_active'],
+    updateFields: ['device_type_key', 'device_type_name', 'asset_group', 'icon_name', 'topology_role', 'is_passive', 'is_active_device', 'supports_ports', 'supports_splitter', 'supports_core_management', 'supports_joint_closure', 'layout_type', 'default_front_label', 'default_rear_label', 'is_assignable', 'description', 'sort_order', 'is_active', 'inventory_type_code'],
     searchColumns: ['device_type_key', 'device_type_name', 'description'],
     filterKeys: ['asset_group', 'is_active'],
     defaultOrderBy: [{ sort_order: 'asc' }, { device_type_name: 'asc' }],
