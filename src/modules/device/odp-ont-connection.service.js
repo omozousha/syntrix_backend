@@ -318,6 +318,143 @@ async function deleteConnection(connectionId) {
   await executeHasura(mutation, { id: connectionId });
 }
 
+async function findActiveFrontConnection(odpPortId) {
+  const query = `
+    query FindActiveFrontConnection($odpPortId: uuid!) {
+      items: port_connections(
+        where: {
+          to_port_id: { _eq: $odpPortId }
+          connection_type: { _eq: "fiber" }
+          status: { _eq: "active" }
+        }
+        limit: 1
+      ) {
+        id
+        connection_id
+        region_id
+        from_port_id
+        to_port_id
+        status
+      }
+    }
+  `;
+  const data = await executeHasura(query, { odpPortId });
+  return data?.items?.[0] || null;
+}
+
+async function findIdlePortOnDevice(deviceId) {
+  const query = `
+    query FindIdlePort($deviceId: uuid!) {
+      items: device_ports(
+        where: {
+          device_id: { _eq: $deviceId }
+          status: { _eq: "idle" }
+          deleted_at: { _is_null: true }
+          is_active: { _eq: true }
+        }
+        order_by: { port_index: asc }
+        limit: 1
+      ) {
+        id
+        port_id
+        region_id
+        device_id
+        port_index
+        port_label
+        status
+      }
+    }
+  `;
+  const data = await executeHasura(query, { deviceId });
+  return data?.items?.[0] || null;
+}
+
+async function reassignFrontOdp({ odpPortId, newFrontDeviceId, newFrontPortId, actorUserId, ipAddress, userAgent }) {
+  const odpPort = await loadPortById(odpPortId);
+  if (!odpPort) throw createHttpError(404, 'ODP port not found');
+  if (odpPort.deleted_at) throw createHttpError(400, 'Cannot reassign deleted port');
+
+  const newFrontPort = await loadPortById(newFrontPortId);
+  if (!newFrontPort) throw createHttpError(404, 'New front port not found');
+  if (newFrontPort.deleted_at) throw createHttpError(400, 'Front port is deleted');
+
+  const newFrontDevice = await loadDeviceById(newFrontDeviceId);
+  if (!newFrontDevice) throw createHttpError(404, 'New front device not found');
+
+  // Validate ODP device exists
+  const odpDevice = await loadDeviceById(odpPort.device_id);
+  if (!odpDevice) throw createHttpError(404, 'ODP device not found');
+
+  // Validate new front port belongs to new front device
+  if (String(newFrontPort.device_id) !== String(newFrontDeviceId)) {
+    throw createHttpError(400, 'New front port does not belong to selected front device');
+  }
+
+  // Validate same POP
+  if (odpDevice.pop_id && newFrontDevice.pop_id && odpDevice.pop_id !== newFrontDevice.pop_id) {
+    throw createHttpError(400, 'ODP and new front device must be in the same POP');
+  }
+
+  // Validate same region
+  if (odpPort.region_id !== newFrontPort.region_id) {
+    throw createHttpError(400, 'ODP port and new front port must be in the same region');
+  }
+
+  // Validate new front port is idle
+  if (String(newFrontPort.status || '').toLowerCase() !== 'idle') {
+    throw createHttpError(409, 'New front port is not idle');
+  }
+
+  // Validate topology rule: ODP front can connect to ODC or JC
+  const rules = await loadTopologyRelationRules('ODP', 'front');
+  const matchedRule = rules.find(
+    (r) => String(r.allowed_peer_device_type_key || '').toUpperCase() === String(newFrontDevice.device_type_key || '').toUpperCase()
+  );
+  if (!matchedRule) {
+    throw createHttpError(400, `Front device type ${newFrontDevice.device_type_key} is not allowed for ODP`);
+  }
+
+  // Find and disconnect existing front connection
+  const existingConnection = await findActiveFrontConnection(odpPortId);
+  if (existingConnection) {
+    const oldFrontPortId = existingConnection.from_port_id;
+    await deleteConnection(existingConnection.id);
+
+    // Set old front port back to idle (only if no other connections use it)
+    await executeHasuraSql(`
+      UPDATE public.device_ports p
+      SET status = 'idle', updated_at = NOW()
+      WHERE p.id = '${String(oldFrontPortId).replace(/'/g, "''")}'::uuid
+        AND p.status = 'used'
+        AND p.customer_id IS NULL
+        AND p.ont_device_id IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM public.port_connections pc
+          WHERE pc.status IN ('active', 'planned', 'cutover')
+            AND (pc.from_port_id = p.id OR pc.to_port_id = p.id)
+        )
+    `).catch(() => {});
+  }
+
+  // Create new connection
+  const connId = randomUUID();
+  const newConnection = await createDropConnection(newFrontPort, odpPort, connId);
+
+  // Update ports status
+  await updatePortDirect(newFrontPort.id, { status: 'used' });
+
+  // Sync usage
+  await syncDeviceCoreUsage(odpDevice.id);
+
+  return {
+    connection: newConnection,
+    odp_port_id: odpPort.id,
+    new_front_port_id: newFrontPort.id,
+    new_front_device_id: newFrontDevice.id,
+    previous_connection_disconnected: !!existingConnection,
+  };
+}
+
 module.exports = {
   loadDeviceById,
   loadPortById,
@@ -328,4 +465,5 @@ module.exports = {
   updatePortDirect,
   syncDeviceCoreUsage,
   deleteConnection,
+  reassignFrontOdp,
 };

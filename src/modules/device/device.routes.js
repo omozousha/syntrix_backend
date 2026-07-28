@@ -15,6 +15,7 @@ const {
   updatePortDirect,
   syncDeviceCoreUsage,
   deleteConnection,
+  reassignFrontOdp,
 } = require('./odp-ont-connection.service');
 const {
   evaluateDeviceLinkBudget,
@@ -682,6 +683,32 @@ deviceRouter.post('/devices/:odpPortId/disconnect-ont', authenticate, requireRol
     });
 
     return sendSuccess(res, { odp_port_id: odpPort.id, ont_port_id: ontPortId, ont_device_id: null }, 'ONT disconnected from ODP port successfully');
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// ── POST /devices/:odpPortId/reassign-front — Reassign ODP front device (ODC/JC) ──
+deviceRouter.post('/devices/:odpPortId/reassign-front', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
+  try {
+    const odpPortId = req.params.odpPortId;
+    const newFrontDeviceId = req.body?.new_front_device_id ? String(req.body.new_front_device_id) : '';
+    const newFrontPortId = req.body?.new_front_port_id ? String(req.body.new_front_port_id) : '';
+
+    if (!newFrontDeviceId || !newFrontPortId) {
+      throw createHttpError(400, 'new_front_device_id and new_front_port_id are required');
+    }
+
+    const result = await reassignFrontOdp({
+      odpPortId,
+      newFrontDeviceId,
+      newFrontPortId,
+      actorUserId: req.auth.appUser.id,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    return sendSuccess(res, result, 'ODP front device reassigned successfully');
   } catch (error) {
     return next(error);
   }
