@@ -54,4 +54,4 @@ const apiRateLimiter = rateLimit({
   },
 });
 
-module.exports = { corsMiddleware, helmetMiddleware, authRateLimiter, apiRateLimiter };
+module.exports = { corsMiddleware, vercelCorsPreflight, helmetMiddleware, authRateLimiter, apiRateLimiter };
