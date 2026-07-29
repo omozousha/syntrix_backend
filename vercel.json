@@ -7,7 +7,7 @@
     }
   ],
   "routes": [
-    { "src": "/api/(.*)", "dest": "app.js", "methods": ["GET","POST","PATCH","DELETE","OPTIONS"] },
+    { "src": "/api/(.*)", "dest": "app.js" },
     { "src": "/health", "dest": "app.js" },
     { "src": "/(.*)", "dest": "app.js" }
   ]
