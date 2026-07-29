@@ -1,4 +1,5 @@
 const { randomUUID } = require('crypto');
+const { validateResourcePayload, translateHasuraError } = require('./resource.validators');
 const { getPagination } = require('../../utils/pagination');
 const { sendSuccess } = require('../../utils/response');
 const { createHttpError } = require('../../utils/httpError');
@@ -527,6 +528,12 @@ function validatePayloadByResource(resourceName, payload, mode = 'create') {
 
   if (resourceName === 'portConnections') {
     validatePortConnectionPayload(payload, mode);
+    return;
+  }
+
+  const errMessage = validateResourcePayload(resourceName, payload);
+  if (errMessage) {
+    throw createHttpError(400, errMessage);
   }
 }
 
@@ -1854,4 +1861,16 @@ async function processDeviceTopologyAfterCreate({ req, item, body }) {
   return results;
 }
 
-module.exports = { list, getById, create, update, remove, restore, purge };
+async function getUsageCheck(req, res, next) {
+  try {
+    const { checkUsage } = require('./usage-check.service');
+    const existing = await getResourceById(req.resourceConfig, req.params.id);
+    if (!existing) throw createHttpError(404, `${req.resourceName} not found`);
+    const usage = await checkUsage(req.resourceName, req.params.id, existing);
+    return sendSuccess(res, usage);
+  } catch (error) {
+    return next(error);
+  }
+}
+
+module.exports = { list, getById, create, update, remove, restore, purge, getUsageCheck };

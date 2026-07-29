@@ -3247,7 +3247,7 @@ function bindResource(resourceName, config) {
     next();
   });
 
-  router.get('/', requireRole(...config.auth.read), controller.list);
+  router.get('/:id/usage-check', requireRole(...config.auth.read), controller.getUsageCheck);
   router.get('/:id', requireRole(...config.auth.read), controller.getById);
   if (!config.readOnly) {
     router.post('/', requireRole(...config.auth.write), controller.create);
