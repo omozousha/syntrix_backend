@@ -3,6 +3,20 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { env } = require('../config/env');
 
+function vercelCorsPreflight(req, res, next) {
+  if (req.method === 'OPTIONS') {
+    const origin = req.headers.origin;
+    if (origin && env.corsOrigins.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      return res.status(204).end();
+    }
+  }
+  next();
+}
+
 const corsMiddleware = cors({
   origin(origin, callback) {
     if (!origin || env.corsOrigins.includes(origin)) {

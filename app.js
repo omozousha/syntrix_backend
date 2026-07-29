@@ -2,7 +2,7 @@ const express = require('express');
 const path = require('path');
 const { env } = require('./src/config/env');
 const { errorHandler, notFoundHandler } = require('./src/middleware/error.middleware');
-const { corsMiddleware, helmetMiddleware, authRateLimiter, apiRateLimiter } = require('./src/middleware/security.middleware');
+const { corsMiddleware, vercelCorsPreflight, helmetMiddleware, authRateLimiter, apiRateLimiter } = require('./src/middleware/security.middleware');
 const { authRouter } = require('./src/modules/auth/auth.routes');
 const { dashboardRouter } = require('./src/modules/dashboard/dashboard.routes');
 const { resourceRouter } = require('./src/modules/resource/resource.routes');
@@ -16,6 +16,7 @@ const app = express();
 app.set('trust proxy', 1);
 
 app.use(helmetMiddleware);
+app.use(vercelCorsPreflight);
 app.use(corsMiddleware);
 app.use(express.json({ limit: env.apiBodyLimit }));
 app.use(express.urlencoded({ extended: true }));
