@@ -18,6 +18,57 @@ function isNonNegativeNumber(val) {
   return !isNaN(num) && num >= 0;
 }
 
+function validateTrayConfig(trayConfig, totalPorts, capacityCore) {
+  if (!trayConfig) return null;
+  let config = trayConfig;
+  if (typeof trayConfig === 'string') {
+    try {
+      config = JSON.parse(trayConfig);
+    } catch (e) {
+      return 'Format tray_config harus berupa JSON valid.';
+    }
+  }
+
+  if (typeof config !== 'object' || config === null) {
+    return 'tray_config harus berupa objek JSON.';
+  }
+
+  if (!config.version) return 'tray_config wajib memiliki field "version".';
+  if (!config.layout_type) return 'tray_config wajib memiliki field "layout_type".';
+
+  if (config.groups !== undefined) {
+    if (!Array.isArray(config.groups)) return 'tray_config.groups harus berupa array.';
+
+    const ranges = [];
+    for (let i = 0; i < config.groups.length; i++) {
+      const g = config.groups[i];
+      if (!g.id) return `Group ke-${i+1} wajib memiliki field "id".`;
+      if (!g.label) return `Group ke-${i+1} wajib memiliki field "label".`;
+      if (g.start_index === undefined || g.end_index === undefined) {
+        return `Group "${g.label}" wajib memiliki field "start_index" dan "end_index".`;
+      }
+      
+      const start = Number(g.start_index);
+      const end = Number(g.end_index);
+      
+      if (isNaN(start) || isNaN(end) || start < 1 || end < 1) {
+        return `Group "${g.label}" start/end index harus berupa angka positif >= 1.`;
+      }
+      if (start > end) {
+        return `Group "${g.label}" start_index (${start}) tidak boleh lebih besar dari end_index (${end}).`;
+      }
+
+      for (const r of ranges) {
+        if (start <= r.end && end >= r.start) {
+          return `Group "${g.label}" tumpang tindih (overlap) dengan group "${r.label}" [${r.start}-${r.end}].`;
+        }
+      }
+      ranges.push({ start, end, label: g.label });
+    }
+  }
+  return null;
+}
+
 const VALIDATOR_MAP = {
   deviceTypes: (payload) => {
     if (!isNonEmptyString(payload.device_type_key)) return 'Device Type Key wajib diisi.';
@@ -129,6 +180,29 @@ const VALIDATOR_MAP = {
 
   assetModels: (payload) => {
     if (!isNonEmptyString(payload.model_name)) return 'Model Name wajib diisi.';
+    if (payload.capacity_core !== undefined && payload.capacity_core !== null && payload.capacity_core !== '') {
+      if (!isPositiveNumber(payload.capacity_core)) return 'Capacity Core harus integer > 0.';
+    }
+    if (payload.total_ports !== undefined && payload.total_ports !== null && payload.total_ports !== '') {
+      if (!isPositiveNumber(payload.total_ports)) return 'Total Ports harus integer > 0.';
+    }
+    if (payload.tray_config) {
+      const trayErr = validateTrayConfig(payload.tray_config, payload.total_ports, payload.capacity_core);
+      if (trayErr) return trayErr;
+    }
+    return null;
+  },
+
+  closureTypes: (payload) => {
+    if (!isNonEmptyString(payload.closure_type_name)) return 'Closure Type Name wajib diisi.';
+    if (payload.max_core_capacity === undefined || payload.max_core_capacity === null || payload.max_core_capacity === '') {
+      return 'Max Core Capacity wajib diisi.';
+    }
+    if (!isPositiveNumber(payload.max_core_capacity)) return 'Max Core Capacity harus integer > 0.';
+    if (payload.max_splice_capacity === undefined || payload.max_splice_capacity === null || payload.max_splice_capacity === '') {
+      return 'Max Splice Capacity wajib diisi.';
+    }
+    if (!isPositiveNumber(payload.max_splice_capacity)) return 'Max Splice Capacity harus integer > 0.';
     return null;
   },
 
@@ -174,6 +248,8 @@ function translateHasuraError(err, resourceName) {
     if (msg.includes('tenants_tenant_name_key')) return 'Tenant Name sudah terdaftar. Gunakan nama yang berbeda.';
     if (msg.includes('manufacturers_manufacturer_name_key')) return 'Manufacturer Name sudah terdaftar. Gunakan nama yang berbeda.';
     if (msg.includes('provinces_province_name_key')) return 'Province Name sudah terdaftar. Gunakan nama yang berbeda.';
+    if (msg.includes('closure_types_closure_type_name_key')) return 'Closure Type Name sudah terdaftar. Gunakan nama yang berbeda.';
+    if (msg.includes('asset_models_model_name_key')) return 'Model Name sudah terdaftar. Gunakan nama yang berbeda.';
     return 'Data dengan nilai unik yang sama sudah terdaftar di sistem.';
   }
   if (msg.includes('check constraint') || msg.includes('Check constraint')) {

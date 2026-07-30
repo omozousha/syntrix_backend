@@ -48,8 +48,20 @@ function main() {
 
   // ── closureTypes ──
   check(
-    'closureTypes: missing in validator (no specific rules → pass)',
-    validateResourcePayload('closureTypes', { closure_type_name: 'Dome 24' }) === null,
+    'closureTypes: valid payload passes',
+    validateResourcePayload('closureTypes', { closure_type_name: 'Dome 24', max_core_capacity: 24, max_splice_capacity: 48 }) === null,
+  );
+  check(
+    'closureTypes: missing name',
+    validateResourcePayload('closureTypes', { max_core_capacity: 24, max_splice_capacity: 48 }) !== null,
+  );
+  check(
+    'closureTypes: missing core capacity',
+    validateResourcePayload('closureTypes', { closure_type_name: 'Dome 24', max_splice_capacity: 48 }) !== null,
+  );
+  check(
+    'closureTypes: zero core capacity',
+    validateResourcePayload('closureTypes', { closure_type_name: 'Dome 24', max_core_capacity: 0, max_splice_capacity: 48 }) !== null,
   );
 
   // ── splitterProfiles ──
@@ -68,6 +80,41 @@ function main() {
   check(
     'splitterProfiles: output_port_count < 2',
     validateResourcePayload('splitterProfiles', { ratio_label: '1:1', input_port_count: 1, output_port_count: 1 }) !== null,
+  );
+
+  // ── assetModels ──
+  check(
+    'assetModels: valid payload passes',
+    validateResourcePayload('assetModels', { model_name: 'ODC-48' }) === null,
+  );
+  check(
+    'assetModels: valid tray_config',
+    validateResourcePayload('assetModels', {
+      model_name: 'ODC-48',
+      total_ports: 48,
+      tray_config: { version: 1, layout_type: 'passive_tube', groups: [{ id: 'g1', label: 'Feeder', start_index: 1, end_index: 24 }] },
+    }) === null,
+  );
+  check(
+    'assetModels: invalid tray_config JSON string',
+    validateResourcePayload('assetModels', { model_name: 'ODC-48', tray_config: '{ "invalid" }' }) !== null,
+  );
+  check(
+    'assetModels: tray_config overlap groups',
+    validateResourcePayload('assetModels', {
+      model_name: 'ODC-48',
+      tray_config: { version: 1, layout_type: 'tube', groups: [
+        { id: 'g1', label: 'G1', start_index: 1, end_index: 12 },
+        { id: 'g2', label: 'G2', start_index: 10, end_index: 24 },
+      ]},
+    }) !== null,
+  );
+  check(
+    'assetModels: tray_config start > end',
+    validateResourcePayload('assetModels', {
+      model_name: 'ODC-48',
+      tray_config: { version: 1, layout_type: 'tube', groups: [{ id: 'g1', label: 'G1', start_index: 24, end_index: 1 }] },
+    }) !== null,
   );
 
   // ── linkBudgetParameters ──

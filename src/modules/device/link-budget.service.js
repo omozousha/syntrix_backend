@@ -86,9 +86,10 @@ async function loadSplitterLossesBetween(odpDeviceId, parameters) {
 }
 
 async function loadSplitterProfilesMap() {
-  const map = new Map();
+  const byRatio = new Map();
+  const byId = new Map();
   const data = await executeHasuraSql(`
-        select ratio_label, expected_loss_db::text as expected_loss_db
+        select id, ratio_label, expected_loss_db::text as expected_loss_db
         from public.splitter_profiles
         where is_active = true;
       `);
@@ -96,10 +97,13 @@ async function loadSplitterProfilesMap() {
   (data?.result?.slice(1) || []).forEach((row) => {
     const obj = Object.fromEntries(header.map((key, idx) => [key, row[idx]]));
     if (obj.ratio_label) {
-      map.set(String(obj.ratio_label).toLowerCase(), Number(obj.expected_loss_db));
+      byRatio.set(String(obj.ratio_label).toLowerCase(), Number(obj.expected_loss_db));
+    }
+    if (obj.id) {
+      byId.set(String(obj.id), Number(obj.expected_loss_db));
     }
   });
-  return map;
+  return { byRatio, byId };
 }
 
 async function loadCableAttenuationOverrides(cableDeviceIds = []) {
@@ -142,11 +146,12 @@ async function loadCableAttenuationOverrides(cableDeviceIds = []) {
 function aggregateSplitterLoss({ splitterProfileIds, splitterRatios, splitterProfilesMap }) {
   const total = (splitterProfileIds || []).reduce((acc, id) => {
     if (!id) return acc;
-    return acc;
+    const value = splitterProfilesMap.byId.get(String(id));
+    return Number.isFinite(value) ? acc + value : acc;
   }, 0);
   const fromProfiles = (splitterRatios || []).reduce((acc, label) => {
     if (!label) return acc;
-    const value = splitterProfilesMap.get(String(label).toLowerCase());
+    const value = splitterProfilesMap.byRatio.get(String(label).toLowerCase());
     return Number.isFinite(value) ? acc + value : acc;
   }, 0);
   return Number((total + fromProfiles).toFixed(3));
@@ -331,6 +336,31 @@ async function evaluateDeviceLinkBudget({ device, splitterProfileIds = [], split
     margin_db: Number((gponBudget - input.calculated_loss_db).toFixed(3)),
     warnings,
   };
+}
+
+async function autoDetectSplitterPath(deviceId) {
+  const ids = [];
+  if (!isUuid(deviceId)) return ids;
+  const data = await executeHasuraSql(`
+    with recursive upstream_path as (
+      select dp.id as port_id, dp.device_id, dp.splitter_profile_id
+      from public.device_ports dp
+      where dp.device_id = '${sqlLiteral(deviceId)}'::uuid and dp.splitter_profile_id is not null
+      union
+      select dp2.id, dp2.device_id, dp2.splitter_profile_id
+      from public.device_ports dp2
+      join public.port_connections pc on pc.rear_port_id = dp2.id
+      join upstream_path up on up.port_id = pc.front_port_id
+      where dp2.splitter_profile_id is not null
+    )
+    select distinct splitter_profile_id from upstream_path where splitter_profile_id is not null;
+  `);
+  const header = data?.result?.[0] || [];
+  (data?.result?.slice(1) || []).forEach((row) => {
+    const obj = Object.fromEntries(header.map((key, idx) => [key, row[idx]]));
+    if (obj.splitter_profile_id) ids.push(String(obj.splitter_profile_id));
+  });
+  return ids;
 }
 
 async function loadEstimateForDevice(deviceId) {
