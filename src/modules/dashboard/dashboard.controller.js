@@ -3,7 +3,7 @@ const { getDashboardSummary, getValidationProgress } = require('./dashboard.serv
 
 async function summary(req, res, next) {
   try {
-    const data = await getDashboardSummary(req.auth.regions, req.auth.role);
+    const data = await getDashboardSummary(req.auth.regions);
     return sendSuccess(res, data, 'Dashboard summary fetched successfully');
   } catch (error) {
     return next(error);

@@ -1,30 +1,200 @@
 const { executeHasura, executeHasuraSql } = require('../../config/hasura');
 const { createHttpError } = require('../../utils/httpError');
 
-async function getDashboardSummary(regionIds = [], role = 'admin') {
-  if (role === 'user_region' && !regionIds.length) {
-    throw createHttpError(403, 'Regional user does not have any assigned region');
-  }
+function escapeSqlLiteral(value) {
+  return String(value).replace(/'/g, "''");
+}
 
-  const useRegionFilter = role === 'user_region' && regionIds.length;
-  const regionFilter = useRegionFilter ? '(where: { region_id: { _in: $regionIds } })' : '';
-  const variableDefinition = useRegionFilter ? '($regionIds: [uuid!])' : '';
+function buildRegionFilter(regionIds) {
+  if (!regionIds?.length) return { deviceWhere: '', popWhere: '', projectWhere: '', routeWhere: '' };
+  const ids = regionIds.map((id) => `'${escapeSqlLiteral(id)}'::uuid`).join(', ');
+  return {
+    deviceWhere: `and d.region_id in (${ids})`,
+    popWhere: `and p.region_id in (${ids})`,
+    projectWhere: `and pj.region_id in (${ids})`,
+    routeWhere: `and nr.region_id in (${ids})`,
+  };
+}
 
-  const query = `
-    query DashboardSummary${variableDefinition} {
-      devices_aggregate ${regionFilter} { aggregate { count } }
-      pops_aggregate ${regionFilter} { aggregate { count } }
-      projects_aggregate ${regionFilter} { aggregate { count } }
-      customers_aggregate ${regionFilter} { aggregate { count } }
-      poles_aggregate ${regionFilter} { aggregate { count } }
-      network_routes_aggregate ${regionFilter} { aggregate { count } }
-      validation_records_aggregate { aggregate { count } }
-      import_jobs_aggregate { aggregate { count } }
-      monitoring_snapshots_aggregate { aggregate { count } }
-    }
+async function getDashboardSummary(regionIds = []) {
+  const f = buildRegionFilter(regionIds);
+
+  const mainSql = `
+    select
+      (select count(*)::int from public.devices d where d.deleted_at is null ${f.deviceWhere}) as devices_total,
+      (select count(*)::int from public.pops p where p.deleted_at is null ${f.popWhere}) as pops_total,
+      (select count(*)::int from public.projects pj where pj.deleted_at is null ${f.projectWhere}) as projects_total,
+      (select count(*)::int from public.customers cu where cu.deleted_at is null ${f.popWhere}) as customers_total,
+      (select count(*)::int from public.network_routes nr where nr.deleted_at is null ${f.routeWhere}) as routes_total,
+      (select count(*)::int from public.regions r ${regionIds?.length ? `where r.id in (${regionIds.map((id) => `'${escapeSqlLiteral(id)}'::uuid`).join(', ')})` : ''}) as regions_total,
+      (select count(*)::int from public.device_ports dp join public.devices d on d.id = dp.device_id where d.deleted_at is null ${f.deviceWhere}) as ports_total,
+      (select count(*)::int from public.device_ports dp join public.devices d on d.id = dp.device_id where d.deleted_at is null and dp.status = 'used' ${f.deviceWhere}) as ports_used,
+      (select count(*)::int from public.device_ports dp join public.devices d on d.id = dp.device_id where d.deleted_at is null and dp.status in ('down', 'maintenance') ${f.deviceWhere}) as ports_down_maintenance,
+      (select count(*)::int from public.device_ports dp join public.devices d on d.id = dp.device_id where d.deleted_at is null and dp.status = 'reserved' ${f.deviceWhere}) as ports_reserved,
+      (select count(*)::int from public.devices d where d.deleted_at is null and d.device_type_key = 'ODP' ${f.deviceWhere}) as odp_total,
+      (select count(*)::int from public.devices d where d.deleted_at is null and d.device_type_key = 'ODP' and (d.validation_status = 'valid' or d.validation_date is not null or d.last_validation_at is not null) ${f.deviceWhere}) as odp_validated
   `;
 
-  return executeHasura(query, useRegionFilter ? { regionIds } : {});
+  const typeSql = `
+    select device_type_key as label, count(*)::int as value
+    from public.devices d
+    where d.deleted_at is null ${f.deviceWhere}
+    group by device_type_key
+    order by value desc
+  `;
+
+  const deviceStatusSql = `
+    select d.status as label, count(*)::int as value
+    from public.devices d
+    where d.deleted_at is null ${f.deviceWhere}
+    group by d.status
+    order by value desc
+  `;
+
+  const deviceByRegionSql = `
+    select r.region_name as label, count(d.id)::int as value
+    from public.regions r
+    left join public.devices d on d.region_id = r.id and d.deleted_at is null
+    where r.deleted_at is null
+    ${regionIds?.length ? `and r.id in (${regionIds.map((id) => `'${escapeSqlLiteral(id)}'::uuid`).join(', ')})` : ''}
+    group by r.region_name
+    order by value desc
+  `;
+
+  const odpByRegionSql = `
+    select r.region_name as label, count(d.id)::int as value
+    from public.regions r
+    left join public.devices d on d.region_id = r.id and d.deleted_at is null and d.device_type_key = 'ODP'
+    where r.deleted_at is null
+    ${regionIds?.length ? `and r.id in (${regionIds.map((id) => `'${escapeSqlLiteral(id)}'::uuid`).join(', ')})` : ''}
+    group by r.region_name
+    order by value desc
+  `;
+
+  const popStatusSql = `
+    select p.status_pop as label, count(*)::int as value
+    from public.pops p
+    where p.deleted_at is null ${f.popWhere}
+    group by p.status_pop
+    order by value desc
+  `;
+
+  const popByRegionSql = `
+    select r.region_name as label, count(p.id)::int as value
+    from public.regions r
+    left join public.pops p on p.region_id = r.id and p.deleted_at is null
+    where r.deleted_at is null
+    ${regionIds?.length ? `and r.id in (${regionIds.map((id) => `'${escapeSqlLiteral(id)}'::uuid`).join(', ')})` : ''}
+    group by r.region_name
+    order by value desc
+  `;
+
+  const portsByStatusSql = `
+    select dp.status as label, count(*)::int as value
+    from public.device_ports dp
+    join public.devices d on d.id = dp.device_id
+    where d.deleted_at is null ${f.deviceWhere}
+    group by dp.status
+    order by value desc
+  `;
+
+  const topPopsSql = `
+    select p.pop_name as label, p.id::text as pop_id, count(d.id)::int as value
+    from public.pops p
+    left join public.devices d on d.pop_id = p.id and d.deleted_at is null
+    where p.deleted_at is null ${f.popWhere}
+    group by p.id, p.pop_name
+    order by value desc
+    limit 10
+  `;
+
+  const topOdpPopsSql = `
+    select p.pop_name as label, p.id::text as pop_id, count(d.id)::int as value
+    from public.pops p
+    left join public.devices d on d.pop_id = p.id and d.deleted_at is null and d.device_type_key = 'ODP'
+    where p.deleted_at is null ${f.popWhere}
+    group by p.id, p.pop_name
+    order by value desc
+    limit 10
+  `;
+
+  const popsWithoutDeviceSql = `
+    select p.id::text as pop_id, p.pop_name, p.pop_code
+    from public.pops p
+    where p.deleted_at is null ${f.popWhere}
+      and not exists (
+        select 1 from public.devices d
+        where d.pop_id = p.id and d.deleted_at is null
+      )
+    order by p.pop_name
+    limit 6
+  `;
+
+  const [mainResult, typeResult, deviceStatusResult, deviceByRegionResult, odpByRegionResult, popStatusResult, popByRegionResult, portsByStatusResult, topPopsResult, topOdpPopsResult, popsWithoutDeviceResult] = await Promise.all([
+    executeHasuraSql(mainSql),
+    executeHasuraSql(typeSql),
+    executeHasuraSql(deviceStatusSql),
+    executeHasuraSql(deviceByRegionSql),
+    executeHasuraSql(odpByRegionSql),
+    executeHasuraSql(popStatusSql),
+    executeHasuraSql(popByRegionSql),
+    executeHasuraSql(portsByStatusSql),
+    executeHasuraSql(topPopsSql),
+    executeHasuraSql(topOdpPopsSql),
+    executeHasuraSql(popsWithoutDeviceSql),
+  ]);
+
+  const parseRows = (response) => {
+    const result = response?.result || [];
+    const [headers = [], ...rows] = result;
+    return rows.map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index]])));
+  };
+
+  const [mainRow] = parseRows(mainResult);
+  const deviceByType = parseRows(typeResult);
+  const deviceByStatus = parseRows(deviceStatusResult);
+  const deviceByRegion = parseRows(deviceByRegionResult);
+  const odpByRegion = parseRows(odpByRegionResult);
+  const popByStatus = parseRows(popStatusResult);
+  const popByRegion = parseRows(popByRegionResult);
+  const portByStatus = parseRows(portsByStatusResult);
+  const topPops = parseRows(topPopsResult);
+  const topOdpPops = parseRows(topOdpPopsResult);
+  const popsWithoutDevice = parseRows(popsWithoutDeviceResult);
+
+  return {
+    devices: {
+      total: Number(mainRow?.devices_total || 0),
+      byType: deviceByType,
+      byStatus: deviceByStatus,
+      byRegion: deviceByRegion,
+    },
+    odp: {
+      total: Number(mainRow?.odp_total || 0),
+      validated: Number(mainRow?.odp_validated || 0),
+      unvalidated: Math.max(Number(mainRow?.odp_total || 0) - Number(mainRow?.odp_validated || 0), 0),
+      byRegion: odpByRegion,
+    },
+    pops: {
+      total: Number(mainRow?.pops_total || 0),
+      byStatus: popByStatus,
+      byRegion: popByRegion,
+      topByDevice: topPops,
+      topByOdp: topOdpPops,
+      withoutDevice: popsWithoutDevice,
+    },
+    ports: {
+      total: Number(mainRow?.ports_total || 0),
+      used: Number(mainRow?.ports_used || 0),
+      downMaintenance: Number(mainRow?.ports_down_maintenance || 0),
+      reserved: Number(mainRow?.ports_reserved || 0),
+      byStatus: portByStatus,
+    },
+    regions: { total: Number(mainRow?.regions_total || 0) },
+    projects: { total: Number(mainRow?.projects_total || 0) },
+    customers: { total: Number(mainRow?.customers_total || 0) },
+    routes: { total: Number(mainRow?.routes_total || 0) },
+  };
 }
 
 function clampYear(value) {
@@ -52,10 +222,6 @@ function parseRunSqlRows(response) {
   const result = response?.result || [];
   const [headers = [], ...rows] = result;
   return rows.map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index]])));
-}
-
-function escapeSqlLiteral(value) {
-  return String(value).replace(/'/g, "''");
 }
 
 async function getValidationProgress({ month, year } = {}) {
