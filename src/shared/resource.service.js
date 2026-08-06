@@ -31,6 +31,14 @@ function buildWhereClause(config, query, auth) {
     });
   }
 
+  const ids = String(query.ids || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value && isUuidLike(value));
+  if (ids.length) {
+    andConditions.push({ id: { _in: ids } });
+  }
+
   if (config.table === 'audit_logs') {
     const actionNameIn = String(query.action_name_in || '')
       .split(',')
