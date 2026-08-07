@@ -1,6 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const FormData = require('form-data');
+const crypto = require('crypto');
 const { authenticate, requireRole } = require('../../middleware/auth.middleware');
 const { env } = require('../../config/env');
 const { createHttpError } = require('../../utils/httpError');
@@ -8,6 +9,7 @@ const { sendSuccess } = require('../../utils/response');
 const { nhostStorageClient } = require('../../config/nhost');
 const { executeHasura } = require('../../config/hasura');
 const { createAuditLog } = require('../../shared/audit.service');
+const { createBulkValidationRequests, STATUS, ACTION } = require('../validation/validation.service');
 const {
   IMPORT_FILE_CATEGORY,
   detectSourceFormat,
@@ -424,6 +426,7 @@ importRouter.post('/ingest', authenticate, requireRole('admin', 'user_region', '
       })),
     );
 
+    const isAdminRegion = req.auth.role === 'user_all_region';
     let appliedRows = 0;
     if (applyImport && parsedRows.length) {
       const mappedObjects = parsedRows.map((row, index) => {
@@ -440,6 +443,14 @@ importRouter.post('/ingest', authenticate, requireRole('admin', 'user_region', '
         }
         const mapped = mapRowToEntity(entityType, row, defaults);
         validateMappedEntity(entityType, mapped, index);
+
+        // Hold device creation for superadmin approval if submitted by adminregion
+        if (entityType === 'devices' && isAdminRegion) {
+          mapped.id = mapped.id || crypto.randomUUID();
+          mapped.deleted_at = new Date().toISOString();
+          mapped.deleted_by_user_id = req.auth.appUser.id;
+        }
+
         return mapped;
       });
 
@@ -481,6 +492,94 @@ importRouter.post('/ingest', authenticate, requireRole('admin', 'user_region', '
       }
 
       appliedRows = await bulkInsertEntity(entityType, mappedObjects);
+
+      // Create validation requests per-device for adminregion bulk imports
+      if (entityType === 'devices' && isAdminRegion && appliedRows > 0) {
+        const requestObjects = [];
+        const logObjects = [];
+        const auditLogTasks = [];
+
+        mappedObjects.forEach((device) => {
+          const payloadSnapshot = {
+            source: 'adminregion-create-device',
+            device: {
+              id: device.id,
+              region_id: device.region_id || null,
+              pop_id: device.pop_id || null,
+              project_id: device.project_id || null,
+              tenant_id: device.tenant_id || null,
+              device_type_key: device.device_type_key || null,
+              device_name: device.device_name || null,
+              status: device.status || null,
+              manufacturer_id: device.manufacturer_id || null,
+              brand_id: device.brand_id || null,
+              model_id: device.model_id || null,
+              serial_number: device.serial_number || null,
+              splitter_ratio: device.splitter_ratio || null,
+              odp_type: device.odp_type || null,
+              installation_type: device.installation_type || null,
+              total_ports: device.total_ports ?? null,
+              used_ports: device.used_ports ?? null,
+              validation_status: device.validation_status || null,
+              validation_date: device.validation_date || null,
+              image_attachment_id: device.image_attachment_id || null,
+              image_attachments: Array.isArray(device.image_attachments) ? device.image_attachments : [],
+              address: device.address || null,
+              longitude: device.longitude ?? null,
+              latitude: device.latitude ?? null,
+            },
+            relation_context: null,
+            device_ports: [],
+          };
+
+          const requestId = crypto.randomUUID();
+
+          requestObjects.push({
+            id: requestId,
+            entity_type: 'device',
+            entity_id: device.id,
+            region_id: device.region_id,
+            submitted_by_user_id: req.auth.appUser.id,
+            current_status: STATUS.PENDING_ASYNC,
+            payload_snapshot: payloadSnapshot,
+            evidence_attachments: [],
+            checklist: {},
+            finding_note: 'Create device request by adminregion (bulk import).',
+          });
+
+          logObjects.push({
+            request_id: requestId,
+            action_type: ACTION.RESUBMIT_ADMINREGION,
+            actor_user_id: req.auth.appUser.id,
+            actor_role: 'adminregion',
+            before_status: STATUS.UNVALIDATED,
+            after_status: STATUS.PENDING_ASYNC,
+            note: 'Create device request submitted to superadmin (bulk import).',
+            payload_patch: payloadSnapshot,
+          });
+
+          auditLogTasks.push(
+            createAuditLog({
+              actorUserId: req.auth.appUser.id,
+              actionName: 'validation_request_submitted_by_adminregion',
+              entityType: 'validation_requests',
+              entityId: requestId,
+              beforeData: { status: STATUS.UNVALIDATED },
+              afterData: {
+                request_id: null,
+                status: STATUS.PENDING_ASYNC,
+                source: 'adminregion-create-device',
+                device_id: device.id,
+              },
+              ipAddress: req.ip,
+              userAgent: req.get('user-agent'),
+            }).catch((err) => console.warn('Failed to insert audit log for bulk ODP import item:', err.message))
+          );
+        });
+
+        await createBulkValidationRequests(requestObjects, logObjects);
+        await Promise.all(auditLogTasks);
+      }
     }
 
     const completedJob = await updateImportJob(importJob.id, {

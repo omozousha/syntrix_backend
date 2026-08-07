@@ -437,6 +437,28 @@ async function insertRequestLog({ requestId, actionType, actorUserId, actorRole,
   });
 }
 
+async function createBulkValidationRequests(requests, logs) {
+  const mutation = `
+    mutation CreateBulkValidationRequests(
+      $requests: [validation_requests_insert_input!]!,
+      $logs: [validation_request_logs_insert_input!]!
+    ) {
+      insert_validation_requests(objects: $requests) {
+        affected_rows
+        returning {
+          id
+          request_id
+        }
+      }
+      insert_validation_request_logs(objects: $logs) {
+        affected_rows
+      }
+    }
+  `;
+  const data = await executeHasura(mutation, { requests, logs });
+  return data.insert_validation_requests?.returning || [];
+}
+
 async function listRequestsByQueue({ queue, regionIds, regionIdFilter = null }) {
   const fields = `
     id
@@ -2099,6 +2121,7 @@ module.exports = {
   createRequest,
   resubmitActiveRequest,
   insertRequestLog,
+  createBulkValidationRequests,
   listRequestsByQueue,
   listQualityQueueRequests,
   listRequestsForValidator,
