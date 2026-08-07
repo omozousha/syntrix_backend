@@ -9,6 +9,7 @@ const {
   approveByAdminRegion,
   rejectByAdminRegion,
   resubmitByAdminRegion,
+  updatePayloadByAdminRegion,
   approveBySuperAdmin,
   rejectBySuperAdmin,
   getValidationRequestHistory,
@@ -38,6 +39,7 @@ validationRouter.get('/:id/history', getValidationRequestHistory);
 validationRouter.post('/:id/adminregion/approve', approveByAdminRegion);
 validationRouter.post('/:id/adminregion/reject', rejectByAdminRegion);
 validationRouter.post('/:id/adminregion/resubmit', resubmitByAdminRegion);
+validationRouter.patch('/:id/payload', updatePayloadByAdminRegion);
 
 validationRouter.post('/:id/superadmin/approve', approveBySuperAdmin);
 validationRouter.post('/:id/superadmin/reject', rejectBySuperAdmin);

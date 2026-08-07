@@ -910,6 +910,19 @@ async function listRequestsByEntity({ entityId, role, regionIds }) {
   return enrichRequestsWithActors(data.items || []);
 }
 
+async function updateRequestPayload({ requestId, payloadSnapshot }) {
+  const mutation = `
+    mutation UpdateValidationRequestPayload($id: uuid!, $payloadSnapshot: jsonb!) {
+      item: update_validation_requests_by_pk(pk_columns: { id: $id }, _set: { payload_snapshot: $payloadSnapshot }) {
+        id
+        payload_snapshot
+      }
+    }
+  `;
+  const data = await executeHasura(mutation, { id: requestId, payloadSnapshot });
+  return data.item || null;
+}
+
 async function updateRequestStatus({
   requestId,
   nextStatus,
@@ -2122,6 +2135,7 @@ module.exports = {
   resubmitActiveRequest,
   insertRequestLog,
   createBulkValidationRequests,
+  updateRequestPayload,
   listRequestsByQueue,
   listQualityQueueRequests,
   listRequestsForValidator,

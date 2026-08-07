@@ -18,6 +18,7 @@ const {
   createRequest,
   resubmitActiveRequest,
   insertRequestLog,
+  updateRequestPayload,
   listRequestsByQueue,
   listQualityQueueRequests,
   listRequestsForValidator,
@@ -531,6 +532,50 @@ async function resubmitByAdminRegion(req, res, next) {
   }
 }
 
+async function updatePayloadByAdminRegion(req, res, next) {
+  try {
+    assertValidationWorkflowEnabled();
+    const { actorUserId, actorRole } = getRequestContext(req);
+    if (!isAdminRegion(actorRole)) {
+      throw createHttpError(403, 'Only adminregion can update payload for this request');
+    }
+
+    const request = await loadRequestById(req.params.id);
+    if (!request) throw createHttpError(404, 'Validation request not found');
+    assertHasRegionAccess(req.auth, request.region_id);
+    assertPilotRegionAllowed(request.region_id);
+
+    if (![STATUS.REJECTED_SUPERADMIN, STATUS.PENDING_ASYNC, STATUS.ONGOING].includes(request.current_status)) {
+      throw createHttpError(409, 'Request payload cannot be updated in current status');
+    }
+
+    const nextPayload = req.body?.payload_snapshot || req.body?.payload;
+    if (!nextPayload || typeof nextPayload !== 'object') {
+      throw createHttpError(400, 'payload_snapshot object is required');
+    }
+
+    const updated = await updateRequestPayload({
+      requestId: request.id,
+      payloadSnapshot: nextPayload,
+    });
+
+    await createAuditLog({
+      actorUserId,
+      actionName: 'validation_request_payload_updated_by_adminregion',
+      entityType: 'validation_requests',
+      entityId: request.id,
+      beforeData: { payload_snapshot: request.payload_snapshot },
+      afterData: { payload_snapshot: nextPayload },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] || null,
+    });
+
+    return sendSuccess(res, updated, 'Request payload updated successfully');
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function approveBySuperAdmin(req, res, next) {
   try {
     assertValidationWorkflowEnabled();
@@ -845,6 +890,7 @@ module.exports = {
   approveByAdminRegion,
   rejectByAdminRegion,
   resubmitByAdminRegion,
+  updatePayloadByAdminRegion,
   approveBySuperAdmin,
   rejectBySuperAdmin,
   getValidationRequestHistory,
