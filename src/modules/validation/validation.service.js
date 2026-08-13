@@ -1323,6 +1323,13 @@ const DEVICE_TYPE_APPLY_FIELDS = {
   ],
 };
 const PORT_APPLY_DEVICE_TYPES = new Set(['ODP', 'ODC', 'OLT', 'ONT', 'SWITCH', 'ROUTER', 'OTB']);
+const VALID_DEVICE_STATUSES = new Set(['draft', 'installed', 'active', 'inactive', 'maintenance', 'retired']);
+
+function normalizeDeviceStatus(status) {
+  if (!status) return null;
+  const normalized = String(status).trim().toLowerCase();
+  return VALID_DEVICE_STATUSES.has(normalized) ? normalized : null;
+}
 
 function normalizeDeviceTypeKey(value) {
   const normalized = String(value || '').trim().toUpperCase();
@@ -1369,7 +1376,7 @@ function buildGenericFieldValidationPayload({ payloadSnapshot = {}, device = {} 
       ...(payload.general_validation && typeof payload.general_validation === 'object' ? payload.general_validation : {}),
       ...compactObject({
         device_name: legacyFieldValidation.new_device_name || legacyFieldValidation.old_device_name,
-        status: legacyFieldValidation.validation_status,
+        validation_status: legacyFieldValidation.validation_status,
         address: legacyFieldValidation.address,
         longitude: legacyFieldValidation.longitude,
         latitude: legacyFieldValidation.latitude,
@@ -1884,6 +1891,14 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
   const currentPortByIndex = new Map(before.ports.map((port) => [Number(port.port_index), port]));
 
   const deviceChanges = pickObject(payloadDevice, getAllowedDeviceApplyFields(deviceTypeKey));
+  if (deviceChanges.status) {
+    const validStatus = normalizeDeviceStatus(deviceChanges.status);
+    if (validStatus) {
+      deviceChanges.status = validStatus;
+    } else {
+      delete deviceChanges.status;
+    }
+  }
   // `validation_requests.current_status` uses `validated`,
   // while `devices.validation_status` still uses legacy enum (`valid|warning|invalid|unvalidated`).
   deviceChanges.validation_status = 'valid';
@@ -2015,6 +2030,14 @@ async function applyAdminRegionCreateDeviceRequest({ request }) {
     'image_attachment_id',
     'image_attachments',
   ]);
+  if (deviceChanges.status) {
+    const validStatus = normalizeDeviceStatus(deviceChanges.status);
+    if (validStatus) {
+      deviceChanges.status = validStatus;
+    } else {
+      delete deviceChanges.status;
+    }
+  }
   deviceChanges.deleted_at = null;
   deviceChanges.deleted_by_user_id = null;
 
