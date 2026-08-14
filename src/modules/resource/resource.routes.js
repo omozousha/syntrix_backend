@@ -6196,7 +6196,7 @@ resourceRouter.post('/attachments/upload', authenticate, requireRole('admin', 'u
         entity_type: req.body.entity_type || null,
         entity_id: req.body.entity_id || null,
         file_category: req.body.file_category || 'document',
-        original_name: req.file.originalname,
+        original_name: uploadOriginalName,
         stored_name: storageFile.name || uploadOriginalName,
         mime_type: uploadMimeType,
         extension,
