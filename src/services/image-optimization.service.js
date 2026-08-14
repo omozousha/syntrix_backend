@@ -1,5 +1,3 @@
-const sharp = require('sharp');
-
 /**
  * Image Optimization Service using Sharp.
  * Generates 3 variants:
@@ -10,6 +8,14 @@ const sharp = require('sharp');
 async function processImageBuffer(inputBuffer, filename = 'image.jpg') {
   if (!Buffer.isBuffer(inputBuffer) || inputBuffer.length === 0) {
     throw new Error('Invalid or empty image buffer supplied.');
+  }
+
+  let sharp;
+  try {
+    sharp = require('sharp');
+  } catch (err) {
+    console.error('Sharp module failed to load:', err.message);
+    throw new Error('Image optimization service unavailable (sharp library not loaded).');
   }
 
   const sharpInstance = sharp(inputBuffer);
