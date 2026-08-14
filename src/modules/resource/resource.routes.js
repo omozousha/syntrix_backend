@@ -36,6 +36,7 @@ const upload = multer({
   },
 });
 
+const { processImageBuffer } = require('../../services/image-optimization.service');
 const resourceRouter = express.Router();
 const DEFAULT_QR_LABEL_FOOTER = 'Scan QR untuk membuka detail/validasi Device';
 const REFERENCE_DATA_GROUPS = {
@@ -356,6 +357,8 @@ async function loadPublicQrDeviceContext(deviceId) {
     region_id: device.region_id || null,
     device_type_key: device.device_type_key || null,
     device_name: device.device_name || device.device_code || device.device_id || null,
+    latitude: device.latitude != null ? Number(device.latitude) : pop?.latitude != null ? Number(pop.latitude) : null,
+    longitude: device.longitude != null ? Number(device.longitude) : pop?.longitude != null ? Number(pop.longitude) : null,
     region: region
       ? {
           id: region.id,
@@ -6090,11 +6093,42 @@ resourceRouter.post('/attachments/upload', authenticate, requireRole('admin', 'u
       }
     }
 
+    let mainBuffer = req.file.buffer;
+    let thumbBuffer = null;
+    let blurDataUrl = null;
+    let isOptimized = false;
+    let imageWidth = null;
+    let imageHeight = null;
+    let originalSizeBytes = req.file.size;
+    let finalSizeBytes = req.file.size;
+    let thumbSizeBytes = null;
+    let uploadMimeType = req.file.mimetype;
+    let uploadOriginalName = req.file.originalname;
+
+    // Run Sharp image optimization pipeline if image file
+    if (fileCategory === 'image' || (req.file.mimetype && req.file.mimetype.startsWith('image/'))) {
+      try {
+        const optResult = await processImageBuffer(req.file.buffer, req.file.originalname);
+        mainBuffer = optResult.mainBuffer;
+        thumbBuffer = optResult.thumbBuffer;
+        blurDataUrl = optResult.blurDataUrl;
+        imageWidth = optResult.width;
+        imageHeight = optResult.height;
+        finalSizeBytes = optResult.sizeBytes;
+        thumbSizeBytes = optResult.thumbSizeBytes;
+        uploadMimeType = optResult.mimeType;
+        uploadOriginalName = optResult.filename;
+        isOptimized = true;
+      } catch (optError) {
+        console.warn('Image optimization skipped, fallback to raw buffer:', optError.message);
+      }
+    }
+
     const bucketId = req.body.bucket_id || env.defaultStorageBucket;
     const formData = new FormData();
-    formData.append('file[]', req.file.buffer, {
-      filename: req.file.originalname,
-      contentType: req.file.mimetype,
+    formData.append('file[]', mainBuffer, {
+      filename: uploadOriginalName,
+      contentType: uploadMimeType,
     });
     formData.append('bucket-id', bucketId);
 
@@ -6106,7 +6140,31 @@ resourceRouter.post('/attachments/upload', authenticate, requireRole('admin', 'u
     });
 
     const storageFile = uploadResponse.data?.processedFiles?.[0] || uploadResponse.data;
-    const extension = req.file.originalname.includes('.') ? req.file.originalname.split('.').pop().toLowerCase() : null;
+
+    // If thumbnail was generated, upload thumbnail variant to Nhost Storage as well
+    let thumbStorageFile = null;
+    if (thumbBuffer && storageFile?.id) {
+      try {
+        const thumbFormData = new FormData();
+        thumbFormData.append('file[]', thumbBuffer, {
+          filename: `thumb_${uploadOriginalName}`,
+          contentType: uploadMimeType,
+        });
+        thumbFormData.append('bucket-id', bucketId);
+
+        const thumbResponse = await nhostStorageClient.post('/files', thumbFormData, {
+          headers: {
+            ...thumbFormData.getHeaders(),
+            Authorization: `Bearer ${req.auth.token}`,
+          },
+        });
+        thumbStorageFile = thumbResponse.data?.processedFiles?.[0] || thumbResponse.data;
+      } catch (thumbErr) {
+        console.warn('Thumbnail upload to Nhost storage skipped:', thumbErr.message);
+      }
+    }
+
+    const extension = uploadOriginalName.includes('.') ? uploadOriginalName.split('.').pop().toLowerCase() : null;
 
     const mutation = `
       mutation InsertAttachment($object: attachments_insert_input!) {
@@ -6139,14 +6197,21 @@ resourceRouter.post('/attachments/upload', authenticate, requireRole('admin', 'u
         entity_id: req.body.entity_id || null,
         file_category: req.body.file_category || 'document',
         original_name: req.file.originalname,
-        stored_name: storageFile.name || req.file.originalname,
-        mime_type: req.file.mimetype,
+        stored_name: storageFile.name || uploadOriginalName,
+        mime_type: uploadMimeType,
         extension,
-        size_bytes: req.file.size,
+        size_bytes: finalSizeBytes,
         is_public: String(req.body.is_public || 'false') === 'true',
         metadata: {
           source: 'nhost-storage',
           upload_response: storageFile,
+          is_optimized: isOptimized,
+          width: imageWidth,
+          height: imageHeight,
+          blur_data_url: blurDataUrl,
+          original_size_bytes: originalSizeBytes,
+          thumb_storage_file_id: thumbStorageFile?.id || null,
+          thumb_size_bytes: thumbSizeBytes || null,
         },
         uploaded_by_user_id: req.auth.appUser.id,
       },
