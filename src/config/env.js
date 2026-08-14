@@ -17,9 +17,10 @@ function toCsvList(value, fallback = '') {
 
 function toCorsOrigins(value) {
   return Array.from(new Set([
-    ...toCsvList(value, 'http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,https://syntrix-one.vercel.app'),
+    ...toCsvList(value, 'http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,https://syntrix.vercel.app,https://syntrix-one.vercel.app'),
     'http://localhost', 'https://localhost', 'capacitor://localhost',
     'http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000',
+    'https://syntrix.vercel.app',
   ]));
 }
 
