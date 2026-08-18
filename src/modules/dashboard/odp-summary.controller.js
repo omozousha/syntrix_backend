@@ -1,27 +1,25 @@
 const { getOdpSummary } = require('./summary.service');
 
+function isUuidLike(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || ''));
+}
+
 async function getSummary(req, res, next) {
   try {
-    const regionIds = req.auth?.regions || [];
-    const popId = req.query.pop_id;
-    const projectId = req.query.project_id;
+    const authRegions = (req.auth?.regions || []).filter(isUuidLike);
+    const queryRegionId = String(req.query.region_id || '').trim();
 
-    // Validate scope filters - more lenient UUID check
-    if (popId && (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(popId))) {
-      // For now, accept any non-empty string as potential UUID
-      // Database will handle invalid UUIDs
-    }
+    const regionIds = authRegions.length
+      ? (queryRegionId && authRegions.includes(queryRegionId) ? [queryRegionId] : authRegions)
+      : (isUuidLike(queryRegionId) ? [queryRegionId] : []);
 
-    console.log('ODP Summary Request:', { regionCount: regionIds.length, popId, projectId });
-    
-    const summary = await getOdpSummary(regionIds, popId || null, projectId || null);
+    const popId = String(req.query.pop_id || '').trim() || null;
+    const projectId = String(req.query.project_id || '').trim() || null;
 
-    console.log('ODP Summary Response:', { odpTotal: summary.odp.total, popsCount: summary.pops.length });
-    
+    const summary = await getOdpSummary(regionIds, popId, projectId);
+
     return res.json({ success: true, data: summary });
   } catch (error) {
-    console.error('ODP Summary Error:', error.message);
-    console.error(error.stack);
     next(error);
   }
 }
