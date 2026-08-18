@@ -93,6 +93,13 @@ async function getOdpSummary(regionIds = [], popId = null, projectId = null) {
       executeHasuraSql(popsPortsSql),
     ]);
 
+    console.log('SQL Results received:', {
+      mainRows: mainResult.result?.length || 0,
+      portRows: portMetricsResult.result?.length || 0,
+      popBreakdownRows: popsBreakdownResult.result?.length || 0,
+      popPortRows: popsPortsResult.result?.length || 0,
+    });
+    
     const mainRow = Array.isArray(mainResult.result) && mainResult.result.length > 1
       ? mainResult.result[1]
       : mainResult.result?.[0];
@@ -103,6 +110,7 @@ async function getOdpSummary(regionIds = [], popId = null, projectId = null) {
     
     const parseRow = (result) => {
       const rows = result?.result || [];
+      if (!rows.length) return [];
       const headers = rows[0] || [];
       const dataRows = rows.slice(1);
       return dataRows.map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index]])));
@@ -152,6 +160,8 @@ async function getOdpSummary(regionIds = [], popId = null, projectId = null) {
       };
     });
 
+    console.log('ODP Summary constructed:', { odp: { total, validated }, popsCount: pops.length });
+
     return {
       odp: {
         total,
@@ -167,6 +177,8 @@ async function getOdpSummary(regionIds = [], popId = null, projectId = null) {
       pops,
     };
   } catch (error) {
+    console.error('getOdpSummary Error:', error.message);
+    console.error(error.stack);
     throw createHttpError(500, error.message || 'Failed to fetch ODP summary');
   }
 }
