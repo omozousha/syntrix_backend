@@ -24,13 +24,14 @@ function isUuidLike(value) {
 async function getOdpSummary(regionIds = [], popId = null, projectId = null) {
   const deviceRegion = regionInClause(regionIds, 'd.region_id');
 
-  const popFilter = popId && isUuidLike(popId) ? ` and d.pop_id = '${escapeSqlLiteral(popId)}'::uuid` : '';
+  const popFilter = popId && popId !== '__null__' && isUuidLike(popId) ? ` and d.pop_id = '${escapeSqlLiteral(popId)}'::uuid` : '';
+  const popIsNullFilter = popId === '__null__' ? ' and d.pop_id is null' : '';
   const projectFilter = projectId && isUuidLike(projectId) ? ` and d.project_id = '${escapeSqlLiteral(projectId)}'::uuid` : '';
 
   const mainSql = `
     select
-      (select count(*)::int from public.devices d where d.deleted_at is null and upper(d.device_type_key) = 'ODP' ${deviceRegion}${popFilter}${projectFilter}) as total,
-      (select count(*)::int from public.devices d where d.deleted_at is null and upper(d.device_type_key) = 'ODP' and (d.validation_status = 'valid' or d.validation_date is not null or d.last_validation_at is not null) ${deviceRegion}${popFilter}${projectFilter}) as validated
+      (select count(*)::int from public.devices d where d.deleted_at is null and upper(d.device_type_key) = 'ODP' ${deviceRegion}${popFilter}${popIsNullFilter}${projectFilter}) as total,
+      (select count(*)::int from public.devices d where d.deleted_at is null and upper(d.device_type_key) = 'ODP' and (d.validation_status = 'valid' or d.validation_date is not null or d.last_validation_at is not null) ${deviceRegion}${popFilter}${popIsNullFilter}${projectFilter}) as validated
   `;
 
   const portMetricsSql = `
@@ -40,7 +41,7 @@ async function getOdpSummary(regionIds = [], popId = null, projectId = null) {
     from public.devices d
     where d.deleted_at is null
       and upper(d.device_type_key) = 'ODP'
-      ${deviceRegion}${popFilter}${projectFilter}
+      ${deviceRegion}${popFilter}${popIsNullFilter}${projectFilter}
   `;
 
   const popsBreakdownSql = `
@@ -54,7 +55,7 @@ async function getOdpSummary(regionIds = [], popId = null, projectId = null) {
       from public.devices d
       where d.deleted_at is null
         and upper(d.device_type_key) = 'ODP'
-        ${deviceRegion}${popFilter}${projectFilter}
+        ${deviceRegion}${popFilter}${popIsNullFilter}${projectFilter}
     )
     select
       coalesce(owp.pop_id::text, 'null') as pop_id,
@@ -75,7 +76,7 @@ async function getOdpSummary(regionIds = [], popId = null, projectId = null) {
     from public.devices d
     where d.deleted_at is null
       and upper(d.device_type_key) = 'ODP'
-      ${deviceRegion}${popFilter}${projectFilter}
+      ${deviceRegion}${popFilter}${popIsNullFilter}${projectFilter}
     group by d.pop_id
   `;
 

@@ -13,7 +13,20 @@ function buildWhereClause(config, query, auth) {
 
   for (const key of filterKeys) {
     if (query[key] != null && query[key] !== '') {
-      andConditions.push({ [key]: { _eq: query[key] } });
+      const rawValue = String(query[key]);
+      if (rawValue === '__null__') {
+        andConditions.push({ [key]: { _is_null: true } });
+      } else if (key === 'validation_status' && rawValue === '__unvalidated__') {
+        andConditions.push({
+          _or: [
+            { validation_status: { _is_null: true } },
+            { validation_status: { _eq: '' } },
+            { validation_status: { _eq: 'unvalidated' } },
+          ],
+        });
+      } else {
+        andConditions.push({ [key]: { _eq: query[key] } });
+      }
     }
   }
 
