@@ -10,6 +10,8 @@ const controller = require('./resource.controller');
 const { createHttpError } = require('../../utils/httpError');
 const { nhostAuthClient, nhostStorageClient } = require('../../config/nhost');
 const { executeHasura, executeHasuraSql } = require('../../config/hasura');
+const { query: dbQuery } = require('../../config/db');
+const { uploadFile: r2Upload, getPublicUrl: r2PublicUrl, getFileStream: r2GetStream, deleteFile: r2Delete } = require('../../services/r2.service');
 const { sendSuccess } = require('../../utils/response');
 const { buildWhereClause, listResources } = require('../../shared/resource.service');
 const { createAuditLog } = require('../../shared/audit.service');
@@ -2563,72 +2565,24 @@ async function loadAttachmentById(id) {
   if (!identifier) return null;
 
   if (isUuidLike(identifier)) {
-    const queryByPk = `
-      query LoadAttachmentByPk($id: uuid!) {
-        item: attachments_by_pk(id: $id) {
-          id
-          attachment_id
-          storage_file_id
-          original_name
-          mime_type
-          size_bytes
-          metadata
-          entity_type
-          entity_id
-          uploaded_by_user_id
-          created_at
-        }
-      }
-    `;
-    const dataByPk = await executeHasura(queryByPk, { id: identifier });
-    if (dataByPk.item) return dataByPk.item;
+    const resPk = await dbQuery(
+      `SELECT id, attachment_id, storage_file_id, original_name, mime_type, size_bytes, metadata, entity_type, entity_id, uploaded_by_user_id, created_at FROM public.attachments WHERE id = $1 LIMIT 1`,
+      [identifier]
+    );
+    if (resPk.rows[0]) return resPk.rows[0];
 
-    const queryByStorageId = `
-      query LoadAttachmentByStorageId($storageId: uuid!) {
-        items: attachments(
-          where: { storage_file_id: { _eq: $storageId } }
-          limit: 1
-        ) {
-          id
-          attachment_id
-          storage_file_id
-          original_name
-          mime_type
-          size_bytes
-          metadata
-          entity_type
-          entity_id
-          uploaded_by_user_id
-          created_at
-        }
-      }
-    `;
-    const dataByStorageId = await executeHasura(queryByStorageId, { storageId: identifier });
-    if (dataByStorageId.items?.[0]) return dataByStorageId.items[0];
+    const resStorage = await dbQuery(
+      `SELECT id, attachment_id, storage_file_id, original_name, mime_type, size_bytes, metadata, entity_type, entity_id, uploaded_by_user_id, created_at FROM public.attachments WHERE storage_file_id = $1 LIMIT 1`,
+      [identifier]
+    );
+    if (resStorage.rows[0]) return resStorage.rows[0];
   }
 
-  const queryByAttachmentCode = `
-    query LoadAttachmentByCode($attachmentCode: String!) {
-      items: attachments(
-        where: { attachment_id: { _eq: $attachmentCode } }
-        limit: 1
-      ) {
-        id
-        attachment_id
-        storage_file_id
-        original_name
-        mime_type
-        size_bytes
-        metadata
-        entity_type
-        entity_id
-        uploaded_by_user_id
-        created_at
-      }
-    }
-  `;
-  const dataByCode = await executeHasura(queryByAttachmentCode, { attachmentCode: identifier });
-  return dataByCode.items?.[0] || null;
+  const resCode = await dbQuery(
+    `SELECT id, attachment_id, storage_file_id, original_name, mime_type, size_bytes, metadata, entity_type, entity_id, uploaded_by_user_id, created_at FROM public.attachments WHERE attachment_id = $1 LIMIT 1`,
+    [identifier]
+  );
+  return resCode.rows[0] || null;
 }
 
 function buildAttachmentStorageCandidates(attachment) {

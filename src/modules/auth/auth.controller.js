@@ -13,7 +13,7 @@ const {
   createAppUser,
   countAppUsers,
   findAppUserByEmail,
-  findAuthUserByEmail,
+  findAppUserByAuthUserId,
   activateAppUserByAuthUserId,
   insertUserRegionScopes,
   loadAttachmentById,
@@ -21,6 +21,8 @@ const {
   cleanupUnusedAvatarAttachment,
   listOrphanAvatarAttachments,
   cleanupOrphanAvatarAttachments,
+  signAccessToken,
+  signRefreshToken,
 } = require('./auth.service');
 
 function assertCanRegisterUser(auth, payload) {
@@ -110,24 +112,20 @@ async function createSyntrixUser(payload) {
     throw createHttpError(409, 'A Syntrix user with this email already exists');
   }
 
-  let authUser = await findAuthUserByEmail(email);
+  let authUser = null;
+  try {
+    authUser = await signUpUser({ email, password, displayName: full_name });
+  } catch (signupError) {
+    if (signupError.code !== 'auth/email-already-exists') {
+      throw createHttpError(500, signupError.message || 'Failed to create auth user');
+    }
+  }
 
   if (!authUser) {
-    await signUpUser({
-      email,
-      password,
-      displayName: full_name,
-      metadata,
-      redirectTo: email_redirect_to || env.nhostEmailRedirectTo || '',
-    });
-    authUser = await findAuthUserByEmail(email);
+    throw createHttpError(500, 'Auth user creation failed');
   }
 
-  const authUserId = authUser?.id;
-
-  if (!authUserId) {
-    throw createHttpError(500, 'Nhost signup succeeded but auth user id was not returned');
-  }
+  const authUserId = authUser.uid;
 
   const appUser = await createAppUser({
     auth_user_id: authUserId,
@@ -160,7 +158,8 @@ async function login(req, res, next) {
       throw createHttpError(400, 'email and password are required');
     }
 
-    const data = await loginWithPassword(email, password);
+    // Sign in via Firebase and get ID token
+    const authResult = await loginWithPassword(email, password);
     const appUser = await findAppUserByEmail(email);
 
     if (!appUser) {
@@ -173,14 +172,37 @@ async function login(req, res, next) {
       if (!pendingVerification) {
         throw createHttpError(403, 'User is inactive in Syntrix');
       }
-
-      const authUser = await findAuthUserByEmail(email);
-      if (!authUser?.emailVerified) {
-        throw createHttpError(403, 'Please verify your email before logging in');
-      }
-
-      await activateAppUserByAuthUserId(authUser.id);
     }
+
+    // Issue custom JWT access token (same format expected by existing frontend)
+    const uid = authResult.uid;
+    const accessToken = signAccessToken({
+      uid,
+      sub: uid,
+      email,
+      role: appUser.role_name,
+      'https://hasura.io/jwt/claims': {
+        'x-hasura-default-role': appUser.role_name,
+        'x-hasura-role': appUser.role_name,
+        'x-hasura-allowed-roles': [appUser.role_name],
+        'x-hasura-user-id': uid,
+      },
+    });
+    const refreshToken = signRefreshToken({ uid, email });
+
+    const session = {
+      accessToken,
+      refreshToken,
+      accessTokenExpiresIn: 7 * 24 * 60 * 60, // 7 days
+      user: {
+        id: appUser.id,
+        uid,
+        email: appUser.email,
+        full_name: appUser.full_name,
+        role: appUser.role_name,
+        default_region_id: appUser.default_region_id,
+      },
+    };
 
     await createAuditLog({
       actorUserId: appUser.id,
@@ -197,9 +219,9 @@ async function login(req, res, next) {
       userAgent: req.get('user-agent'),
     });
 
-    return sendSuccess(res, data, 'Login successful');
+    return sendSuccess(res, { session }, 'Login successful');
   } catch (error) {
-    return next(createHttpError(error.response?.status || 400, error.response?.data?.message || error.message));
+    return next(createHttpError(error.response?.status || 401, error.response?.data?.message || error.message));
   }
 }
 
@@ -319,7 +341,7 @@ async function updateMe(req, res, next) {
       changes.full_name = nextName;
     }
 
-  if (avatar_attachment_id !== undefined) {
+    if (avatar_attachment_id !== undefined) {
       if (avatar_attachment_id === null || avatar_attachment_id === '') {
         const nextMetadata = { ...(req.auth.appUser.metadata || {}) };
         delete nextMetadata.avatar_attachment_id;
@@ -390,14 +412,7 @@ async function updateMe(req, res, next) {
 
 async function signout(req, res, next) {
   try {
-    const { refresh_token } = req.body;
-
-    if (!refresh_token) {
-      throw createHttpError(400, 'refresh_token is required');
-    }
-
-    const data = await logout(refresh_token);
-    return sendSuccess(res, data, 'Logout successful');
+    return sendSuccess(res, { success: true }, 'Logout successful');
   } catch (error) {
     return next(createHttpError(error.response?.status || 400, error.response?.data?.message || error.message));
   }
@@ -450,7 +465,7 @@ async function resetPassword(req, res, next) {
       throw createHttpError(400, 'email is required');
     }
 
-    const data = await requestPasswordReset(email, redirect_to || env.nhostEmailRedirectTo || '');
+    const data = await requestPasswordReset(email);
     const appUser = await findAppUserByEmail(email);
     await createAuditLog({
       actorUserId: appUser?.id || null,

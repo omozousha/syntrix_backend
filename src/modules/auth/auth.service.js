@@ -1,420 +1,251 @@
-const { nhostAuthClient, nhostStorageClient } = require('../../config/nhost');
-const { executeHasura } = require('../../config/hasura');
-const { env } = require('../../config/env');
+const jwt = require('jsonwebtoken');
+const { getFirebaseAdmin } = require('../../config/firebase');
+const { query: dbQuery } = require('../../config/db');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'syntrix-dev-jwt-secret-2026';
+const JWT_EXPIRES_IN = '7d';
+const REFRESH_EXPIRES_IN = '30d';
+
+function signAccessToken(payload) {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+}
+
+function signRefreshToken(payload) {
+  return jwt.sign({ ...payload, type: 'refresh' }, JWT_SECRET, { expiresIn: REFRESH_EXPIRES_IN });
+}
+
+function verifyToken(token) {
+  return jwt.verify(token, JWT_SECRET);
+}
 
 async function loginWithPassword(email, password) {
-  const { data } = await nhostAuthClient.post('/signin/email-password', { email, password });
-  return data;
-}
+  const admin = getFirebaseAdmin();
+  if (!admin) {
+    throw new Error('Firebase Admin SDK not configured');
+  }
 
-function isRedirectToNotAllowed(error) {
-  const message = String(error.response?.data?.message || error.message || '').toLowerCase();
-  return message.includes('redirectto') && message.includes('not allowed');
-}
+  // Firebase Admin SDK can't verify passwords directly
+  // We sign in via Firebase Auth REST API using signInWithPassword
+  const apiKey = process.env.FIREBASE_WEB_API_KEY;
+  const projectId = process.env.FIREBASE_PROJECT_ID;
 
-function createRedirectToNotAllowedError(redirectTo) {
-  const error = new Error(`Nhost rejected verification redirect URL. Add ${redirectTo} to Nhost Auth allowed redirect URLs.`);
-  error.statusCode = 502;
-  return error;
-}
+  if (!apiKey) {
+    throw new Error('FIREBASE_WEB_API_KEY not configured in .env');
+  }
 
-async function signUpUser({ email, password, displayName, metadata = {}, redirectTo = '' }) {
-  const options = {
-    displayName,
-    metadata,
+  const signInUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`;
+  const response = await fetch(signInUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, returnSecureToken: true }),
+  });
+
+  const data = await response.json();
+
+  if (data.error) {
+    throw new Error(data.error.message || 'Login failed');
+  }
+
+  // data contains: localId, idToken, refreshToken, expiresIn
+  const uid = data.localId;
+  const idToken = data.idToken;
+  const refreshTokenFirebase = data.refreshToken;
+  const expiresIn = Number(data.expiresIn) || 3600;
+
+  return {
+    uid,
+    idToken,
+    refreshTokenFirebase,
+    expiresIn,
   };
+}
 
-  if (redirectTo) {
-    options.redirectTo = redirectTo;
-  }
+async function signUpUser({ email, password, displayName }) {
+  const admin = getFirebaseAdmin();
+  if (!admin) throw new Error('Firebase Admin SDK not configured');
 
-  const payload = { email, password, options };
+  const userRecord = await admin.auth().createUser({
+    email,
+    password,
+    displayName,
+    emailVerified: false,
+    disabled: false,
+  });
 
-  try {
-    const { data } = await nhostAuthClient.post('/signup/email-password', payload);
-    return data;
-  } catch (error) {
-    if (redirectTo && isRedirectToNotAllowed(error)) {
-      throw createRedirectToNotAllowedError(redirectTo);
-    }
-    throw error;
-  }
+  return userRecord;
 }
 
 async function logout(refreshToken) {
-  const { data } = await nhostAuthClient.post('/signout', { refreshToken });
-  return data;
+  return { success: true };
 }
 
 async function refreshSession(refreshToken) {
-  const { data } = await nhostAuthClient.post('/token', { refreshToken });
-  return data;
+  try {
+    const decoded = verifyToken(refreshToken);
+    if (decoded.type !== 'refresh') {
+      throw new Error('Invalid refresh token');
+    }
+
+    const newAccessToken = signAccessToken({
+      uid: decoded.uid,
+      email: decoded.email,
+    });
+    const newRefreshToken = signRefreshToken({
+      uid: decoded.uid,
+      email: decoded.email,
+    });
+
+    return {
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+      accessTokenExpiresIn: 7 * 24 * 60 * 60, // 7 days
+    };
+  } catch (err) {
+    throw new Error('Invalid or expired refresh token');
+  }
 }
 
 async function changePassword(token, newPassword) {
-  const { data } = await nhostAuthClient.post(
-    '/user/password',
-    { newPassword },
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    },
-  );
+  const admin = getFirebaseAdmin();
+  if (!admin) throw new Error('Firebase Admin SDK not configured');
 
-  return data;
+  const decoded = verifyToken(token);
+  await admin.auth().updateUser(decoded.uid, { password: newPassword });
+  return { success: true };
 }
 
-async function requestPasswordReset(email, redirectTo = '') {
-  const payload = { email };
+async function requestPasswordReset(email) {
+  const admin = getFirebaseAdmin();
+  if (!admin) throw new Error('Firebase Admin SDK not configured');
 
-  if (redirectTo) {
-    payload.options = { redirectTo };
+  const apiKey = process.env.FIREBASE_WEB_API_KEY;
+  if (!apiKey) {
+    throw new Error('FIREBASE_WEB_API_KEY not configured');
   }
 
-  try {
-    const { data } = await nhostAuthClient.post('/user/password/reset', payload);
-    return data;
-  } catch (error) {
-    if (redirectTo && isRedirectToNotAllowed(error)) {
-      throw createRedirectToNotAllowedError(redirectTo);
-    }
-    throw error;
+  const resetUrl = `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${apiKey}`;
+  const response = await fetch(resetUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ requestType: 'PASSWORD_RESET', email }),
+  });
+
+  const data = await response.json();
+  if (data.error) {
+    throw new Error(data.error.message || 'Password reset failed');
   }
-}
 
-async function createAppUser(object) {
-  const mutation = `
-    mutation CreateAppUser($object: app_users_insert_input!) {
-      item: insert_app_users_one(object: $object) {
-        id
-        user_code
-        auth_user_id
-        full_name
-        email
-        role_name
-        default_region_id
-        is_active
-        avatar_attachment_id
-        metadata
-        created_at
-      }
-    }
-  `;
-
-  const data = await executeHasura(mutation, { object });
-  return data.item;
-}
-
-async function countAppUsers() {
-  const query = `
-    query CountAppUsers {
-      app_users_aggregate {
-        aggregate {
-          count
-        }
-      }
-    }
-  `;
-
-  const data = await executeHasura(query);
-  return data.app_users_aggregate.aggregate.count;
+  return { success: true };
 }
 
 async function findAppUserByEmail(email) {
-  const query = `
-    query FindAppUserByEmail($email: String!) {
-      app_users(where: { email: { _eq: $email } }, limit: 1) {
-        id
-        user_code
-        auth_user_id
-        full_name
-        email
-        role_name
-        default_region_id
-        is_active
-        avatar_attachment_id
-        metadata
-        created_at
-      }
-    }
-  `;
-
-  const data = await executeHasura(query, { email });
-  return data.app_users?.[0] || null;
+  const result = await dbQuery(
+    'SELECT * FROM public.app_users WHERE email = $1 LIMIT 1',
+    [email]
+  );
+  return result.rows[0] || null;
 }
 
-async function findAuthUserByEmail(email) {
-  const query = `
-    query FindAuthUserByEmail($email: citext!) {
-      users(where: { email: { _eq: $email } }, limit: 1) {
-        id
-        email
-        emailVerified
-        displayName
-        createdAt
-      }
-    }
-  `;
+async function findAppUserByAuthUserId(authUserId) {
+  const result = await dbQuery(
+    'SELECT * FROM public.app_users WHERE auth_user_id = $1 LIMIT 1',
+    [authUserId]
+  );
+  return result.rows[0] || null;
+}
 
-  const data = await executeHasura(query, { email });
-  return data.users?.[0] || null;
+async function createAppUser(object) {
+  const keys = Object.keys(object);
+  const vals = Object.values(object);
+  const placeholders = keys.map((_, i) => `$${i + 1}`);
+
+  const result = await dbQuery(
+    `INSERT INTO public.app_users (${keys.join(', ')}) VALUES (${placeholders.join(', ')}) RETURNING *`,
+    vals
+  );
+  return result.rows[0];
+}
+
+async function countAppUsers() {
+  const result = await dbQuery('SELECT COUNT(*)::int as count FROM public.app_users');
+  return result.rows[0].count;
 }
 
 async function activateAppUserByAuthUserId(authUserId) {
-  const mutation = `
-    mutation ActivateAppUserByAuthUserId($authUserId: uuid!) {
-      update_app_users(
-        where: { auth_user_id: { _eq: $authUserId } }
-        _set: { is_active: true }
-      ) {
-        affected_rows
-      }
-    }
-  `;
+  const result = await dbQuery(
+    'UPDATE public.app_users SET is_active = true WHERE auth_user_id = $1',
+    [authUserId]
+  );
+  return result.rowCount || 0;
+}
 
-  const data = await executeHasura(mutation, { authUserId });
-  return data.update_app_users?.affected_rows || 0;
+async function insertUserRegionScopes(appUserId, regionIds = []) {
+  if (!regionIds.length) return [];
+
+  const objects = regionIds.map((regionId) => ({ app_user_id: appUserId, region_id: regionId }));
+  const results = [];
+
+  for (const obj of objects) {
+    const result = await dbQuery(
+      'INSERT INTO public.user_region_scopes (app_user_id, region_id) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING *',
+      [obj.app_user_id, obj.region_id]
+    );
+    if (result.rows[0]) results.push(result.rows[0]);
+  }
+
+  return results;
 }
 
 async function loadAttachmentById(id) {
-  const query = `
-    query LoadAttachmentById($id: uuid!) {
-      item: attachments_by_pk(id: $id) {
-        id
-        storage_file_id
-        entity_type
-        file_category
-        uploaded_by_user_id
-      }
-    }
-  `;
-
-  const data = await executeHasura(query, { id });
-  return data.item || null;
+  const result = await dbQuery('SELECT * FROM public.attachments WHERE id = $1 LIMIT 1', [id]);
+  return result.rows[0] || null;
 }
 
-async function countUsersReferencingAvatar(attachmentId) {
-  const query = `
-    query CountUsersReferencingAvatar($contains: jsonb!, $attachmentId: uuid!) {
-      app_users_aggregate(
-        where: {
-          _or: [
-            { metadata: { _contains: $contains } },
-            { avatar_attachment_id: { _eq: $attachmentId } }
-          ]
-        }
-      ) {
-        aggregate {
-          count
-        }
-      }
-    }
-  `;
+async function updateOwnProfileByAuthUserId(authUserId, changes) {
+  const keys = Object.keys(changes);
+  const vals = Object.values(changes);
+  const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
 
-  const data = await executeHasura(query, {
-    contains: { avatar_attachment_id: attachmentId },
-    attachmentId,
-  });
-
-  return data.app_users_aggregate?.aggregate?.count || 0;
-}
-
-async function deleteAttachmentById(id) {
-  const mutation = `
-    mutation DeleteAttachmentById($id: uuid!) {
-      item: delete_attachments_by_pk(id: $id) {
-        id
-      }
-    }
-  `;
-
-  const data = await executeHasura(mutation, { id });
-  return data.item || null;
-}
-
-async function tryDeleteStorageFileById(storageFileId) {
-  if (!storageFileId) return false;
-
-  try {
-    const response = await nhostStorageClient.delete(`/files/${storageFileId}`, {
-      headers: {
-        'x-hasura-admin-secret': env.hasuraAdminSecret,
-      },
-      validateStatus: (status) => status < 500,
-    });
-
-    return response.status < 400 || response.status === 404;
-  } catch {
-    return false;
-  }
+  const result = await dbQuery(
+    `UPDATE public.app_users SET ${setClause}, updated_at = NOW() WHERE auth_user_id = $${keys.length + 1} RETURNING *`,
+    [...vals, authUserId]
+  );
+  return result.rows[0] || null;
 }
 
 async function cleanupUnusedAvatarAttachment(attachmentId) {
   if (!attachmentId) return false;
-
-  const stillUsed = await countUsersReferencingAvatar(attachmentId);
-  if (stillUsed > 0) {
-    return false;
-  }
-
   const attachment = await loadAttachmentById(attachmentId);
   if (!attachment) return false;
-
-  // Safety guard: cleanup only for user profile images.
   if (attachment.file_category !== 'image') return false;
-  if (attachment.entity_type && attachment.entity_type !== 'user_profile') return false;
 
-  await deleteAttachmentById(attachmentId);
-  await tryDeleteStorageFileById(attachment.storage_file_id);
-  return true;
-}
-
-async function loadUserAvatarAttachmentIds() {
-  const query = `
-    query LoadUserAvatarAttachmentIds {
-      app_users(
-        where: {
-          _or: [
-            { metadata: { _has_key: "avatar_attachment_id" } },
-            { avatar_attachment_id: { _is_null: false } }
-          ]
-        }
-      ) {
-        id
-        avatar_attachment_id
-        metadata
-      }
-    }
-  `;
-
-  const data = await executeHasura(query);
-  const ids = new Set();
-
-  for (const item of data.app_users || []) {
-    const fromMetadata = item?.metadata?.avatar_attachment_id;
-    const fromColumn = item?.avatar_attachment_id;
-    if (fromMetadata) ids.add(fromMetadata);
-    if (fromColumn) ids.add(fromColumn);
-  }
-
-  return Array.from(ids);
-}
-
-async function listAvatarAttachmentCandidates(limit = 100) {
-  const query = `
-    query ListAvatarAttachmentCandidates($limit: Int!) {
-      attachments(
-        where: {
-          entity_type: { _eq: "user_profile" }
-          file_category: { _eq: "image" }
-        }
-        order_by: [{ created_at: desc }]
-        limit: $limit
-      ) {
-        id
-        attachment_id
-        storage_file_id
-        original_name
-        size_bytes
-        uploaded_by_user_id
-        created_at
-      }
-    }
-  `;
-
-  const data = await executeHasura(query, { limit });
-  return data.attachments || [];
+  const result = await dbQuery(
+    'DELETE FROM public.attachments WHERE id = $1 RETURNING id',
+    [attachmentId]
+  );
+  return result.rowCount > 0;
 }
 
 async function listOrphanAvatarAttachments(limit = 100) {
-  const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 1000);
-  const [usedAvatarIds, candidates] = await Promise.all([
-    loadUserAvatarAttachmentIds(),
-    listAvatarAttachmentCandidates(safeLimit),
-  ]);
-
-  const usedSet = new Set(usedAvatarIds);
-  return candidates.filter((item) => !usedSet.has(item.id));
+  const result = await dbQuery(
+    `SELECT * FROM public.attachments
+     WHERE entity_type = 'user_profile' AND file_category = 'image'
+       AND id NOT IN (SELECT avatar_attachment_id FROM public.app_users WHERE avatar_attachment_id IS NOT NULL)
+     ORDER BY created_at DESC
+     LIMIT $1`,
+    [limit]
+  );
+  return result.rows;
 }
 
 async function cleanupOrphanAvatarAttachments(limit = 100) {
   const orphans = await listOrphanAvatarAttachments(limit);
   const results = [];
-
   for (const item of orphans) {
-    await deleteAttachmentById(item.id);
-    await tryDeleteStorageFileById(item.storage_file_id);
-    results.push({
-      id: item.id,
-      attachment_id: item.attachment_id,
-      original_name: item.original_name,
-      cleaned: true,
-    });
+    await dbQuery('DELETE FROM public.attachments WHERE id = $1', [item.id]);
+    results.push({ id: item.id, attachment_id: item.attachment_id, original_name: item.original_name, cleaned: true });
   }
-
-  return {
-    total_orphans: orphans.length,
-    cleaned_count: results.length,
-    cleaned_items: results,
-  };
-}
-
-async function updateOwnProfileByAuthUserId(authUserId, changes) {
-  const mutation = `
-    mutation UpdateOwnProfileByAuthUserId(
-      $authUserId: uuid!,
-      $set: app_users_set_input!
-    ) {
-      item: update_app_users(
-        where: { auth_user_id: { _eq: $authUserId } }
-        _set: $set
-      ) {
-        returning {
-          id
-          user_code
-          auth_user_id
-          full_name
-          email
-          role_name
-          default_region_id
-          is_active
-          avatar_attachment_id
-          metadata
-          updated_at
-        }
-      }
-    }
-  `;
-
-  const data = await executeHasura(mutation, {
-    authUserId,
-    set: changes,
-  });
-
-  return data.item?.returning?.[0] || null;
-}
-
-async function insertUserRegionScopes(appUserId, regionIds = []) {
-  if (!regionIds.length) {
-    return [];
-  }
-
-  const mutation = `
-    mutation InsertScopes($objects: [user_region_scopes_insert_input!]!) {
-      items: insert_user_region_scopes(objects: $objects) {
-        returning {
-          id
-          app_user_id
-          region_id
-        }
-      }
-    }
-  `;
-
-  const objects = regionIds.map((regionId) => ({ app_user_id: appUserId, region_id: regionId }));
-  const data = await executeHasura(mutation, { objects });
-  return data.items.returning;
+  return { total_orphans: orphans.length, cleaned_count: results.length, cleaned_items: results };
 }
 
 module.exports = {
@@ -427,7 +258,7 @@ module.exports = {
   createAppUser,
   countAppUsers,
   findAppUserByEmail,
-  findAuthUserByEmail,
+  findAppUserByAuthUserId,
   activateAppUserByAuthUserId,
   insertUserRegionScopes,
   loadAttachmentById,
@@ -435,6 +266,7 @@ module.exports = {
   cleanupUnusedAvatarAttachment,
   listOrphanAvatarAttachments,
   cleanupOrphanAvatarAttachments,
-  isRedirectToNotAllowed,
-  createRedirectToNotAllowedError,
+  signAccessToken,
+  signRefreshToken,
+  verifyToken,
 };

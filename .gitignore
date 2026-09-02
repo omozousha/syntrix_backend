@@ -14,3 +14,11 @@ build/
 
 *.log
 .continue/
+
+# Database portable binaries & backups (300MB+)
+database/pgsql-portable/
+database/pgdata/
+database/backups/
+database/*.log
+database/*.sql.gz
+database/restore-neon*.log
