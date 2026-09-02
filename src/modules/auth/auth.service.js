@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const { getFirebaseAdmin } = require('../../config/firebase');
 const { query: dbQuery } = require('../../config/db');
+const { env } = require('../../config/env');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'syntrix-dev-jwt-secret-2026';
 const JWT_EXPIRES_IN = '7d';
@@ -26,8 +27,8 @@ async function loginWithPassword(email, password) {
 
   // Firebase Admin SDK can't verify passwords directly
   // We sign in via Firebase Auth REST API using signInWithPassword
-  const apiKey = process.env.FIREBASE_WEB_API_KEY;
-  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const apiKey = env.firebaseWebApiKey;
+  const projectId = env.firebaseProjectId;
 
   if (!apiKey) {
     throw new Error('FIREBASE_WEB_API_KEY not configured in .env');
@@ -118,7 +119,7 @@ async function requestPasswordReset(email) {
   const admin = getFirebaseAdmin();
   if (!admin) throw new Error('Firebase Admin SDK not configured');
 
-  const apiKey = process.env.FIREBASE_WEB_API_KEY;
+  const apiKey = env.firebaseWebApiKey;
   if (!apiKey) {
     throw new Error('FIREBASE_WEB_API_KEY not configured');
   }
