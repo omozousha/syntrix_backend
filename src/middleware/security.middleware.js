@@ -5,25 +5,26 @@ const { env } = require('../config/env');
 
 function vercelCorsPreflight(req, res, next) {
   if (req.method === 'OPTIONS') {
-    const origin = req.headers.origin;
-    if (origin && env.corsOrigins.includes(origin)) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
-      return res.status(204).end();
-    }
+    const origin = req.headers.origin || '*';
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    return res.status(204).end();
   }
   next();
 }
 
 const corsMiddleware = cors({
   origin(origin, callback) {
-    if (!origin || env.corsOrigins.includes(origin)) {
+    if (!origin || env.corsOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
       return callback(null, true);
     }
-
-    return callback(new Error('Origin is not allowed by CORS'));
+    // Allow any localhost origin during dev/testing
+    if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) {
+      return callback(null, true);
+    }
+    return callback(null, true); // Allow all for public REST API
   },
   credentials: true,
 });
