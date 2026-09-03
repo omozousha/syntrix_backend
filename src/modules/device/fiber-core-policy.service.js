@@ -1,4 +1,4 @@
-const { executeHasura } = require('../../config/hasura');
+const { query } = require('../../config/db');
 const { createHttpError } = require('../../utils/httpError');
 
 const ACTIVE_CONNECTION_STATUSES = ['active', 'planned', 'cutover'];
@@ -38,50 +38,35 @@ function getEffectiveCoreRange(payload, existing = null) {
 }
 
 async function loadFiberCoreRangePolicyContext({ cableDeviceId, start, end, excludeConnectionId = null }) {
-  const connectionWhere = {
-    cable_device_id: { _eq: cableDeviceId },
-    status: { _in: ACTIVE_CONNECTION_STATUSES },
-    core_start: { _lte: end },
-    core_end: { _gte: start },
-  };
-  if (excludeConnectionId) {
-    connectionWhere.id = { _neq: excludeConnectionId };
-  }
+  const coresRes = await query(
+    `SELECT id, core_no, status, connection_id
+     FROM public.fiber_cores
+     WHERE cable_device_id = $1 AND core_no >= $2 AND core_no <= $3
+     ORDER BY core_no ASC`,
+    [cableDeviceId, start, end]
+  );
 
-  const query = `
-    query LoadFiberCoreRangePolicyContext(
-      $cableDeviceId: uuid!
-      $start: Int!
-      $end: Int!
-      $connectionWhere: port_connections_bool_exp!
-    ) {
-      cores: fiber_cores(
-        where: {
-          cable_device_id: { _eq: $cableDeviceId }
-          core_no: { _gte: $start, _lte: $end }
-        }
-        order_by: { core_no: asc }
-      ) {
-        id
-        core_no
-        status
-        connection_id
-      }
-      overlaps: port_connections(
-        where: $connectionWhere
-        limit: 5
-        order_by: { updated_at: desc }
-      ) {
-        id
-        connection_id
-        core_start
-        core_end
-        status
-      }
-    }
+  const overlapParams = [cableDeviceId, ACTIVE_CONNECTION_STATUSES, end, start];
+  let overlapSql = `
+    SELECT id, connection_id, core_start, core_end, status
+    FROM public.port_connections
+    WHERE cable_device_id = $1
+      AND status = ANY($2::text[])
+      AND core_start <= $3
+      AND core_end >= $4
   `;
+  if (excludeConnectionId) {
+    overlapSql += ` AND id <> $5`;
+    overlapParams.push(excludeConnectionId);
+  }
+  overlapSql += ` ORDER BY updated_at DESC NULLS LAST LIMIT 5`;
 
-  return executeHasura(query, { cableDeviceId, start, end, connectionWhere });
+  const overlapsRes = await query(overlapSql, overlapParams);
+
+  return {
+    cores: coresRes.rows || [],
+    overlaps: overlapsRes.rows || [],
+  };
 }
 
 async function validateFiberCoreRangeForConnection(payload, existing = null) {

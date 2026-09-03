@@ -1,5 +1,5 @@
 const { createHttpError } = require('../../utils/httpError');
-const { executeHasura } = require('../../config/hasura');
+const { query } = require('../../config/db');
 
 const USAGE_MAP = {
   deviceTypes: [
@@ -88,27 +88,18 @@ async function checkUsage(resourceName, recordId, recordData) {
     }
     if (!where) continue;
 
-    const countQuery = `query CountRef {
-        ${ref.table}_aggregate(where: {${where}}) {
-          aggregate { count }
-        }
-      }`;
-
     try {
-      const countResult = await executeHasura(countQuery);
-      const count = countResult?.data?.[`${ref.table}_aggregate`]?.aggregate?.count || 0;
+      const countResult = await query(
+        `SELECT COUNT(*)::int AS count FROM public.${ref.table} WHERE ${where}`
+      );
+      const count = countResult.rows[0]?.count || 0;
       if (count > 0) {
-        const sampleQuery = `query SampleRef {
-            ${ref.table}(where: {${where}}, limit: 3, order_by: {created_at: desc}) {
-              id
-              ${ref.labelField}
-            }
-          }`;
-
         let sample = [];
         try {
-          const sampleResult = await executeHasura(sampleQuery);
-          sample = (sampleResult?.data?.[ref.table] || []).map((item) => ({
+          const sampleResult = await query(
+            `SELECT id, ${ref.labelField} FROM public.${ref.table} WHERE ${where} ORDER BY created_at DESC NULLS LAST LIMIT 3`
+          );
+          sample = sampleResult.rows.map((item) => ({
             id: item.id,
             label: String(item[ref.labelField] || '-'),
           }));

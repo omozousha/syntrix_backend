@@ -1,4 +1,4 @@
-const { executeHasuraSql } = require('../../config/hasura');
+const { pool } = require('../../config/db.js');
 const { createHttpError } = require('../../utils/httpError');
 
 function escapeSqlLiteral(value) {
@@ -11,10 +11,11 @@ function regionInClause(regionIds, column = 'region_id') {
   return `and ${column} in (${ids})`;
 }
 
-function parseRows(response) {
-  const result = response?.result || [];
-  const [headers = [], ...rows] = result;
-  return rows.map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index]])));
+function parseRows(result) {
+  if (!result || !result.rows) return [];
+  return result.rows.map((row) => Object.fromEntries(
+    Object.keys(row).map((key) => [key, row[key]])
+  ));
 }
 
 async function getDashboardSummary(regionIds = []) {
@@ -151,20 +152,20 @@ async function getDashboardSummary(regionIds = []) {
     topOdpPopsResult,
     popsWithoutDeviceResult,
   ] = await Promise.all([
-    executeHasuraSql(mainSql),
-    executeHasuraSql(typeSql),
-    executeHasuraSql(deviceStatusSql),
-    executeHasuraSql(deviceByRegionSql),
-    executeHasuraSql(odpByRegionSql),
-    executeHasuraSql(popStatusSql),
-    executeHasuraSql(popByRegionSql),
-    executeHasuraSql(portsByStatusSql),
-    executeHasuraSql(topPopsSql),
-    executeHasuraSql(topOdpPopsSql),
-    executeHasuraSql(popsWithoutDeviceSql),
+    pool.query(mainSql),
+    pool.query(typeSql),
+    pool.query(deviceStatusSql),
+    pool.query(deviceByRegionSql),
+    pool.query(odpByRegionSql),
+    pool.query(popStatusSql),
+    pool.query(popByRegionSql),
+    pool.query(portsByStatusSql),
+    pool.query(topPopsSql),
+    pool.query(topOdpPopsSql),
+    pool.query(popsWithoutDeviceSql),
   ]);
 
-  const [mainRow] = parseRows(mainResult);
+  const mainRow = mainResult.rows[0];
   const deviceByType = parseRows(typeResult);
   const deviceByStatus = parseRows(deviceStatusResult);
   const deviceByRegion = parseRows(deviceByRegionResult);
@@ -239,7 +240,7 @@ async function getValidationProgress({ month, year } = {}) {
     ? new Date(Date.UTC(selectedYear, selectedMonth - 1, 1))
     : new Date(Date.UTC(selectedYear, 0, 1));
   const endDate = selectedMonth
-    ? new Date(Date.UTC(selectedYear, selectedMonth, 0))
+    ? new Date(Date.UTC(selectedMonth, selectedMonth, 0))
     : new Date(Date.UTC(selectedYear, 11, 31));
   const intervalStep = selectedMonth ? '1 day' : '1 month';
   const dateFormatter = selectedMonth ? 'YYYY-MM-DD' : 'YYYY-MM-01';
@@ -292,8 +293,8 @@ async function getValidationProgress({ month, year } = {}) {
     order by region_name asc, point_date asc;
   `;
 
-  const response = await executeHasuraSql(sql);
-  const rows = parseRows(response);
+  const result = await pool.query(sql);
+  const rows = parseRows(result);
   const byRegion = new Map();
 
   rows.forEach((row) => {

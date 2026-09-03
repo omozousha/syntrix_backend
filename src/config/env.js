@@ -71,8 +71,7 @@ const env = {
   serveTestUi: toBoolean(process.env.SERVE_TEST_UI, (process.env.NODE_ENV || 'development') !== 'production'),
   corsOrigins: toCorsOrigins(process.env.CORS_ORIGINS),
   apiBodyLimit: process.env.API_BODY_LIMIT || '10mb',
-  hasuraUrl: getRequired('HASURA_URL'),
-  hasuraAdminSecret: getRequired('HASURA_ADMIN_SECRET'),
+  // hasuraUrl and hasuraAdminSecret removed - using direct PostgreSQL (Neon) only
   nhostAuthUrl: getRequired('NHOST_AUTH_URL', process.env.NHOST_AUTH_URL),
   nhostStorageUrl: getRequired('NHOST_STORAGE_URL'),
   nhostEmailRedirectTo: getPublicEmailRedirect(),

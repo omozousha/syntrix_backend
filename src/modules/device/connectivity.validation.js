@@ -1,5 +1,5 @@
 const { createHttpError } = require('../../utils/httpError');
-const { executeHasura } = require('../../config/hasura');
+const { query } = require('../../config/db');
 
 const LINK_STATUS = new Set(['planning', 'active', 'inactive', 'cutover']);
 const PORT_STATUS = new Set(['idle', 'used', 'reserved', 'down', 'maintenance']);
@@ -88,32 +88,20 @@ function validateDevicePortPayload(payload, mode = 'create') {
 
 async function loadDevicePortDirectionValidationContext(portId) {
   if (!portId) return null;
-  const query = `
-    query LoadDevicePortDirectionContext($id: uuid!) {
-      item: device_ports_by_pk(id: $id) {
-        id
-        device_id
-        direction
-        port_type
-      }
-    }
-  `;
-  const data = await executeHasura(query, { id: portId });
-  return data.item || null;
+  const res = await query(
+    `SELECT id, device_id, direction, port_type FROM public.device_ports WHERE id = $1 LIMIT 1`,
+    [portId]
+  );
+  return res.rows[0] || null;
 }
 
 async function loadDeviceTypeById(deviceId) {
   if (!deviceId) return null;
-  const query = `
-    query LoadDeviceTypeById($id: uuid!) {
-      item: devices_by_pk(id: $id) {
-        id
-        device_type_key
-      }
-    }
-  `;
-  const data = await executeHasura(query, { id: deviceId });
-  return data.item || null;
+  const res = await query(
+    `SELECT id, device_type_key FROM public.devices WHERE id = $1 LIMIT 1`,
+    [deviceId]
+  );
+  return res.rows[0] || null;
 }
 
 async function validatePortDirectionForConnection(payload, existing = null) {

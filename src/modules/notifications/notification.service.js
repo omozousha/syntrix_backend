@@ -1,4 +1,4 @@
-const { executeHasura, ensureHasuraTableTracked } = require('../../config/hasura');
+const { query } = require('../../config/db');
 const { getFirebaseAdmin } = require('../../config/firebase');
 const { env } = require('../../config/env');
 const { getResourceById } = require('../../shared/resource.service');
@@ -79,11 +79,6 @@ function stringifyData(data = {}) {
   }, {});
 }
 
-async function ensureNotificationTablesTracked() {
-  await ensureHasuraTableTracked('user_push_tokens');
-  await ensureHasuraTableTracked('app_notifications');
-}
-
 async function registerPushToken({ userId, token, platform = 'android', deviceId = null, appVersion = null }) {
   const cleanToken = String(token || '').trim();
   if (!cleanToken) {
@@ -92,221 +87,172 @@ async function registerPushToken({ userId, token, platform = 'android', deviceId
     throw error;
   }
 
-  await ensureNotificationTablesTracked();
-  const mutation = `
-    mutation RegisterPushToken($object: user_push_tokens_insert_input!) {
-      item: insert_user_push_tokens_one(
-        object: $object
-        on_conflict: {
-          constraint: uq_user_push_tokens_token
-          update_columns: [user_id, platform, device_id, app_version, is_active, revoked_at, last_seen_at]
-        }
-      ) {
-        id
-        user_id
-        platform
-        is_active
-        last_seen_at
-      }
-    }
+  const sql = `
+    INSERT INTO public.user_push_tokens
+      (user_id, token, platform, device_id, app_version, is_active, revoked_at, last_seen_at)
+    VALUES ($1, $2, $3, $4, $5, true, null, NOW())
+    ON CONFLICT (token) DO UPDATE SET
+      user_id = EXCLUDED.user_id,
+      platform = EXCLUDED.platform,
+      device_id = EXCLUDED.device_id,
+      app_version = EXCLUDED.app_version,
+      is_active = true,
+      revoked_at = null,
+      last_seen_at = NOW()
+    RETURNING id, user_id, platform, is_active, last_seen_at;
   `;
 
-  const data = await executeHasura(mutation, {
-    object: {
-      user_id: userId,
-      token: cleanToken,
-      platform,
-      device_id: deviceId,
-      app_version: appVersion,
-      is_active: true,
-      revoked_at: null,
-      last_seen_at: new Date().toISOString(),
-    },
-  });
-  return data.item;
+  const res = await query(sql, [userId, cleanToken, platform, deviceId, appVersion]);
+  return res.rows[0];
 }
 
 async function revokePushToken({ userId, token }) {
   const cleanToken = String(token || '').trim();
   if (!cleanToken) return { affected_rows: 0 };
 
-  await ensureNotificationTablesTracked();
-  const mutation = `
-    mutation RevokePushToken($userId: uuid!, $token: String!, $now: timestamptz!) {
-      result: update_user_push_tokens(
-        where: { user_id: { _eq: $userId }, token: { _eq: $token } }
-        _set: { is_active: false, revoked_at: $now }
-      ) {
-        affected_rows
-      }
-    }
+  const sql = `
+    UPDATE public.user_push_tokens
+    SET is_active = false, revoked_at = NOW()
+    WHERE user_id = $1 AND token = $2;
   `;
-  const data = await executeHasura(mutation, { userId, token: cleanToken, now: new Date().toISOString() });
-  return data.result;
+  const res = await query(sql, [userId, cleanToken]);
+  return { affected_rows: res.rowCount };
 }
 
 async function listUserNotifications({ userId, limit = 30 }) {
-  await ensureNotificationTablesTracked();
-  const query = `
-    query ListUserNotifications($userId: uuid!, $limit: Int!) {
-      items: app_notifications(
-        where: { recipient_user_id: { _eq: $userId } }
-        order_by: [{ created_at: desc }]
-        limit: $limit
-      ) {
-        id
-        notification_type
-        title
-        body
-        data
-        entity_type
-        entity_id
-        request_id
-        region_id
-        read_at
-        pushed_at
-        created_at
-      }
-      unread: app_notifications_aggregate(
-        where: { recipient_user_id: { _eq: $userId }, read_at: { _is_null: true } }
-      ) {
-        aggregate { count }
-      }
-    }
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 30, 100));
+
+  const itemsSql = `
+    SELECT
+      id,
+      notification_type,
+      title,
+      body,
+      data,
+      entity_type,
+      entity_id,
+      request_id,
+      region_id,
+      read_at,
+      pushed_at,
+      created_at
+    FROM public.app_notifications
+    WHERE recipient_user_id = $1
+    ORDER BY created_at DESC
+    LIMIT $2;
   `;
-  const data = await executeHasura(query, { userId, limit: Math.max(1, Math.min(Number(limit) || 30, 100)) });
+
+  const countSql = `
+    SELECT COUNT(*)::int AS unread_count
+    FROM public.app_notifications
+    WHERE recipient_user_id = $1 AND read_at IS NULL;
+  `;
+
+  const [itemsRes, countRes] = await Promise.all([
+    query(itemsSql, [userId, safeLimit]),
+    query(countSql, [userId]),
+  ]);
+
   return {
-    unread_count: data.unread?.aggregate?.count || 0,
-    items: data.items || [],
+    unread_count: countRes.rows[0]?.unread_count || 0,
+    items: itemsRes.rows || [],
   };
 }
 
 async function markNotificationRead({ userId, notificationId }) {
-  await ensureNotificationTablesTracked();
-  const mutation = `
-    mutation MarkNotificationRead($userId: uuid!, $id: uuid!, $now: timestamptz!) {
-      result: update_app_notifications(
-        where: { id: { _eq: $id }, recipient_user_id: { _eq: $userId } }
-        _set: { read_at: $now }
-      ) {
-        returning {
-          id
-          recipient_user_id
-          read_at
-        }
-      }
-    }
+  const sql = `
+    UPDATE public.app_notifications
+    SET read_at = NOW()
+    WHERE id = $1 AND recipient_user_id = $2
+    RETURNING id, recipient_user_id, read_at;
   `;
-  const data = await executeHasura(mutation, { userId, id: notificationId, now: new Date().toISOString() });
-  return data.result?.returning?.[0] || null;
+  const res = await query(sql, [notificationId, userId]);
+  return res.rows[0] || null;
 }
 
 async function markAllNotificationsRead({ userId }) {
-  await ensureNotificationTablesTracked();
-  const mutation = `
-    mutation MarkAllNotificationsRead($userId: uuid!, $now: timestamptz!) {
-      result: update_app_notifications(
-        where: { recipient_user_id: { _eq: $userId }, read_at: { _is_null: true } }
-        _set: { read_at: $now }
-      ) {
-        affected_rows
-      }
-    }
+  const sql = `
+    UPDATE public.app_notifications
+    SET read_at = NOW()
+    WHERE recipient_user_id = $1 AND read_at IS NULL;
   `;
-  const data = await executeHasura(mutation, { userId, now: new Date().toISOString() });
-  return data.result || { affected_rows: 0 };
+  const res = await query(sql, [userId]);
+  return { affected_rows: res.rowCount };
 }
 
 async function loadActiveTokens(userIds) {
   if (!userIds.length) return [];
-  await ensureNotificationTablesTracked();
-  const query = `
-    query LoadActivePushTokens($userIds: [uuid!]!) {
-      items: user_push_tokens(
-        where: { user_id: { _in: $userIds }, is_active: { _eq: true } }
-      ) {
-        id
-        user_id
-        token
-      }
-    }
+  const sql = `
+    SELECT id, user_id, token
+    FROM public.user_push_tokens
+    WHERE user_id = ANY($1::uuid[]) AND is_active = true;
   `;
-  const data = await executeHasura(query, { userIds });
-  return data.items || [];
+  const res = await query(sql, [userIds]);
+  return res.rows || [];
 }
 
 async function deactivateTokens(tokens) {
   if (!tokens.length) return;
-  await ensureNotificationTablesTracked();
-  const mutation = `
-    mutation DeactivatePushTokens($tokens: [String!]!, $now: timestamptz!) {
-      update_user_push_tokens(
-        where: { token: { _in: $tokens } }
-        _set: { is_active: false, revoked_at: $now }
-      ) {
-        affected_rows
-      }
-    }
+  const sql = `
+    UPDATE public.user_push_tokens
+    SET is_active = false, revoked_at = NOW()
+    WHERE token = ANY($1::text[]);
   `;
-  await executeHasura(mutation, { tokens, now: new Date().toISOString() });
+  await query(sql, [tokens]);
 }
 
 async function createInboxRows({ userIds, notificationType, title, body, data, entityType, entityId, requestId, regionId }) {
   if (!userIds.length) return [];
-  await ensureNotificationTablesTracked();
-  const mutation = `
-    mutation CreateAppNotifications($objects: [app_notifications_insert_input!]!) {
-      items: insert_app_notifications(objects: $objects) {
-        returning {
-          id
-          recipient_user_id
-        }
-      }
-    }
+
+  const values = [];
+  const placeholders = [];
+  let idx = 1;
+
+  for (const userId of userIds) {
+    placeholders.push(`($${idx}, $${idx + 1}, $${idx + 2}, $${idx + 3}, $${idx + 4}, $${idx + 5}, $${idx + 6}, $${idx + 7}, $${idx + 8})`);
+    values.push(
+      userId,
+      notificationType,
+      title,
+      body,
+      data ? JSON.stringify(data) : null,
+      entityType,
+      entityId,
+      requestId,
+      regionId
+    );
+    idx += 9;
+  }
+
+  const sql = `
+    INSERT INTO public.app_notifications
+      (recipient_user_id, notification_type, title, body, data, entity_type, entity_id, request_id, region_id)
+    VALUES ${placeholders.join(', ')}
+    RETURNING id, recipient_user_id;
   `;
-  const objects = userIds.map((userId) => ({
-    recipient_user_id: userId,
-    notification_type: notificationType,
-    title,
-    body,
-    data,
-    entity_type: entityType,
-    entity_id: entityId,
-    request_id: requestId,
-    region_id: regionId,
-  }));
-  const result = await executeHasura(mutation, { objects });
-  return result.items?.returning || [];
+
+  const res = await query(sql, values);
+  return res.rows || [];
 }
 
 async function markRowsPushed(rowIds, pushError = null) {
   if (!rowIds.length) return;
-  const mutation = `
-    mutation MarkRowsPushed($ids: [uuid!]!, $now: timestamptz!, $pushError: String) {
-      update_app_notifications(
-        where: { id: { _in: $ids } }
-        _set: { pushed_at: $now, push_error: $pushError }
-      ) {
-        affected_rows
-      }
-    }
+  const sql = `
+    UPDATE public.app_notifications
+    SET pushed_at = NOW(), push_error = $1
+    WHERE id = ANY($2::uuid[]);
   `;
-  await executeHasura(mutation, { ids: rowIds, now: new Date().toISOString(), pushError });
+  await query(sql, [pushError, rowIds]);
 }
 
 async function markRowsPushError(rowIds, pushError) {
   if (!rowIds.length || !pushError) return;
-  const mutation = `
-    mutation MarkRowsPushError($ids: [uuid!]!, $pushError: String) {
-      update_app_notifications(
-        where: { id: { _in: $ids } }
-        _set: { push_error: $pushError }
-      ) {
-        affected_rows
-      }
-    }
+  const sql = `
+    UPDATE public.app_notifications
+    SET push_error = $1
+    WHERE id = ANY($2::uuid[]);
   `;
-  await executeHasura(mutation, { ids: rowIds, pushError });
+  await query(sql, [pushError, rowIds]);
 }
 
 async function sendNotificationToUsers({
@@ -367,10 +313,10 @@ async function sendNotificationToUsers({
     if (!isPersistent) {
       message.notification = { title, body };
       message.android.notification = {
-          channelId: HIGH_PRIORITY_CHANNEL_ID,
-          priority: 'high',
-          visibility: 'public',
-          sound: 'default',
+        channelId: HIGH_PRIORITY_CHANNEL_ID,
+        priority: 'high',
+        visibility: 'public',
+        sound: 'default',
       };
     }
 
@@ -398,17 +344,6 @@ async function loadDeviceNotificationContext(deviceId) {
   if (!deviceId) return null;
   const identifier = String(deviceId).trim();
   const devicesConfig = getResourceConfig('devices');
-  const deviceFields = `
-        id
-        device_id
-        device_code
-        device_name
-        inventory_id
-        device_type_key
-        asset_group
-        pop_id
-        region_id
-  `;
 
   let device = null;
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(identifier)) {
@@ -416,39 +351,25 @@ async function loadDeviceNotificationContext(deviceId) {
   }
 
   if (!device) {
-    const data = await executeHasura(`
-      query FindDeviceNotificationContext($identifier: String!) {
-        devices(
-          where: {
-            _or: [
-              { device_id: { _eq: $identifier } }
-              { device_code: { _eq: $identifier } }
-              { inventory_id: { _eq: $identifier } }
-            ]
-          }
-          limit: 1
-        ) {
-          ${deviceFields}
-        }
-      }
-    `, { identifier });
-    device = data.devices?.[0] || null;
+    const res = await query(
+      `SELECT id, device_id, device_code, device_name, inventory_id, device_type_key, asset_group, pop_id, region_id
+       FROM public.devices
+       WHERE device_id = $1 OR device_code = $1 OR inventory_id = $1
+       LIMIT 1`,
+      [identifier]
+    );
+    device = res.rows[0] || null;
   }
 
   if (!device) return null;
 
   let pop = null;
   if (device.pop_id) {
-    const popData = await executeHasura(`
-      query LoadPopNotificationContext($id: uuid!) {
-        pop: pops_by_pk(id: $id) {
-          id
-          pop_name
-          pop_code
-        }
-      }
-    `, { id: device.pop_id }).catch(() => ({ pop: null }));
-    pop = popData.pop || null;
+    const popRes = await query(
+      `SELECT id, pop_name, pop_code FROM public.pops WHERE id = $1 LIMIT 1`,
+      [device.pop_id]
+    ).catch(() => ({ rows: [] }));
+    pop = popRes.rows[0] || null;
   }
 
   return {
@@ -461,52 +382,32 @@ async function loadDeviceNotificationContext(deviceId) {
 
 async function listValidatorUserIdsByRegion(regionId) {
   if (!regionId) return [];
-  const data = await executeHasura(`
-    query ListRegionalValidators($regionId: uuid!) {
-      validators: app_users(
-        where: {
-          is_active: { _eq: true }
-          role_name: { _in: ["validator", "user_region"] }
-        }
-      ) { id default_region_id }
-      scopedUsers: user_region_scopes(
-        where: { region_id: { _eq: $regionId } }
-      ) { app_user_id }
-    }
-  `, { regionId });
-
-  const scopedUserIds = new Set((data.scopedUsers || []).map((row) => row.app_user_id));
-  return unique([
-    ...(data.validators || [])
-      .filter((row) => row.default_region_id === regionId || scopedUserIds.has(row.id))
-      .map((row) => row.id),
-  ]);
+  const sql = `
+    SELECT u.id
+    FROM public.app_users u
+    LEFT JOIN public.user_region_scopes s ON s.app_user_id = u.id
+    WHERE u.is_active = true
+      AND u.role_name IN ('validator', 'user_region')
+      AND (u.default_region_id = $1 OR s.region_id = $1);
+  `;
+  const res = await query(sql, [regionId]);
+  return unique(res.rows.map((r) => r.id));
 }
 
 async function filterUserIdsByRegion(userIds, regionId) {
   const ids = unique(userIds);
   if (!ids.length || !regionId) return [];
 
-  const data = await executeHasura(`
-    query FilterNotificationRecipientsByRegion($userIds: [uuid!]!, $regionId: uuid!) {
-      users: app_users(
-        where: { id: { _in: $userIds }, is_active: { _eq: true } }
-      ) {
-        id
-        default_region_id
-      }
-      scopedUsers: user_region_scopes(
-        where: { app_user_id: { _in: $userIds }, region_id: { _eq: $regionId } }
-      ) {
-        app_user_id
-      }
-    }
-  `, { userIds: ids, regionId });
-
-  const scopedUserIds = new Set((data.scopedUsers || []).map((row) => row.app_user_id));
-  return unique((data.users || [])
-    .filter((row) => row.default_region_id === regionId || scopedUserIds.has(row.id))
-    .map((row) => row.id));
+  const sql = `
+    SELECT u.id
+    FROM public.app_users u
+    LEFT JOIN public.user_region_scopes s ON s.app_user_id = u.id
+    WHERE u.id = ANY($1::uuid[])
+      AND u.is_active = true
+      AND (u.default_region_id = $2 OR s.region_id = $2);
+  `;
+  const res = await query(sql, [ids, regionId]);
+  return unique(res.rows.map((r) => r.id));
 }
 
 async function notifyValidationRequestStatus({ request, status, actorRole }) {
@@ -614,16 +515,11 @@ async function sendValidationReminder({ deviceId, validatorUserId, actorUserId, 
     throw error;
   }
 
-  const validatorData = await executeHasura(`
-    query LoadReminderValidator($id: uuid!) {
-      validator: app_users_by_pk(id: $id) {
-        id
-        role_name
-        is_active
-      }
-    }
-  `, { id: regionalRecipients[0] });
-  const validator = validatorData.validator || null;
+  const validatorRes = await query(
+    `SELECT id, role_name, is_active FROM public.app_users WHERE id = $1 LIMIT 1`,
+    [regionalRecipients[0]]
+  );
+  const validator = validatorRes.rows[0] || null;
   if (!validator?.is_active || !['validator', 'user_region'].includes(validator.role_name)) {
     const error = new Error('Selected recipient must be an active validator');
     error.statusCode = 400;
