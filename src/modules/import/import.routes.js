@@ -6,7 +6,7 @@ const { authenticate, requireRole } = require('../../middleware/auth.middleware'
 const { env } = require('../../config/env');
 const { createHttpError } = require('../../utils/httpError');
 const { sendSuccess } = require('../../utils/response');
-const { nhostStorageClient } = require('../../config/nhost');
+const { uploadFile: r2Upload } = require('../../services/r2.service');
 const { executeHasura } = require('../../config/hasura');
 const { createAuditLog } = require('../../shared/audit.service');
 const { createBulkValidationRequests, STATUS, ACTION } = require('../validation/validation.service');
@@ -225,22 +225,15 @@ async function resolvePopReferences(rows) {
 }
 
 async function storeImportAttachment(req, file, sourceFormat) {
-  const bucketId = req.body.bucket_id || env.defaultStorageBucket;
-  const formData = new FormData();
-  formData.append('file[]', file.buffer, {
-    filename: file.originalname,
-    contentType: file.mimetype,
-  });
-  formData.append('bucket-id', bucketId);
+  const storageKey = `import_${randomUUID()}_${file.originalname}`;
+  await r2Upload(file.buffer, storageKey, file.mimetype);
 
-  const uploadResponse = await nhostStorageClient.post('/files', formData, {
-    headers: {
-      ...formData.getHeaders(),
-      Authorization: `Bearer ${req.auth.token}`,
-    },
-  });
-
-  const storageFile = uploadResponse.data?.processedFiles?.[0] || uploadResponse.data;
+  const storageFile = {
+    id: storageKey,
+    name: file.originalname,
+    size: file.buffer.length,
+    mimeType: file.mimetype,
+  };
   const extension = file.originalname.includes('.') ? file.originalname.split('.').pop().toLowerCase() : null;
 
   const mutation = `

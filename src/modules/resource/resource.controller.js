@@ -3,7 +3,7 @@ const { validateResourcePayload, translateHasuraError } = require('./resource.va
 const { getPagination } = require('../../utils/pagination');
 const { sendSuccess } = require('../../utils/response');
 const { createHttpError } = require('../../utils/httpError');
-const { nhostStorageClient } = require('../../config/nhost');
+const { deleteFile: r2Delete } = require('../../services/r2.service');
 const { executeHasura, executeHasuraSql } = require('../../config/hasura');
 const { createAuditLog } = require('../../shared/audit.service');
 const { applyResourceNameNormalization } = require('../../utils/nameNormalization');
@@ -1555,21 +1555,9 @@ async function remove(req, res, next) {
 
     if (req.resourceName === 'attachments' && existing.storage_file_id) {
       try {
-        await nhostStorageClient.delete(`/files/${existing.storage_file_id}`, {
-          headers: {
-            Authorization: `Bearer ${req.auth.token}`,
-          },
-        });
+        await r2Delete(existing.storage_file_id);
       } catch (error) {
-        const storageStatus = error.response?.status;
-
-        if (storageStatus !== 404) {
-          throw createHttpError(
-            storageStatus || 500,
-            error.response?.data?.message || error.message || 'Failed to delete file from storage',
-            error.response?.data,
-          );
-        }
+        console.warn(`[R2 Delete Warning] Could not delete key ${existing.storage_file_id}:`, error.message);
       }
     }
 

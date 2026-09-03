@@ -8,7 +8,7 @@ const { authenticate, requireRole } = require('../../middleware/auth.middleware'
 const { getResourceConfig, RESOURCE_CONFIG } = require('./resource.registry');
 const controller = require('./resource.controller');
 const { createHttpError } = require('../../utils/httpError');
-const { nhostAuthClient, nhostStorageClient } = require('../../config/nhost');
+const { nhostAuthClient } = require('../../config/nhost');
 const { executeHasura, executeHasuraSql } = require('../../config/hasura');
 const { query: dbQuery } = require('../../config/db');
 const { uploadFile: r2Upload, getPublicUrl: r2PublicUrl, getFileStream: r2GetStream, deleteFile: r2Delete } = require('../../services/r2.service');
@@ -2608,34 +2608,23 @@ async function fetchAttachmentFromStorage(attachment, token) {
     throw createHttpError(400, 'Attachment has no linked storage file');
   }
 
-  async function requestFile(storageId, useAdminSecret = false) {
-    const headers = useAdminSecret
-      ? { 'x-hasura-admin-secret': env.hasuraAdminSecret }
-      : { Authorization: `Bearer ${token}` };
-    return nhostStorageClient.get(`/files/${storageId}`, {
-      headers,
-      responseType: 'arraybuffer',
-      validateStatus: (status) => status < 500,
-    });
-  }
-
-  let lastResponse = null;
   for (const storageId of candidates) {
-    let response = await requestFile(storageId, false);
-    if ([401, 403, 404].includes(response.status)) {
-      // Fallback for cross-user/private files: backend already authorized access by attachment record.
-      response = await requestFile(storageId, true);
+    try {
+      const stream = await r2GetStream(storageId);
+      if (stream) {
+        const chunks = [];
+        for await (const chunk of stream) {
+          chunks.push(chunk);
+        }
+        const buffer = Buffer.concat(chunks);
+        return { response: { status: 200, data: buffer }, resolvedStorageId: storageId };
+      }
+    } catch (r2Err) {
+      console.warn(`[R2 Storage Fetch] Failed key ${storageId}:`, r2Err.message);
     }
-    if (response.status < 400) {
-      return { response, resolvedStorageId: storageId };
-    }
-    lastResponse = response;
   }
 
-  if (lastResponse?.status === 404) {
-    throw createHttpError(404, 'Storage file not found (attachment exists but file missing in storage)');
-  }
-  throw createHttpError(lastResponse?.status || 502, 'Failed to fetch file from storage', lastResponse?.data);
+  throw createHttpError(404, 'Storage file not found (attachment exists but file missing in storage)');
 }
 
 function getAccountManagerScope(auth) {
@@ -6078,43 +6067,29 @@ resourceRouter.post('/attachments/upload', authenticate, requireRole('admin', 'u
       }
     }
 
-    const bucketId = req.body.bucket_id || env.defaultStorageBucket;
-    const formData = new FormData();
-    formData.append('file[]', mainBuffer, {
-      filename: uploadOriginalName,
-      contentType: uploadMimeType,
-    });
-    formData.append('bucket-id', bucketId);
+    const storageKey = `${randomUUID()}_${uploadOriginalName}`;
+    await r2Upload(mainBuffer, storageKey, uploadMimeType);
 
-    const uploadResponse = await nhostStorageClient.post('/files', formData, {
-      headers: {
-        ...formData.getHeaders(),
-        Authorization: `Bearer ${req.auth.token}`,
-      },
-    });
+    const storageFile = {
+      id: storageKey,
+      name: uploadOriginalName,
+      size: mainBuffer.length,
+      mimeType: uploadMimeType,
+    };
 
-    const storageFile = uploadResponse.data?.processedFiles?.[0] || uploadResponse.data;
-
-    // If thumbnail was generated, upload thumbnail variant to Nhost Storage as well
     let thumbStorageFile = null;
-    if (thumbBuffer && storageFile?.id) {
+    if (thumbBuffer) {
       try {
-        const thumbFormData = new FormData();
-        thumbFormData.append('file[]', thumbBuffer, {
-          filename: `thumb_${uploadOriginalName}`,
-          contentType: uploadMimeType,
-        });
-        thumbFormData.append('bucket-id', bucketId);
-
-        const thumbResponse = await nhostStorageClient.post('/files', thumbFormData, {
-          headers: {
-            ...thumbFormData.getHeaders(),
-            Authorization: `Bearer ${req.auth.token}`,
-          },
-        });
-        thumbStorageFile = thumbResponse.data?.processedFiles?.[0] || thumbResponse.data;
+        const thumbKey = `thumb_${storageKey}`;
+        await r2Upload(thumbBuffer, thumbKey, uploadMimeType);
+        thumbStorageFile = {
+          id: thumbKey,
+          name: `thumb_${uploadOriginalName}`,
+          size: thumbBuffer.length,
+          mimeType: uploadMimeType,
+        };
       } catch (thumbErr) {
-        console.warn('Thumbnail upload to Nhost storage skipped:', thumbErr.message);
+        console.warn('Thumbnail upload to R2 storage skipped:', thumbErr.message);
       }
     }
 
