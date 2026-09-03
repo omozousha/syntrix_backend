@@ -134,7 +134,6 @@ function parseGraphQLArguments(argStr, variables = {}) {
 
 async function executeHasura(queryStr, variables = {}) {
   const cleanStr = queryStr.replace(/#.*$/gm, '').trim();
-  const rootFieldRegex = /(?:([a-zA-Z0-9_]+)\s*:\s*)?([a-zA-Z0-9_]+)\s*(?:\(([^()]*|\((?:[^()]*|\([^()]*\))*\))*\))?/g;
 
   const isMutation = /^\s*mutation/i.test(cleanStr);
   const isQuery = /^\s*query/i.test(cleanStr) || !isMutation;
@@ -252,7 +251,6 @@ async function executeHasura(queryStr, variables = {}) {
         let conflictSql = '';
         if (onConflict && onConflict.update_columns?.length) {
           const updateCols = onConflict.update_columns.map((c) => `"${c}" = EXCLUDED."${c}"`).join(', ');
-          const constraint = onConflict.constraint ? `ON CONSTRAINT "${onConflict.constraint}"` : '';
           conflictSql = `ON CONFLICT DO UPDATE SET ${updateCols}`;
         } else if (onConflict) {
           conflictSql = 'ON CONFLICT DO NOTHING';
@@ -312,14 +310,16 @@ async function executeHasura(queryStr, variables = {}) {
 
       let orderSql = '';
       if (args.order_by || variables.order_by) {
-        const orders = Array.isArray(args.order_by || variables.order_by)
-          ? args.order_by || variables.order_by
-          : [args.order_by || variables.order_by];
+        const rawOrder = args.order_by || variables.order_by;
+        const orders = Array.isArray(rawOrder) ? rawOrder : [rawOrder];
         const orderParts = [];
         orders.forEach((o) => {
-          Object.entries(o).forEach(([col, dir]) => {
-            orderParts.push(`"${col}" ${String(dir).toUpperCase()}`);
-          });
+          if (o && typeof o === 'object') {
+            Object.entries(o).forEach(([col, dir]) => {
+              const cleanDir = String(dir || 'asc').toLowerCase().includes('desc') ? 'DESC' : 'ASC';
+              orderParts.push(`"${col}" ${cleanDir}`);
+            });
+          }
         });
         if (orderParts.length) orderSql = ` ORDER BY ${orderParts.join(', ')}`;
       }
