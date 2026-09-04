@@ -8,11 +8,13 @@ const JWT_EXPIRES_IN = '7d';
 const REFRESH_EXPIRES_IN = '30d';
 
 function signAccessToken(payload) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+  const token = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+  return String(token).replace(/[\r\n\t]/g, '').trim();
 }
 
 function signRefreshToken(payload) {
-  return jwt.sign({ ...payload, type: 'refresh' }, JWT_SECRET, { expiresIn: REFRESH_EXPIRES_IN });
+  const token = jwt.sign({ ...payload, type: 'refresh' }, JWT_SECRET, { expiresIn: REFRESH_EXPIRES_IN });
+  return String(token).replace(/[\r\n\t]/g, '').trim();
 }
 
 function verifyToken(token) {
