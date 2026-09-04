@@ -1,4 +1,5 @@
 const { query } = require('../../config/db');
+const { executeHasura, executeHasuraSql } = require('../../config/hasura');
 
 // ODC_DEVICE_TYPES mencakup device yang berfungsi sebagai upstream source dalam rantai ODP
 // ODC = Optical Distribution Cabinet, OTB = Optical Termination Box

@@ -2700,16 +2700,20 @@ async function loadAuthVerificationMap(authUserIds) {
   const ids = Array.from(new Set((authUserIds || []).filter(Boolean)));
   if (!ids.length) return new Map();
 
-  const query = `
-    query LoadAuthVerification($ids: [uuid!]!) {
-      users(where: { id: { _in: $ids } }) {
-        id
-        emailVerified
+  const queryStr = `
+    query LoadAuthVerification($ids: [String!]!) {
+      items: app_users(where: { auth_user_id: { _in: $ids } }) {
+        auth_user_id
+        is_active
       }
     }
   `;
-  const data = await executeHasura(query, { ids });
-  return new Map((data.users || []).map((item) => [item.id, Boolean(item.emailVerified)]));
+  try {
+    const data = await executeHasura(queryStr, { ids });
+    return new Map((data.items || []).map((item) => [item.auth_user_id, Boolean(item.is_active)]));
+  } catch (err) {
+    return new Map();
+  }
 }
 
 function enrichUsersWithVerification(users, verificationMap) {
