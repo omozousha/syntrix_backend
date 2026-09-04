@@ -1,21 +1,27 @@
 const { S3Client } = require('@aws-sdk/client-s3');
 const { env } = require('./env');
 
+const accountId = String(env.r2AccountId || '').replace(/[\r\n\t\s]/g, '').trim();
+const accessKeyId = String(env.r2AccessKeyId || '').replace(/[\r\n\t\s]/g, '').trim();
+const secretAccessKey = String(env.r2SecretAccessKey || '').replace(/[\r\n\t\s]/g, '').trim();
+const bucketName = String(env.r2BucketName || 'syntrix-storage').replace(/[\r\n\t\s]/g, '').trim();
+const publicUrl = String(env.r2PublicUrl || '').replace(/[\r\n\t\s]/g, '').trim();
+
 const r2Client = new S3Client({
   region: 'auto',
-  endpoint: `https://${env.r2AccountId}.r2.cloudflarestorage.com`,
+  endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
   credentials: {
-    accessKeyId: env.r2AccessKeyId,
-    secretAccessKey: env.r2SecretAccessKey,
+    accessKeyId,
+    secretAccessKey,
   },
   forcePathStyle: true,
 });
 
 const R2_CONFIG = {
-  bucketName: env.r2BucketName || 'syntrix-storage',
-  publicUrl: env.r2PublicUrl || '',
+  bucketName,
+  publicUrl,
   region: 'auto',
-  endpoint: `https://${env.r2AccountId}.r2.cloudflarestorage.com`,
+  endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
 };
 
 function getPublicFileUrl(filename) {
