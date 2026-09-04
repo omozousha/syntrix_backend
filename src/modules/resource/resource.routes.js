@@ -6059,6 +6059,7 @@ resourceRouter.post('/attachments/upload', authenticate, requireRole('admin', 'u
       }
     }
 
+    const bucketId = req.body.bucket_id || env.defaultStorageBucket || 'default';
     const storageKey = `${randomUUID()}_${uploadOriginalName}`;
     await r2Upload(mainBuffer, storageKey, uploadMimeType);
 
@@ -6124,7 +6125,7 @@ resourceRouter.post('/attachments/upload', authenticate, requireRole('admin', 'u
         size_bytes: finalSizeBytes,
         is_public: String(req.body.is_public || 'false') === 'true',
         metadata: {
-          source: 'nhost-storage',
+          source: 'r2-storage',
           upload_response: storageFile,
           is_optimized: isOptimized,
           width: imageWidth,
