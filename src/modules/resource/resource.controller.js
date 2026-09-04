@@ -1051,8 +1051,7 @@ async function list(req, res, next) {
   try {
     const config = req.resourceConfig;
     const { page, limit, offset } = getPagination(req.query);
-    const where = buildWhereClause(config, req.query, req.auth);
-    const data = await listResources(config, { where, limit, offset, orderBy: config.defaultOrderBy });
+    const data = await listResources(config, { ...req.query, limit, offset, orderBy: config.defaultOrderBy, auth: req.auth });
 
     if (req.resourceName === 'deviceTypes') {
       const counts = await executeHasura(`

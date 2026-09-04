@@ -207,13 +207,21 @@ async function listResources(config, options) {
   const offset = Math.max(Number(options.offset) || 0, 0);
 
   const fields = (config.listFields || []).join(', ');
-  const querySource = {
-    ...options,
-    ...(options.where?._and ? flattenWhere(options.where._and) : {}),
-  };
+  let whereSql = '';
+  let params = [];
 
-  const { whereSql, paramIndex } = buildWhereClause(config, querySource, options.auth || {});
-  const params = buildParams(config, querySource, options.auth || {});
+  if (options.where && typeof options.where.whereSql === 'string') {
+    whereSql = options.where.whereSql;
+    params = buildParams(config, options, options.auth || {});
+  } else {
+    const querySource = {
+      ...options,
+      ...(options.where?._and ? flattenWhere(options.where._and) : {}),
+    };
+    const res = buildWhereClause(config, querySource, options.auth || {});
+    whereSql = res.whereSql;
+    params = buildParams(config, querySource, options.auth || {});
+  }
 
   const sql = `
     SELECT ${fields}
