@@ -1,4 +1,5 @@
 const { query } = require('../../config/db');
+const { executeHasura, executeHasuraSql } = require('../../config/hasura');
 
 // ODC Chain Summary Service
 // Mengevaluasi kelengkapan chain ODC: upstream OTB + downstream ODP list + core usage
