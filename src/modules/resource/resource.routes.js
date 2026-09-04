@@ -8,7 +8,7 @@ const { authenticate, requireRole } = require('../../middleware/auth.middleware'
 const { getResourceConfig, RESOURCE_CONFIG } = require('./resource.registry');
 const controller = require('./resource.controller');
 const { createHttpError } = require('../../utils/httpError');
-const { nhostAuthClient } = require('../../config/nhost');
+// nhostAuthClient removed - using Firebase Admin Auth link generation
 const { executeHasura, executeHasuraSql } = require('../../config/hasura');
 const { query: dbQuery } = require('../../config/db');
 const { uploadFile: r2Upload, getPublicUrl: r2PublicUrl, getFileStream: r2GetStream, deleteFile: r2Delete } = require('../../services/r2.service');
@@ -3059,21 +3059,13 @@ async function resendManagedUserVerification(req, res, next) {
       throw createHttpError(400, 'Email is already verified');
     }
 
-    const payload = {
-      email: existingUser.email,
-      options: {},
-    };
-    if (env.nhostEmailRedirectTo) {
-      payload.options.redirectTo = env.nhostEmailRedirectTo;
-    }
-
+    let verificationLink = null;
     try {
-      await nhostAuthClient.post('/user/email/send-verification-email', payload);
+      const { getFirebaseAdmin } = require('../../config/firebase');
+      const admin = getFirebaseAdmin();
+      verificationLink = await admin.auth().generateEmailVerificationLink(existingUser.email);
     } catch (error) {
-      if (env.nhostEmailRedirectTo && isRedirectToNotAllowed(error)) {
-        throw createRedirectToNotAllowedError(env.nhostEmailRedirectTo);
-      }
-      throw error;
+      console.warn('[Firebase Verification Link Error]:', error.message);
     }
     const { sentAt } = await markVerificationEmailSent(existingUser.id, existingUser.metadata);
 

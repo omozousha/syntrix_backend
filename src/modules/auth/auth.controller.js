@@ -475,7 +475,7 @@ async function resetPassword(req, res, next) {
       beforeData: null,
       afterData: {
         email,
-        redirect_to: redirect_to || env.nhostEmailRedirectTo || null,
+        redirect_to: redirect_to || null,
       },
       ipAddress: req.ip,
       userAgent: req.get('user-agent'),
