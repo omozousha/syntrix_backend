@@ -2602,6 +2602,16 @@ function buildAttachmentStorageCandidates(attachment) {
   return candidates;
 }
 
+const FALLBACK_IMAGE_SVG = Buffer.from(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300" fill="none">
+    <rect width="400" height="300" fill="#18181B"/>
+    <rect x="1" y="1" width="398" height="298" rx="12" stroke="#27272A" stroke-width="2"/>
+    <path d="M160 130L190 170L210 150L240 190H160Z" fill="#3F3F46"/>
+    <circle cx="230" cy="130" r="12" fill="#3F3F46"/>
+    <text x="200" y="225" font-family="sans-serif" font-size="12" fill="#71717A" text-anchor="middle">Legacy Image (Nhost Archived)</text>
+  </svg>`
+);
+
 async function fetchAttachmentFromStorage(attachment, token) {
   const candidates = buildAttachmentStorageCandidates(attachment);
   if (!candidates.length) {
@@ -2622,6 +2632,15 @@ async function fetchAttachmentFromStorage(attachment, token) {
     } catch (r2Err) {
       console.warn(`[R2 Storage Fetch] Failed key ${storageId}:`, r2Err.message);
     }
+  }
+
+  // Graceful fallback for legacy Nhost files not present in R2 storage
+  if (attachment.mime_type && attachment.mime_type.startsWith('image/')) {
+    return {
+      response: { status: 200, data: FALLBACK_IMAGE_SVG },
+      resolvedStorageId: 'fallback-placeholder',
+      isFallback: true,
+    };
   }
 
   throw createHttpError(404, 'Storage file not found (attachment exists but file missing in storage)');
@@ -6177,9 +6196,9 @@ resourceRouter.get('/attachments/:id/preview', authenticate, requireRole('admin'
       throw createHttpError(404, 'Attachment not found');
     }
 
-    const { response, resolvedStorageId } = await fetchAttachmentFromStorage(attachment, req.auth.token);
+    const { response, resolvedStorageId, isFallback } = await fetchAttachmentFromStorage(attachment, req.auth.token);
 
-    res.setHeader('Content-Type', attachment.mime_type || 'application/octet-stream');
+    res.setHeader('Content-Type', isFallback ? 'image/svg+xml' : (attachment.mime_type || 'application/octet-stream'));
     res.setHeader('Content-Length', String(response.data.byteLength));
     res.setHeader('X-Resolved-Storage-File-Id', resolvedStorageId);
     res.setHeader('Content-Disposition', `inline; filename="${attachment.original_name || 'attachment'}"`);
