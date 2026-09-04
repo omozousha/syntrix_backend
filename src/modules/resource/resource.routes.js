@@ -6060,11 +6060,12 @@ resourceRouter.post('/attachments/upload', authenticate, requireRole('admin', 'u
     }
 
     const bucketId = req.body.bucket_id || env.defaultStorageBucket || 'default';
-    const storageKey = `${randomUUID()}_${uploadOriginalName}`;
+    const storageFileId = randomUUID();
+    const storageKey = storageFileId;
     await r2Upload(mainBuffer, storageKey, uploadMimeType);
 
     const storageFile = {
-      id: storageKey,
+      id: storageFileId,
       name: uploadOriginalName,
       size: mainBuffer.length,
       mimeType: uploadMimeType,
