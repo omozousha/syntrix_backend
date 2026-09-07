@@ -1,0 +1,7 @@
+database/
+scripts/
+docs/
+node_modules/
+.git/
+*.zip
+*.gz

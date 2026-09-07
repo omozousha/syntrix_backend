@@ -2613,6 +2613,18 @@ const FALLBACK_IMAGE_SVG = Buffer.from(
 );
 
 async function fetchAttachmentFromStorage(attachment, token) {
+  // Graceful immediate fallback for legacy Nhost files no longer accessible in cloud storage
+  if (
+    attachment?.metadata?.source === 'nhost-storage' ||
+    attachment?.metadata?.upload_response?.bucketId === 'default'
+  ) {
+    return {
+      response: { status: 200, data: FALLBACK_IMAGE_SVG },
+      resolvedStorageId: 'fallback-placeholder',
+      isFallback: true,
+    };
+  }
+
   const candidates = buildAttachmentStorageCandidates(attachment);
   if (!candidates.length) {
     throw createHttpError(400, 'Attachment has no linked storage file');

@@ -22,3 +22,8 @@ database/backups/
 database/*.log
 database/*.sql.gz
 database/restore-neon*.log
+
+.vercel
+.env*.local
+scripts/*.ps1
+
