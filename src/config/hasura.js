@@ -96,36 +96,93 @@ function parseWhereCondition(table, whereObj, params = []) {
   };
 }
 
+function extractBalanced(str, startIndex) {
+  const openChar = str[startIndex];
+  const closeChar = openChar === '{' ? '}' : ']';
+  let depth = 0;
+  let inString = false;
+  let quoteChar = '';
+
+  for (let i = startIndex; i < str.length; i++) {
+    const char = str[i];
+    if (inString) {
+      if (char === quoteChar && str[i - 1] !== '\\') {
+        inString = false;
+      }
+    } else if (char === '"' || char === "'") {
+      inString = true;
+      quoteChar = char;
+    } else if (char === openChar) {
+      depth++;
+    } else if (char === closeChar) {
+      depth--;
+      if (depth === 0) {
+        return str.substring(startIndex, i + 1);
+      }
+    }
+  }
+  return str.substring(startIndex);
+}
+
 function parseGraphQLArguments(argStr, variables = {}) {
   const args = {};
   if (!argStr || !argStr.trim()) return args;
 
-  const raw = argStr.trim();
-  const keyValRegex = /([a-zA-Z0-9_]+)\s*:\s*(\$([a-zA-Z0-9_]+)|"([^"]*)"|([0-9\.\-]+)|true|false|null|\{[^}]*\}|\[[^\]]*\])/g;
-  let match;
-  while ((match = keyValRegex.exec(raw)) !== null) {
-    const [, key, fullVal, varName, strVal, numVal] = match;
-    if (varName !== undefined) {
-      args[key] = variables[varName];
-    } else if (strVal !== undefined) {
-      args[key] = strVal;
-    } else if (numVal !== undefined) {
-      args[key] = Number(numVal);
-    } else if (fullVal === 'true') {
-      args[key] = true;
-    } else if (fullVal === 'false') {
-      args[key] = false;
-    } else if (fullVal === 'null') {
-      args[key] = null;
-    } else if (fullVal.startsWith('{') || fullVal.startsWith('[')) {
+  const str = argStr.trim();
+  let i = 0;
+
+  while (i < str.length) {
+    const keyMatch = /^\s*([a-zA-Z0-9_]+)\s*:\s*/.exec(str.substring(i));
+    if (!keyMatch) break;
+
+    const key = keyMatch[1];
+    i += keyMatch[0].length;
+
+    if (i >= str.length) break;
+
+    const nextChar = str[i];
+    if (nextChar === '{' || nextChar === '[') {
+      const block = extractBalanced(str, i);
+      i += block.length;
       try {
-        const jsonStr = fullVal
+        let jsonStr = block.replace(/\$([a-zA-Z0-9_]+)/g, (_, vName) => {
+          return variables[vName] !== undefined ? JSON.stringify(variables[vName]) : 'null';
+        });
+        jsonStr = jsonStr
+          .replace(/:\s*(desc|asc)\b/gi, ':"$1"')
           .replace(/([a-zA-Z0-9_]+)\s*:/g, '"$1":')
           .replace(/'/g, '"');
         args[key] = JSON.parse(jsonStr);
       } catch (e) {
-        args[key] = fullVal;
+        args[key] = block;
       }
+    } else {
+      const valMatch = /^(\$([a-zA-Z0-9_]+)|"([^"]*)"|'([^']*)'|([0-9\.\-]+)|true|false|null)/.exec(str.substring(i));
+      if (valMatch) {
+        const [full, , varName, dqVal, sqVal, numVal] = valMatch;
+        i += full.length;
+        if (varName !== undefined) {
+          args[key] = variables[varName];
+        } else if (dqVal !== undefined) {
+          args[key] = dqVal;
+        } else if (sqVal !== undefined) {
+          args[key] = sqVal;
+        } else if (numVal !== undefined) {
+          args[key] = Number(numVal);
+        } else if (full === 'true') {
+          args[key] = true;
+        } else if (full === 'false') {
+          args[key] = false;
+        } else if (full === 'null') {
+          args[key] = null;
+        }
+      } else {
+        i++;
+      }
+    }
+
+    while (i < str.length && (str[i] === ',' || str[i] === ' ' || str[i] === '\t' || str[i] === '\n' || str[i] === '\r')) {
+      i++;
     }
   }
 
