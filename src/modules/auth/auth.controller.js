@@ -326,7 +326,7 @@ async function me(req, res) {
 
 async function updateMe(req, res, next) {
   try {
-    const { full_name, avatar_attachment_id } = req.body || {};
+    const { full_name, avatar_attachment_id, metadata } = req.body || {};
     const changes = {};
     const previousAvatarAttachmentId = req.auth.appUser?.metadata?.avatar_attachment_id
       || req.auth.appUser?.avatar_attachment_id
@@ -370,6 +370,14 @@ async function updateMe(req, res, next) {
         changes.avatar_attachment_id = attachment.id;
         nextAvatarAttachmentId = attachment.id;
       }
+    }
+
+    if (metadata && typeof metadata === 'object') {
+      changes.metadata = {
+        ...(req.auth.appUser.metadata || {}),
+        ...(changes.metadata || {}),
+        ...metadata,
+      };
     }
 
     if (!Object.keys(changes).length) {
