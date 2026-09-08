@@ -307,8 +307,21 @@ async function deleteResource(config, id) {
   return result.rows[0] || null;
 }
 
+function sanitizePayload(config, payload) {
+  if (!payload || typeof payload !== 'object') return {};
+  const allowed = new Set([...(config.insertFields || []), ...(config.updateFields || [])]);
+  const result = {};
+  for (const field of allowed) {
+    if (payload[field] !== undefined) {
+      result[field] = payload[field];
+    }
+  }
+  return result;
+}
+
 module.exports = {
   buildWhereClause,
+  sanitizePayload,
   listResources,
   getResourceById,
   createResource,
