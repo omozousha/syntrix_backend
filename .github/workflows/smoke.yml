@@ -17,10 +17,11 @@ jobs:
       NODE_ENV: test
       CORS_ORIGINS: http://localhost:3000
       API_BODY_LIMIT: 10mb
-      HASURA_URL: ${{ secrets.HASURA_URL }}
-      HASURA_ADMIN_SECRET: ${{ secrets.HASURA_ADMIN_SECRET }}
-      NHOST_AUTH_URL: ${{ secrets.NHOST_AUTH_URL }}
-      NHOST_STORAGE_URL: ${{ secrets.NHOST_STORAGE_URL }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET || 'smoke-jwt-secret-testing-2026' }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       DEFAULT_STORAGE_BUCKET: default
       MAX_UPLOAD_SIZE_MB: 25
       AUTH_RATE_LIMIT_WINDOW_MS: 900000
@@ -49,7 +50,7 @@ jobs:
 
       - name: Validate mandatory secrets
         run: |
-          required=(HASURA_URL HASURA_ADMIN_SECRET NHOST_AUTH_URL NHOST_STORAGE_URL SMOKE_ADMIN_EMAIL SMOKE_ADMIN_PASSWORD)
+          required=(DATABASE_URL SMOKE_ADMIN_EMAIL SMOKE_ADMIN_PASSWORD)
           for key in "${required[@]}"; do
             if [ -z "${!key}" ]; then
               echo "Missing required secret/env: $key"

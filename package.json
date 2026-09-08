@@ -26,9 +26,7 @@
     "test:odp-ont-assignment": "node scripts/test-odp-ont-assignment.js",
     "test:master-data-validation": "node scripts/test-master-data-validation.js",
     "db:init": "node scripts/init-local-db.js",
-    "db:backup": "node scripts/backup-nhost-data.js",
-    "db:restore": "node scripts/restore-to-postgres.js",
-    "storage:download": "node scripts/download-storage-files.js"
+    "db:restore": "node scripts/restore-to-postgres.js"
   },
   "keywords": [],
   "author": "",

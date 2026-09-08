@@ -8,7 +8,7 @@ const { authenticate, requireRole } = require('../../middleware/auth.middleware'
 const { getResourceConfig, RESOURCE_CONFIG } = require('./resource.registry');
 const controller = require('./resource.controller');
 const { createHttpError } = require('../../utils/httpError');
-// nhostAuthClient removed - using Firebase Admin Auth link generation
+// Using Firebase Admin Auth link generation
 const { executeHasura, executeHasuraSql } = require('../../config/hasura');
 const { query: dbQuery } = require('../../config/db');
 const { uploadFile: r2Upload, getPublicUrl: r2PublicUrl, getFileStream: r2GetStream, deleteFile: r2Delete } = require('../../services/r2.service');

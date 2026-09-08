@@ -262,7 +262,7 @@ async function storeImportAttachment(req, file, sourceFormat) {
       size_bytes: file.size,
       is_public: false,
       metadata: {
-        source: 'nhost-storage',
+        source: 'r2-storage',
         upload_response: storageFile,
       },
       uploaded_by_user_id: req.auth.appUser.id,

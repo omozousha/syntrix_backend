@@ -49,22 +49,6 @@ function getRequired(name, fallback) {
   return value;
 }
 
-function getPublicEmailRedirect() {
-  const configured = process.env.NHOST_EMAIL_REDIRECT_TO || '';
-  const productionFallback = 'https://syntrix-one.vercel.app/login';
-  const isLocalRedirect = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(configured);
-
-  if (!configured) {
-    return productionFallback;
-  }
-
-  if ((process.env.NODE_ENV || 'development') === 'production' && isLocalRedirect) {
-    return productionFallback;
-  }
-
-  return configured;
-}
-
 const env = {
   port: toNumber(process.env.PORT, 3000),
   nodeEnv: process.env.NODE_ENV || 'development',
