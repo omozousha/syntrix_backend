@@ -297,42 +297,64 @@ async function sendNotificationToUsers({
     }
 
     const isPersistent = data?.persistent === true || data?.persistent === 'true';
-    const message = {
-      tokens,
-      data: stringifyData({
-        ...data,
-        title,
-        body,
-        channel_id: HIGH_PRIORITY_CHANNEL_ID,
-      }),
-      android: {
-        priority: 'high',
-      },
-    };
+    const payloadData = stringifyData({
+      ...data,
+      title,
+      body,
+      channel_id: HIGH_PRIORITY_CHANNEL_ID,
+    });
 
-    if (!isPersistent) {
-      message.notification = { title, body };
-      message.android.notification = {
-        channelId: HIGH_PRIORITY_CHANNEL_ID,
-        priority: 'high',
-        visibility: 'public',
-        sound: 'default',
-      };
-    }
-
-    const response = await admin.messaging().sendEachForMulticast(message);
+    const messaging = admin.messaging();
+    const sendResults = await Promise.allSettled(
+      tokens.map((token) =>
+        messaging.send({
+          token,
+          notification: { title, body },
+          data: payloadData,
+          android: {
+            priority: 'high',
+            notification: {
+              channelId: HIGH_PRIORITY_CHANNEL_ID,
+              priority: 'high',
+              visibility: 'public',
+              sound: 'default',
+            },
+          },
+        })
+      )
+    );
 
     const invalidTokens = [];
-    response.responses.forEach((item, index) => {
-      const code = item.error?.code || '';
-      if (code.includes('registration-token-not-registered') || code.includes('invalid-registration-token')) {
-        invalidTokens.push(tokens[index]);
+    let successCount = 0;
+    let failureCount = 0;
+
+    sendResults.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        successCount += 1;
+      } else {
+        failureCount += 1;
+        const code = result.reason?.code || result.reason?.message || '';
+        if (
+          code.includes('registration-token-not-registered') ||
+          code.includes('invalid-registration-token') ||
+          code.includes('messaging/registration-token-not-registered') ||
+          code.includes('messaging/invalid-registration-token')
+        ) {
+          invalidTokens.push(tokens[index]);
+        }
       }
     });
-    await deactivateTokens(invalidTokens);
-    await markRowsPushed(inboxRows.map((row) => row.id), response.failureCount ? `${response.failureCount} push delivery failed` : null);
 
-    return { recipients: recipients.length, pushed: response.successCount, failed: response.failureCount };
+    if (invalidTokens.length) {
+      await deactivateTokens(invalidTokens);
+    }
+
+    await markRowsPushed(
+      inboxRows.map((row) => row.id),
+      failureCount ? `${failureCount} push delivery failed` : null
+    );
+
+    return { recipients: recipients.length, pushed: successCount, failed: failureCount };
   } catch (error) {
     console.warn('Push notification delivery failed:', error.message || error);
     await markRowsPushError(inboxRows.map((row) => row.id), error.message || 'push failed').catch(() => undefined);
