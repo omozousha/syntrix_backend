@@ -193,7 +193,7 @@ async function login(req, res, next) {
     const session = {
       accessToken,
       refreshToken,
-      accessTokenExpiresIn: 7 * 24 * 60 * 60, // 7 days
+      accessTokenExpiresIn: 24 * 60 * 60,
       user: {
         id: appUser.id,
         uid,

@@ -4,7 +4,7 @@ const { query: dbQuery } = require('../../config/db');
 const { env } = require('../../config/env');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'syntrix-dev-jwt-secret-2026';
-const JWT_EXPIRES_IN = '7d';
+const JWT_EXPIRES_IN = '1d';
 const REFRESH_EXPIRES_IN = '30d';
 
 function signAccessToken(payload) {
@@ -101,7 +101,7 @@ async function refreshSession(refreshToken) {
     return {
       accessToken: newAccessToken,
       refreshToken: newRefreshToken,
-      accessTokenExpiresIn: 7 * 24 * 60 * 60, // 7 days
+      accessTokenExpiresIn: 24 * 60 * 60,
     };
   } catch (err) {
     throw new Error('Invalid or expired refresh token');
