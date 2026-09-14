@@ -264,6 +264,66 @@ function flattenWhere(conditions) {
   return result;
 }
 
+const JSON_COLUMN_KEYS = new Set([
+  'image_attachments',
+  'tags',
+  'options',
+  'evidence_attachments',
+  'custom_fields',
+  'specifications',
+  'support_doc',
+  'metadata',
+  'path_geojson',
+  'splice_info',
+  'mapping_config',
+  'summary',
+  'row_data',
+  'tray_config',
+  'specification_schema',
+  'specification_template',
+  'checklist',
+  'payload_snapshot',
+  'field_inspection',
+]);
+
+function prepareSqlParam(key, val) {
+  if (val === undefined) return null;
+  const jsonArrayKeys = new Set(['image_attachments', 'tags', 'options', 'evidence_attachments']);
+  const jsonObjectKeys = new Set([
+    'custom_fields',
+    'specifications',
+    'support_doc',
+    'metadata',
+    'path_geojson',
+    'splice_info',
+    'mapping_config',
+    'summary',
+    'row_data',
+    'tray_config',
+    'specification_schema',
+    'specification_template',
+    'checklist',
+    'payload_snapshot',
+    'field_inspection',
+  ]);
+
+  if (jsonArrayKeys.has(key)) {
+    if (val === null || val === undefined || val === '') return '[]';
+    return typeof val === 'string' ? val : JSON.stringify(val);
+  }
+
+  if (jsonObjectKeys.has(key)) {
+    if (val === null || val === undefined || val === '') return '{}';
+    return typeof val === 'string' ? val : JSON.stringify(val);
+  }
+
+  if (val !== null && typeof val === 'object' && !(val instanceof Date) && !Buffer.isBuffer(val)) {
+    return JSON.stringify(val);
+  }
+
+  return val;
+}
+
 async function getResourceById(config, id) {
   const fields = (config.listFields || []).join(', ');
   const result = await dbQuery(
@@ -275,8 +335,8 @@ async function getResourceById(config, id) {
 
 async function createResource(config, object) {
   const keys = Object.keys(object);
-  const vals = Object.values(object);
-  const placeholders = keys.map((_, i) => `$${i + 1}`);
+  const vals = keys.map((k) => prepareSqlParam(k, object[k]));
+  const placeholders = keys.map((k, i) => JSON_COLUMN_KEYS.has(k) ? `$${i + 1}::jsonb` : `$${i + 1}`);
   const fields = (config.listFields || []).join(', ');
 
   const result = await dbQuery(
@@ -288,8 +348,8 @@ async function createResource(config, object) {
 
 async function updateResource(config, id, changes) {
   const keys = Object.keys(changes);
-  const vals = Object.values(changes);
-  const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+  const vals = keys.map((k) => prepareSqlParam(k, changes[k]));
+  const setClause = keys.map((k, i) => JSON_COLUMN_KEYS.has(k) ? `${k} = $${i + 1}::jsonb` : `${k} = $${i + 1}`).join(', ');
   const fields = (config.listFields || []).join(', ');
 
   const result = await dbQuery(

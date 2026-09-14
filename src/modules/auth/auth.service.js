@@ -89,13 +89,31 @@ async function refreshSession(refreshToken) {
       throw new Error('Invalid refresh token');
     }
 
+    const uid = decoded.uid || decoded.sub;
+    const userRes = await dbQuery(
+      `SELECT id, role_name, email FROM public.app_users WHERE auth_user_id = $1 OR id = $1::uuid LIMIT 1`,
+      [uid]
+    ).catch(() => ({ rows: [] }));
+    const appUser = userRes.rows[0];
+    const roleName = appUser?.role_name || decoded.role || 'user';
+    const email = decoded.email || appUser?.email;
+
     const newAccessToken = signAccessToken({
-      uid: decoded.uid,
-      email: decoded.email,
+      uid,
+      sub: uid,
+      email,
+      role: roleName,
+      'https://hasura.io/jwt/claims': {
+        'x-hasura-default-role': roleName,
+        'x-hasura-role': roleName,
+        'x-hasura-allowed-roles': [roleName],
+        'x-hasura-user-id': uid,
+      },
     });
     const newRefreshToken = signRefreshToken({
-      uid: decoded.uid,
-      email: decoded.email,
+      uid,
+      sub: uid,
+      email,
     });
 
     return {

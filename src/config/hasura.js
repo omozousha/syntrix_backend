@@ -11,6 +11,44 @@ function sqlQuote(val) {
   return `'${String(val).replace(/'/g, "''")}'`;
 }
 
+function prepareSqlParam(key, val) {
+  if (val === undefined) return null;
+  const jsonArrayKeys = new Set(['image_attachments', 'tags', 'options', 'evidence_attachments']);
+  const jsonObjectKeys = new Set([
+    'custom_fields',
+    'specifications',
+    'support_doc',
+    'metadata',
+    'path_geojson',
+    'splice_info',
+    'mapping_config',
+    'summary',
+    'row_data',
+    'tray_config',
+    'specification_schema',
+    'specification_template',
+    'checklist',
+    'payload_snapshot',
+    'field_inspection',
+  ]);
+
+  if (jsonArrayKeys.has(key)) {
+    if (val === null || val === undefined || val === '') return '[]';
+    return typeof val === 'string' ? val : JSON.stringify(val);
+  }
+
+  if (jsonObjectKeys.has(key)) {
+    if (val === null || val === undefined || val === '') return '{}';
+    return typeof val === 'string' ? val : JSON.stringify(val);
+  }
+
+  if (val !== null && typeof val === 'object' && !(val instanceof Date) && !Buffer.isBuffer(val)) {
+    return JSON.stringify(val);
+  }
+
+  return val;
+}
+
 function parseWhereCondition(table, whereObj, params = []) {
   if (!whereObj || typeof whereObj !== 'object') return { sql: 'TRUE', params };
   const clauses = [];
@@ -265,8 +303,9 @@ async function executeHasura(queryStr, variables = {}) {
           const res = await query(`SELECT * FROM public."${table}" WHERE id = $1`, [id]);
           responseData[keyName] = res.rows[0] || null;
         } else {
-          const setClauses = entries.map(([k], idx) => `"${k}" = $${idx + 2}`).join(', ');
-          const params = [id, ...entries.map(([, v]) => v)];
+          const jsonColumnKeys = new Set(['image_attachments', 'tags', 'options', 'evidence_attachments', 'custom_fields', 'specifications', 'support_doc', 'metadata', 'path_geojson', 'splice_info', 'mapping_config', 'summary', 'row_data', 'tray_config', 'specification_schema', 'specification_template', 'checklist', 'payload_snapshot', 'field_inspection']);
+          const setClauses = entries.map(([k], idx) => jsonColumnKeys.has(k) ? `"${k}" = $${idx + 2}::jsonb` : `"${k}" = $${idx + 2}`).join(', ');
+          const params = [id, ...entries.map(([k, v]) => prepareSqlParam(k, v))];
           const res = await query(`UPDATE public."${table}" SET ${setClauses}, updated_at = NOW() WHERE id = $1 RETURNING *`, params);
           responseData[keyName] = res.rows[0] || null;
         }
@@ -302,7 +341,7 @@ async function executeHasura(queryStr, variables = {}) {
         const keys = Object.keys(obj);
         const cols = keys.map((k) => `"${k}"`).join(', ');
         const placeholders = keys.map((_, idx) => `$${idx + 1}`).join(', ');
-        const values = keys.map((k) => obj[k]);
+        const values = keys.map((k) => prepareSqlParam(k, obj[k]));
 
         const onConflict = args.on_conflict || variables.on_conflict;
         let conflictSql = '';
@@ -336,8 +375,9 @@ async function executeHasura(queryStr, variables = {}) {
         const res = await query(`SELECT * FROM public."${table}" WHERE ${whereSql}`, params);
         responseData[keyName] = { affected_rows: res.rows.length, returning: res.rows };
       } else {
-        const setClauses = setEntries.map(([k], idx) => `"${k}" = $${params.length + idx + 1}`).join(', ');
-        const allParams = [...params, ...setEntries.map(([, v]) => v)];
+        const jsonColumnKeys = new Set(['image_attachments', 'tags', 'options', 'evidence_attachments', 'custom_fields', 'specifications', 'support_doc', 'metadata', 'path_geojson', 'splice_info', 'mapping_config', 'summary', 'row_data', 'tray_config', 'specification_schema', 'specification_template', 'checklist', 'payload_snapshot', 'field_inspection']);
+        const setClauses = setEntries.map(([k], idx) => jsonColumnKeys.has(k) ? `"${k}" = $${params.length + idx + 1}::jsonb` : `"${k}" = $${params.length + idx + 1}`).join(', ');
+        const allParams = [...params, ...setEntries.map(([k, v]) => prepareSqlParam(k, v))];
 
         const res = await query(`UPDATE public."${table}" SET ${setClauses}, updated_at = NOW() WHERE ${whereSql} RETURNING *`, allParams);
         responseData[keyName] = {

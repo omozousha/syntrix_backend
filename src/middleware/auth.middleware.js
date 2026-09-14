@@ -21,14 +21,14 @@ async function loadAppUserDirect(userId) {
     ? await dbQuery(
         `SELECT id, user_code, auth_user_id, full_name, email, role_name, default_region_id, is_active, avatar_attachment_id, metadata
          FROM public.app_users
-         WHERE auth_user_id = $1 OR id = $1::uuid
+         WHERE auth_user_id = $1 OR id = $1::uuid OR user_code = $1 OR email = $1
          LIMIT 1`,
         [userId]
       )
     : await dbQuery(
         `SELECT id, user_code, auth_user_id, full_name, email, role_name, default_region_id, is_active, avatar_attachment_id, metadata
          FROM public.app_users
-         WHERE auth_user_id = $1
+         WHERE auth_user_id = $1 OR user_code = $1 OR email = $1
          LIMIT 1`,
         [userId]
       );
@@ -77,16 +77,16 @@ async function authenticate(req, _res, next) {
     if (firebaseAdmin) {
       try {
         const decoded = await firebaseAdmin.auth().verifyIdToken(token);
-        userId = decoded.uid;
+        userId = decoded.uid || decoded.sub;
         claims = decoded;
       } catch (fbErr) {
         // Fallback decode token manual (JWT payload)
         claims = decodeJwtPayload(token);
-        userId = claims.sub || claims.user_id || claims['https://hasura.io/jwt/claims']?.['x-hasura-user-id'];
+        userId = claims.sub || claims.uid || claims.user_id || claims.id || claims['https://hasura.io/jwt/claims']?.['x-hasura-user-id'];
       }
     } else {
       claims = decodeJwtPayload(token);
-      userId = claims.sub || claims.user_id || claims['https://hasura.io/jwt/claims']?.['x-hasura-user-id'];
+      userId = claims.sub || claims.uid || claims.user_id || claims.id || claims['https://hasura.io/jwt/claims']?.['x-hasura-user-id'];
     }
 
     if (!userId) {
