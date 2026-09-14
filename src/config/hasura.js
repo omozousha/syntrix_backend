@@ -11,9 +11,44 @@ function sqlQuote(val) {
   return `'${String(val).replace(/'/g, "''")}'`;
 }
 
+const JSON_COLUMN_KEYS = new Set([
+  'image_attachments',
+  'options',
+  'evidence_attachments',
+  'custom_fields',
+  'specifications',
+  'support_doc',
+  'metadata',
+  'path_geojson',
+  'splice_info',
+  'mapping_config',
+  'summary',
+  'row_data',
+  'tray_config',
+  'specification_schema',
+  'specification_template',
+  'checklist',
+  'payload_snapshot',
+  'field_inspection',
+]);
+
+const TEXT_ARRAY_KEYS = new Set(['tags', 'default_tags']);
+
 function prepareSqlParam(key, val) {
   if (val === undefined) return null;
-  const jsonArrayKeys = new Set(['image_attachments', 'tags', 'options', 'evidence_attachments']);
+
+  if (TEXT_ARRAY_KEYS.has(key)) {
+    if (Array.isArray(val)) return val;
+    if (typeof val === 'string' && val.trim() !== '') {
+      if (val.startsWith('{') && val.endsWith('}')) {
+        return val.slice(1, -1).split(',').map((s) => s.trim().replace(/^"|"$/g, '')).filter(Boolean);
+      }
+      return val.split(',').map((s) => s.trim()).filter(Boolean);
+    }
+    return [];
+  }
+
+  const jsonArrayKeys = new Set(['image_attachments', 'options', 'evidence_attachments']);
   const jsonObjectKeys = new Set([
     'custom_fields',
     'specifications',
@@ -303,8 +338,7 @@ async function executeHasura(queryStr, variables = {}) {
           const res = await query(`SELECT * FROM public."${table}" WHERE id = $1`, [id]);
           responseData[keyName] = res.rows[0] || null;
         } else {
-          const jsonColumnKeys = new Set(['image_attachments', 'tags', 'options', 'evidence_attachments', 'custom_fields', 'specifications', 'support_doc', 'metadata', 'path_geojson', 'splice_info', 'mapping_config', 'summary', 'row_data', 'tray_config', 'specification_schema', 'specification_template', 'checklist', 'payload_snapshot', 'field_inspection']);
-          const setClauses = entries.map(([k], idx) => jsonColumnKeys.has(k) ? `"${k}" = $${idx + 2}::jsonb` : `"${k}" = $${idx + 2}`).join(', ');
+          const setClauses = entries.map(([k], idx) => JSON_COLUMN_KEYS.has(k) ? `"${k}" = $${idx + 2}::jsonb` : TEXT_ARRAY_KEYS.has(k) ? `"${k}" = $${idx + 2}::text[]` : `"${k}" = $${idx + 2}`).join(', ');
           const params = [id, ...entries.map(([k, v]) => prepareSqlParam(k, v))];
           const res = await query(`UPDATE public."${table}" SET ${setClauses}, updated_at = NOW() WHERE id = $1 RETURNING *`, params);
           responseData[keyName] = res.rows[0] || null;
@@ -375,8 +409,7 @@ async function executeHasura(queryStr, variables = {}) {
         const res = await query(`SELECT * FROM public."${table}" WHERE ${whereSql}`, params);
         responseData[keyName] = { affected_rows: res.rows.length, returning: res.rows };
       } else {
-        const jsonColumnKeys = new Set(['image_attachments', 'tags', 'options', 'evidence_attachments', 'custom_fields', 'specifications', 'support_doc', 'metadata', 'path_geojson', 'splice_info', 'mapping_config', 'summary', 'row_data', 'tray_config', 'specification_schema', 'specification_template', 'checklist', 'payload_snapshot', 'field_inspection']);
-        const setClauses = setEntries.map(([k], idx) => jsonColumnKeys.has(k) ? `"${k}" = $${params.length + idx + 1}::jsonb` : `"${k}" = $${params.length + idx + 1}`).join(', ');
+        const setClauses = setEntries.map(([k], idx) => JSON_COLUMN_KEYS.has(k) ? `"${k}" = $${params.length + idx + 1}::jsonb` : TEXT_ARRAY_KEYS.has(k) ? `"${k}" = $${params.length + idx + 1}::text[]` : `"${k}" = $${params.length + idx + 1}`).join(', ');
         const allParams = [...params, ...setEntries.map(([k, v]) => prepareSqlParam(k, v))];
 
         const res = await query(`UPDATE public."${table}" SET ${setClauses}, updated_at = NOW() WHERE ${whereSql} RETURNING *`, allParams);
