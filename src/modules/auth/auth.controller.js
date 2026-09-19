@@ -16,6 +16,7 @@ const {
   findAppUserByEmail,
   findAppUserByAuthUserId,
   activateAppUserByAuthUserId,
+  checkAndSyncFirebaseVerification,
   insertUserRegionScopes,
   loadAttachmentById,
   updateOwnProfileByAuthUserId,
@@ -177,7 +178,18 @@ async function login(req, res, next) {
     if (!appUser.is_active) {
       const pendingVerification = Boolean(appUser.metadata?.pending_email_verification);
 
-      if (!pendingVerification) {
+      if (pendingVerification) {
+        // Check if user has clicked the verification link in Firebase
+        const isVerifiedInFirebase = await checkAndSyncFirebaseVerification(authResult.uid);
+        if (isVerifiedInFirebase) {
+          appUser.is_active = true;
+          if (appUser.metadata) {
+            delete appUser.metadata.pending_email_verification;
+          }
+        } else {
+          throw createHttpError(403, 'Email address has not been verified yet. Please check your inbox.');
+        }
+      } else {
         throw createHttpError(403, 'User is inactive in Syntrix');
       }
     }

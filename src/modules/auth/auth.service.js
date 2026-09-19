@@ -253,10 +253,32 @@ async function countAppUsers() {
 
 async function activateAppUserByAuthUserId(authUserId) {
   const result = await dbQuery(
-    'UPDATE public.app_users SET is_active = true WHERE auth_user_id = $1',
+    `UPDATE public.app_users
+     SET is_active = true,
+         metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb) - 'pending_email_verification', '{email_verified_at}', to_jsonb(NOW()::text)),
+         updated_at = NOW()
+     WHERE auth_user_id = $1
+     RETURNING *`,
     [authUserId]
   );
-  return result.rowCount || 0;
+  return result.rows[0] || null;
+}
+
+async function checkAndSyncFirebaseVerification(authUserId) {
+  const admin = getFirebaseAdmin();
+  if (!admin) return false;
+
+  try {
+    const userRecord = await admin.auth().getUser(authUserId);
+    if (userRecord && userRecord.emailVerified) {
+      await activateAppUserByAuthUserId(authUserId);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.warn('[checkAndSyncFirebaseVerification] Error:', error.message);
+    return false;
+  }
 }
 
 async function insertUserRegionScopes(appUserId, regionIds = []) {
@@ -341,6 +363,7 @@ module.exports = {
   findAppUserByEmail,
   findAppUserByAuthUserId,
   activateAppUserByAuthUserId,
+  checkAndSyncFirebaseVerification,
   insertUserRegionScopes,
   loadAttachmentById,
   updateOwnProfileByAuthUserId,
