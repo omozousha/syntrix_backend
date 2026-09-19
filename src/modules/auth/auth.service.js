@@ -78,6 +78,65 @@ async function signUpUser({ email, password, displayName }) {
   return userRecord;
 }
 
+async function sendVerificationEmail(email) {
+  const apiKey = env.firebaseWebApiKey;
+  if (!apiKey) {
+    console.warn('[sendVerificationEmail] FIREBASE_WEB_API_KEY not configured — skipping');
+    return { success: false, reason: 'no_api_key' };
+  }
+
+  // First sign in to get an idToken (required by Firebase sendOobCode VERIFY_EMAIL)
+  const signInUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`;
+  // We can't sign in because we don't have the password at this point.
+  // Use Admin SDK to generate the verification link — Firebase sends the email automatically.
+  const admin = getFirebaseAdmin();
+  if (!admin) {
+    console.warn('[sendVerificationEmail] Firebase Admin not configured — skipping');
+    return { success: false, reason: 'no_admin' };
+  }
+
+  try {
+    const link = await admin.auth().generateEmailVerificationLink(email);
+    // generateEmailVerificationLink only generates a link but does NOT send the email.
+    // We need to send it ourselves or use the REST API with an idToken.
+    // Since we have the link, send via the REST sendOobCode approach using a custom token.
+    const customToken = await admin.auth().createCustomToken(
+      (await admin.auth().getUserByEmail(email)).uid
+    );
+
+    // Exchange custom token for an idToken
+    const exchangeUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${apiKey}`;
+    const exchangeRes = await fetch(exchangeUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: customToken, returnSecureToken: true }),
+    });
+    const exchangeData = await exchangeRes.json();
+    if (exchangeData.error) {
+      console.warn('[sendVerificationEmail] Token exchange failed:', exchangeData.error.message);
+      return { success: false, reason: 'token_exchange_failed', link };
+    }
+
+    // Now send the verification email using the idToken
+    const verifyUrl = `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${apiKey}`;
+    const verifyRes = await fetch(verifyUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestType: 'VERIFY_EMAIL', idToken: exchangeData.idToken }),
+    });
+    const verifyData = await verifyRes.json();
+    if (verifyData.error) {
+      console.warn('[sendVerificationEmail] sendOobCode failed:', verifyData.error.message);
+      return { success: false, reason: 'send_failed', link };
+    }
+
+    return { success: true, email: verifyData.email || email };
+  } catch (error) {
+    console.warn('[sendVerificationEmail] Error:', error.message);
+    return { success: false, reason: error.message };
+  }
+}
+
 async function logout(refreshToken) {
   return { success: true };
 }
@@ -272,6 +331,7 @@ async function cleanupOrphanAvatarAttachments(limit = 100) {
 module.exports = {
   loginWithPassword,
   signUpUser,
+  sendVerificationEmail,
   logout,
   refreshSession,
   changePassword,

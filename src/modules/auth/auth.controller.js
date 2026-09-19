@@ -6,6 +6,7 @@ const { createAuditLog } = require('../../shared/audit.service');
 const {
   loginWithPassword,
   signUpUser,
+  sendVerificationEmail,
   logout,
   refreshSession,
   changePassword,
@@ -126,6 +127,13 @@ async function createSyntrixUser(payload) {
   }
 
   const authUserId = authUser.uid;
+
+  // Send verification email if required
+  if (require_email_verification) {
+    sendVerificationEmail(email).catch((err) => {
+      console.warn('[createSyntrixUser] Failed to send verification email:', err.message);
+    });
+  }
 
   const appUser = await createAppUser({
     auth_user_id: authUserId,

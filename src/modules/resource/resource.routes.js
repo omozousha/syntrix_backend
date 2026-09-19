@@ -3094,13 +3094,13 @@ async function resendManagedUserVerification(req, res, next) {
       throw createHttpError(400, 'Email is already verified');
     }
 
-    let verificationLink = null;
+    let verificationSent = false;
     try {
-      const { getFirebaseAdmin } = require('../../config/firebase');
-      const admin = getFirebaseAdmin();
-      verificationLink = await admin.auth().generateEmailVerificationLink(existingUser.email);
+      const { sendVerificationEmail } = require('../auth/auth.service');
+      const result = await sendVerificationEmail(existingUser.email);
+      verificationSent = result.success;
     } catch (error) {
-      console.warn('[Firebase Verification Link Error]:', error.message);
+      console.warn('[Resend Verification Error]:', error.message);
     }
     const { sentAt } = await markVerificationEmailSent(existingUser.id, existingUser.metadata);
 
