@@ -3025,22 +3025,80 @@ async function deleteManagedUser(req, res, next) {
 
     await syncUserRegionScopes(existingUser.id, null);
 
-    const mutation = `
-      mutation DeleteManagedUser($id: uuid!) {
-        item: delete_app_users_by_pk(id: $id) {
-          id
-          user_code
-          auth_user_id
-          full_name
-          email
-          role_name
-          default_region_id
-          is_active
-          metadata
+    // Check if user has RESTRICT FK references that prevent hard delete
+    const restrictCheck = await dbQuery(
+      `SELECT
+        (SELECT count(*)::int FROM public.validation_request_logs WHERE actor_user_id = $1) +
+        (SELECT count(*)::int FROM public.validation_requests WHERE submitted_by_user_id = $1)
+        AS restrict_count`,
+      [existingUser.id]
+    );
+    const hasRestrictRefs = (restrictCheck.rows[0]?.restrict_count || 0) > 0;
+
+    let deletedUser;
+    if (hasRestrictRefs) {
+      // Soft-delete: deactivate account, clear metadata, keep row for FK integrity
+      const mutation = `
+        mutation DeactivateManagedUser($id: uuid!, $changes: app_users_set_input!) {
+          item: update_app_users_by_pk(pk_columns: { id: $id }, _set: $changes) {
+            id
+            user_code
+            auth_user_id
+            full_name
+            email
+            role_name
+            default_region_id
+            is_active
+            metadata
+          }
         }
+      `;
+      const data = await executeHasura(mutation, {
+        id: existingUser.id,
+        changes: {
+          is_active: false,
+          metadata: {
+            ...(existingUser.metadata || {}),
+            deleted_at: new Date().toISOString(),
+            deleted_by: req.auth.appUser.id,
+            pending_email_verification: false,
+          },
+        },
+      });
+      deletedUser = data.item;
+    } else {
+      // Hard delete — no RESTRICT FK references
+      const mutation = `
+        mutation DeleteManagedUser($id: uuid!) {
+          item: delete_app_users_by_pk(id: $id) {
+            id
+            user_code
+            auth_user_id
+            full_name
+            email
+            role_name
+            default_region_id
+            is_active
+            metadata
+          }
+        }
+      `;
+      const data = await executeHasura(mutation, { id: existingUser.id });
+      deletedUser = data.item;
+    }
+
+    // Delete Firebase Auth user
+    if (existingUser.auth_user_id) {
+      try {
+        const { getFirebaseAdmin } = require('../../config/firebase');
+        const admin = getFirebaseAdmin();
+        if (admin) {
+          await admin.auth().deleteUser(existingUser.auth_user_id);
+        }
+      } catch (fbErr) {
+        console.warn('[deleteManagedUser] Firebase user delete failed:', fbErr.message);
       }
-    `;
-    const data = await executeHasura(mutation, { id: existingUser.id });
+    }
 
     await createAuditLog({
       actorUserId: req.auth.appUser.id,
@@ -3048,12 +3106,14 @@ async function deleteManagedUser(req, res, next) {
       entityType: 'app_user',
       entityId: existingUser.id,
       beforeData: existingUser,
-      afterData: null,
+      afterData: hasRestrictRefs ? { soft_deleted: true } : null,
       ipAddress: req.ip,
       userAgent: req.get('user-agent'),
     });
 
-    return sendSuccess(res, data.item, 'User deleted successfully');
+    return sendSuccess(res, deletedUser, hasRestrictRefs
+      ? 'User deactivated and Firebase access revoked (historical records preserved)'
+      : 'User deleted successfully');
   } catch (error) {
     return next(error);
   }
