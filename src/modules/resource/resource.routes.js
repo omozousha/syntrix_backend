@@ -3106,14 +3106,19 @@ async function resendManagedUserVerification(req, res, next) {
     }
 
     let verificationSent = false;
+    let verificationLink = null;
     try {
       const { sendVerificationEmail } = require('../auth/auth.service');
       const result = await sendVerificationEmail(existingUser.email);
-      verificationSent = result.success;
+      verificationSent = result.email_sent;
+      verificationLink = result.verification_link;
     } catch (error) {
       console.warn('[Resend Verification Error]:', error.message);
     }
-    const { sentAt } = await markVerificationEmailSent(existingUser.id, existingUser.metadata);
+    const { sentAt } = await markVerificationEmailSent(existingUser.id, {
+      ...(existingUser.metadata || {}),
+      verification_link: verificationLink,
+    });
 
     await createAuditLog({
       actorUserId: req.auth.appUser.id,
@@ -3126,7 +3131,18 @@ async function resendManagedUserVerification(req, res, next) {
       userAgent: req.get('user-agent'),
     });
 
-    return sendSuccess(res, { id: existingUser.id, email: existingUser.email }, 'Verification email sent successfully');
+    return sendSuccess(
+      res,
+      {
+        id: existingUser.id,
+        email: existingUser.email,
+        email_sent: verificationSent,
+        verification_link: verificationLink,
+      },
+      verificationSent
+        ? 'Verification email sent successfully'
+        : 'Verification link generated (email delivery delayed or rate limited)'
+    );
   } catch (error) {
     return next(createHttpError(error.response?.status || error.statusCode || 400, error.response?.data?.message || error.message));
   }

@@ -78,63 +78,91 @@ async function signUpUser({ email, password, displayName }) {
   return userRecord;
 }
 
-async function sendVerificationEmail(email) {
-  const apiKey = env.firebaseWebApiKey;
-  if (!apiKey) {
-    console.warn('[sendVerificationEmail] FIREBASE_WEB_API_KEY not configured — skipping');
-    return { success: false, reason: 'no_api_key' };
-  }
-
-  // First sign in to get an idToken (required by Firebase sendOobCode VERIFY_EMAIL)
-  const signInUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`;
-  // We can't sign in because we don't have the password at this point.
-  // Use Admin SDK to generate the verification link — Firebase sends the email automatically.
+async function sendVerificationEmail(email, password) {
   const admin = getFirebaseAdmin();
-  if (!admin) {
-    console.warn('[sendVerificationEmail] Firebase Admin not configured — skipping');
-    return { success: false, reason: 'no_admin' };
+  const apiKey = env.firebaseWebApiKey;
+
+  let verificationLink = null;
+
+  // 1. Always generate verification link via Admin SDK first (100% reliable)
+  if (admin) {
+    try {
+      verificationLink = await admin.auth().generateEmailVerificationLink(email);
+    } catch (linkErr) {
+      console.warn('[sendVerificationEmail] Failed to generate link:', linkErr.message);
+    }
   }
 
-  try {
-    const link = await admin.auth().generateEmailVerificationLink(email);
-    // generateEmailVerificationLink only generates a link but does NOT send the email.
-    // We need to send it ourselves or use the REST API with an idToken.
-    // Since we have the link, send via the REST sendOobCode approach using a custom token.
-    const customToken = await admin.auth().createCustomToken(
-      (await admin.auth().getUserByEmail(email)).uid
-    );
+  // 2. Try sending email via Firebase REST API
+  let emailSent = false;
+  let sendError = null;
 
-    // Exchange custom token for an idToken
-    const exchangeUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${apiKey}`;
-    const exchangeRes = await fetch(exchangeUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: customToken, returnSecureToken: true }),
-    });
-    const exchangeData = await exchangeRes.json();
-    if (exchangeData.error) {
-      console.warn('[sendVerificationEmail] Token exchange failed:', exchangeData.error.message);
-      return { success: false, reason: 'token_exchange_failed', link };
+  if (apiKey) {
+    try {
+      let idToken = null;
+
+      // Strategy A: Direct sign in with password (fast, avoids rate limit)
+      if (password) {
+        const signInUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`;
+        const signInRes = await fetch(signInUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password, returnSecureToken: true }),
+        });
+        const signInData = await signInRes.json();
+        if (!signInData.error) {
+          idToken = signInData.idToken;
+        }
+      }
+
+      // Strategy B: Custom token exchange
+      if (!idToken && admin) {
+        try {
+          const userRecord = await admin.auth().getUserByEmail(email);
+          const customToken = await admin.auth().createCustomToken(userRecord.uid);
+          const exchangeUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${apiKey}`;
+          const exchangeRes = await fetch(exchangeUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: customToken, returnSecureToken: true }),
+          });
+          const exchangeData = await exchangeRes.json();
+          if (!exchangeData.error) {
+            idToken = exchangeData.idToken;
+          }
+        } catch (tokenErr) {
+          console.warn('[sendVerificationEmail] Custom token error:', tokenErr.message);
+        }
+      }
+
+      // If we got an idToken, send the verification email
+      if (idToken) {
+        const verifyUrl = `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${apiKey}`;
+        const verifyRes = await fetch(verifyUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestType: 'VERIFY_EMAIL', idToken }),
+        });
+        const verifyData = await verifyRes.json();
+        if (!verifyData.error) {
+          emailSent = true;
+        } else {
+          sendError = verifyData.error.message;
+          console.warn('[sendVerificationEmail] sendOobCode error:', sendError);
+        }
+      }
+    } catch (err) {
+      sendError = err.message;
+      console.warn('[sendVerificationEmail] Error sending email:', err.message);
     }
-
-    // Now send the verification email using the idToken
-    const verifyUrl = `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${apiKey}`;
-    const verifyRes = await fetch(verifyUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requestType: 'VERIFY_EMAIL', idToken: exchangeData.idToken }),
-    });
-    const verifyData = await verifyRes.json();
-    if (verifyData.error) {
-      console.warn('[sendVerificationEmail] sendOobCode failed:', verifyData.error.message);
-      return { success: false, reason: 'send_failed', link };
-    }
-
-    return { success: true, email: verifyData.email || email };
-  } catch (error) {
-    console.warn('[sendVerificationEmail] Error:', error.message);
-    return { success: false, reason: error.message };
   }
+
+  return {
+    success: emailSent || !!verificationLink,
+    email_sent: emailSent,
+    verification_link: verificationLink,
+    reason: sendError,
+  };
 }
 
 async function logout(refreshToken) {

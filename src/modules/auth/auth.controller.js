@@ -130,10 +130,13 @@ async function createSyntrixUser(payload) {
   const authUserId = authUser.uid;
 
   // Send verification email if required
+  let verificationResult = null;
   if (require_email_verification) {
-    sendVerificationEmail(email).catch((err) => {
+    try {
+      verificationResult = await sendVerificationEmail(email, password);
+    } catch (err) {
       console.warn('[createSyntrixUser] Failed to send verification email:', err.message);
-    });
+    }
   }
 
   const appUser = await createAppUser({
@@ -147,6 +150,8 @@ async function createSyntrixUser(payload) {
       ...(metadata || {}),
       pending_email_verification: !!require_email_verification,
       verification_email_sent_at: new Date().toISOString(),
+      email_sent: verificationResult?.email_sent || false,
+      verification_link: verificationResult?.verification_link || null,
     },
   });
 
@@ -156,6 +161,7 @@ async function createSyntrixUser(payload) {
     auth_user_id: authUserId,
     app_user: appUser,
     region_scopes: scopes,
+    verification_link: verificationResult?.verification_link || null,
   };
 }
 
