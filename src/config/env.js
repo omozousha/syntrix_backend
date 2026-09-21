@@ -83,6 +83,12 @@ const env = {
   r2BucketName: process.env.R2_BUCKET_NAME || 'syntrix-storage',
   r2PublicUrl: process.env.R2_PUBLIC_URL || '',
   databaseUrl: process.env.DATABASE_URL || '',
+  smtpHost: process.env.SMTP_HOST || '',
+  smtpPort: toNumber(process.env.SMTP_PORT, 587),
+  smtpUser: process.env.SMTP_USER || '',
+  smtpPass: process.env.SMTP_PASS || '',
+  smtpFrom: process.env.SMTP_FROM || 'Syntrix One <widedune@msgwing.com>',
+  smtpSecure: toBoolean(process.env.SMTP_SECURE, false),
 };
 
 module.exports = { env };

@@ -84,7 +84,7 @@ async function sendVerificationEmail(email, password) {
 
   let verificationLink = null;
 
-  // 1. Always generate verification link via Admin SDK first (100% reliable)
+  // 1. Generate verification link via Admin SDK (always reliable)
   if (admin) {
     try {
       verificationLink = await admin.auth().generateEmailVerificationLink(email);
@@ -93,7 +93,43 @@ async function sendVerificationEmail(email, password) {
     }
   }
 
-  // 2. Try sending email via Firebase REST API
+  // 2. Send email via nodemailer SMTP (primary - bypasses Firebase rate limits)
+  if (verificationLink && env.smtpHost && env.smtpUser) {
+    try {
+      const nodemailer = require('nodemailer');
+      const transporter = nodemailer.createTransport({
+        host: env.smtpHost,
+        port: env.smtpPort,
+        secure: env.smtpSecure,
+        auth: { user: env.smtpUser, pass: env.smtpPass },
+      });
+
+      await transporter.sendMail({
+        from: env.smtpFrom,
+        to: email,
+        subject: 'Verifikasi Alamat Email Anda — Syntrix',
+        html: `
+          <div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#0f172a;color:#e2e8f0;border-radius:12px">
+            <h2 style="color:#38bdf8;margin-bottom:8px">Syntrix One</h2>
+            <p style="margin-bottom:24px;color:#94a3b8">Verifikasi alamat email Anda untuk mengaktifkan akun Syntrix.</p>
+            <a href="${verificationLink}"
+               style="display:inline-block;padding:12px 28px;background:#38bdf8;color:#0f172a;border-radius:8px;font-weight:700;text-decoration:none;margin-bottom:24px">
+              Verifikasi Email
+            </a>
+            <p style="font-size:13px;color:#64748b">Link ini hanya berlaku sekali. Jika Anda tidak meminta ini, abaikan email ini.</p>
+            <hr style="border:none;border-top:1px solid #1e293b;margin:24px 0">
+            <p style="font-size:12px;color:#475569">Syntrix Network Asset Management &mdash; System Notification</p>
+          </div>
+        `,
+      });
+
+      return { success: true, email_sent: true, verification_link: verificationLink };
+    } catch (smtpErr) {
+      console.warn('[sendVerificationEmail] SMTP error:', smtpErr.message);
+    }
+  }
+
+  // 3. Fallback: try Firebase sendOobCode
   let emailSent = false;
   let sendError = null;
 
@@ -101,7 +137,6 @@ async function sendVerificationEmail(email, password) {
     try {
       let idToken = null;
 
-      // Strategy A: Direct sign in with password (fast, avoids rate limit)
       if (password) {
         const signInUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`;
         const signInRes = await fetch(signInUrl, {
@@ -110,15 +145,12 @@ async function sendVerificationEmail(email, password) {
           body: JSON.stringify({ email, password, returnSecureToken: true }),
         });
         const signInData = await signInRes.json();
-        if (!signInData.error) {
-          idToken = signInData.idToken;
-        }
+        if (!signInData.error) idToken = signInData.idToken;
       }
 
-      // Strategy B: Custom token exchange
       if (!idToken && admin) {
-        try {
-          const userRecord = await admin.auth().getUserByEmail(email);
+        const userRecord = await admin.auth().getUserByEmail(email).catch(() => null);
+        if (userRecord) {
           const customToken = await admin.auth().createCustomToken(userRecord.uid);
           const exchangeUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${apiKey}`;
           const exchangeRes = await fetch(exchangeUrl, {
@@ -127,15 +159,10 @@ async function sendVerificationEmail(email, password) {
             body: JSON.stringify({ token: customToken, returnSecureToken: true }),
           });
           const exchangeData = await exchangeRes.json();
-          if (!exchangeData.error) {
-            idToken = exchangeData.idToken;
-          }
-        } catch (tokenErr) {
-          console.warn('[sendVerificationEmail] Custom token error:', tokenErr.message);
+          if (!exchangeData.error) idToken = exchangeData.idToken;
         }
       }
 
-      // If we got an idToken, send the verification email
       if (idToken) {
         const verifyUrl = `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${apiKey}`;
         const verifyRes = await fetch(verifyUrl, {
@@ -153,7 +180,6 @@ async function sendVerificationEmail(email, password) {
       }
     } catch (err) {
       sendError = err.message;
-      console.warn('[sendVerificationEmail] Error sending email:', err.message);
     }
   }
 
