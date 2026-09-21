@@ -3257,6 +3257,7 @@ function bindResource(resourceName, config) {
     if (config.softDelete) {
       router.post('/:id/restore', requireRole(...config.auth.write), controller.restore);
       router.post('/:id/purge', requireRole('admin'), controller.purge);
+      router.post('/bulk-purge', requireRole('admin'), controller.bulkPurge);
     }
   }
 
@@ -3264,6 +3265,8 @@ function bindResource(resourceName, config) {
 }
 
 Object.entries(RESOURCE_CONFIG).forEach(([resourceName, config]) => bindResource(resourceName, config));
+
+resourceRouter.post('/trash/bulk-purge', authenticate, requireRole('admin'), controller.unifiedTrashBulkPurge);
 
 resourceRouter.get('/devices/:id/trace', authenticate, requireRole('admin', 'user_region', 'user_all_region'), async (req, res, next) => {
   try {

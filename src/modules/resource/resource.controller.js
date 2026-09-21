@@ -1,4 +1,6 @@
 const { randomUUID } = require('crypto');
+const { query } = require('../../config/db');
+const { RESOURCE_CONFIG } = require('./resource.registry');
 const { validateResourcePayload, translateHasuraError } = require('./resource.validators');
 const { getPagination } = require('../../utils/pagination');
 const { sendSuccess } = require('../../utils/response');
@@ -1711,6 +1713,210 @@ async function purge(req, res, next) {
   }
 }
 
+async function bulkPurge(req, res, next) {
+  try {
+    if (req.auth.role !== 'admin') {
+      throw createHttpError(403, 'Only admin can purge data permanently');
+    }
+
+    if (!req.resourceConfig?.softDelete) {
+      throw createHttpError(400, `${req.resourceName} does not support purge`);
+    }
+
+    const confirm = String(req.body?.confirm || '').trim().toUpperCase();
+    if (confirm !== 'PURGE') {
+      throw createHttpError(400, 'Purge confirmation failed: must confirm with "PURGE"');
+    }
+
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(Boolean) : [];
+    if (!ids.length) {
+      throw createHttpError(400, 'No IDs provided for bulk purge');
+    }
+
+    const selectRes = await query(
+      `SELECT * FROM public.${req.resourceConfig.table} WHERE id = ANY($1::uuid[]) AND deleted_at IS NOT NULL`,
+      [ids]
+    );
+    const existingItems = selectRes.rows || [];
+    if (!existingItems.length) {
+      throw createHttpError(404, `No archived ${req.resourceName} found to purge`);
+    }
+
+    const targetIds = existingItems.map((r) => r.id);
+
+    try {
+      const deleteRes = await query(
+        `DELETE FROM public.${req.resourceConfig.table} WHERE id = ANY($1::uuid[]) RETURNING id`,
+        [targetIds]
+      );
+      const deletedIds = (deleteRes.rows || []).map((r) => r.id);
+
+      if (req.resourceName === 'devicePorts') {
+        const deviceIds = Array.from(new Set(existingItems.map((item) => item.device_id).filter(Boolean)));
+        await Promise.all(deviceIds.map((deviceId) => syncDevicePortUsage(deviceId)));
+      }
+
+      await Promise.all(
+        existingItems.map((item) =>
+          createAuditLog({
+            actorUserId: req.auth.appUser.id,
+            actionName: `bulk-purge:${req.resourceName}`,
+            entityType: req.resourceName,
+            entityId: item.id,
+            beforeData: item,
+            afterData: null,
+            ipAddress: req.ip,
+            userAgent: req.get('user-agent'),
+          })
+        )
+      );
+
+      return sendSuccess(
+        res,
+        { ids: deletedIds, count: deletedIds.length, mode: 'bulk-purge' },
+        `${deletedIds.length} ${req.resourceName} purged permanently`
+      );
+    } catch (err) {
+      if (err.code === '23503') {
+        throw createHttpError(
+          409,
+          `Cannot purge ${req.resourceName}: items are referenced by active relationships (${err.detail || err.message})`
+        );
+      }
+      throw err;
+    }
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function unifiedTrashBulkPurge(req, res, next) {
+  try {
+    if (req.auth.role !== 'admin') {
+      throw createHttpError(403, 'Only admin can purge data permanently');
+    }
+
+    const confirm = String(req.body?.confirm || '').trim().toUpperCase();
+    if (confirm !== 'PURGE') {
+      throw createHttpError(400, 'Purge confirmation failed: must confirm with "PURGE"');
+    }
+
+    let rawItems = [];
+    if (Array.isArray(req.body?.items)) {
+      rawItems = req.body.items;
+    } else if (Array.isArray(req.body?.ids) && req.body?.resource) {
+      rawItems = req.body.ids.map((id) => ({ id, resource: req.body.resource }));
+    }
+
+    if (!rawItems.length) {
+      throw createHttpError(400, 'No items provided for bulk purge');
+    }
+
+    const groups = new Map();
+    for (const item of rawItems) {
+      const resource = String(item.resource || item.entityType || item.category || '').trim();
+      const id = String(item.id || '').trim();
+      if (!resource || !id) continue;
+      if (!groups.has(resource)) {
+        groups.set(resource, []);
+      }
+      groups.get(resource).push(id);
+    }
+
+    if (groups.size === 0) {
+      throw createHttpError(400, 'Invalid items: missing resource or id');
+    }
+
+    const results = {
+      purgedCount: 0,
+      failedCount: 0,
+      purgedIds: [],
+      errors: [],
+    };
+
+    for (const [resourceName, ids] of groups.entries()) {
+      const config = RESOURCE_CONFIG[resourceName];
+      if (!config || !config.softDelete) {
+        results.failedCount += ids.length;
+        results.errors.push({
+          resource: resourceName,
+          error: `${resourceName} does not exist or does not support soft-delete/purge`,
+        });
+        continue;
+      }
+
+      try {
+        const selectRes = await query(
+          `SELECT * FROM public.${config.table} WHERE id = ANY($1::uuid[]) AND deleted_at IS NOT NULL`,
+          [ids]
+        );
+        const existingItems = selectRes.rows || [];
+        if (!existingItems.length) {
+          continue;
+        }
+
+        const targetIds = existingItems.map((r) => r.id);
+        const deleteRes = await query(
+          `DELETE FROM public.${config.table} WHERE id = ANY($1::uuid[]) RETURNING id`,
+          [targetIds]
+        );
+        const deletedIds = (deleteRes.rows || []).map((r) => r.id);
+
+        if (resourceName === 'devicePorts') {
+          const deviceIds = Array.from(new Set(existingItems.map((item) => item.device_id).filter(Boolean)));
+          await Promise.all(deviceIds.map((deviceId) => syncDevicePortUsage(deviceId)));
+        }
+
+        await Promise.all(
+          existingItems.map((item) =>
+            createAuditLog({
+              actorUserId: req.auth.appUser.id,
+              actionName: `bulk-purge:${resourceName}`,
+              entityType: resourceName,
+              entityId: item.id,
+              beforeData: item,
+              afterData: null,
+              ipAddress: req.ip,
+              userAgent: req.get('user-agent'),
+            })
+          )
+        );
+
+        results.purgedCount += deletedIds.length;
+        results.purgedIds.push(...deletedIds);
+      } catch (err) {
+        results.failedCount += ids.length;
+        results.errors.push({
+          resource: resourceName,
+          error: err.code === '23503'
+            ? `Foreign key constraint violation: ${err.detail || err.message}`
+            : err.message,
+        });
+      }
+    }
+
+    if (results.purgedCount === 0 && results.errors.length > 0) {
+      throw createHttpError(
+        results.errors.some((e) => e.error.includes('Foreign key')) ? 409 : 400,
+        results.errors.map((e) => `${e.resource}: ${e.error}`).join('; ')
+      );
+    }
+
+    return sendSuccess(
+      res,
+      {
+        purgedCount: results.purgedCount,
+        failedCount: results.failedCount,
+        purgedIds: results.purgedIds,
+        errors: results.errors,
+      },
+      `${results.purgedCount} item(s) purged permanently${results.failedCount > 0 ? `, ${results.failedCount} failed` : ''}`
+    );
+  } catch (error) {
+    return next(error);
+  }
+}
+
 // ── Post-create topology processing ───────────────────────────────────────
 // Processes front/rear port connections after device creation.
 // Invoked from create() when front_device_id and/or rear_device_id are provided.
@@ -1860,4 +2066,15 @@ async function getUsageCheck(req, res, next) {
   }
 }
 
-module.exports = { list, getById, create, update, remove, restore, purge, getUsageCheck };
+module.exports = {
+  list,
+  getById,
+  create,
+  update,
+  remove,
+  restore,
+  purge,
+  bulkPurge,
+  unifiedTrashBulkPurge,
+  getUsageCheck,
+};
