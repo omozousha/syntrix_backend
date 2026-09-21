@@ -26,7 +26,7 @@ function buildWhereClause(config, query, auth) {
 
   if (query.q && (config.searchColumns?.length || config.pk)) {
     const keyword = query.q.trim();
-    const searchConditions = (config.searchColumns || []).map((col, idx) => `${col} ILIKE $${conditions.length + idx + 1}`);
+    const searchConditions = (config.searchColumns || []).map((col, idx) => `${col}::text ILIKE $${conditions.length + idx + 1}`);
     if (config.pk && isUuidLike(keyword)) {
       searchConditions.push(`${config.pk} = $${conditions.length + config.searchColumns.length + 1}`);
     }

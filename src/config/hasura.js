@@ -147,10 +147,10 @@ function parseWhereCondition(table, whereObj, params = []) {
           clauses.push(`"${key}" < $${params.length}`);
         } else if (op === '_ilike') {
           params.push(val);
-          clauses.push(`"${key}" ILIKE $${params.length}`);
+          clauses.push(`"${key}"::text ILIKE $${params.length}`);
         } else if (op === '_like') {
           params.push(val);
-          clauses.push(`"${key}" LIKE $${params.length}`);
+          clauses.push(`"${key}"::text LIKE $${params.length}`);
         }
       }
     } else {
