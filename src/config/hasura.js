@@ -344,7 +344,7 @@ async function executeHasura(queryStr, variables = {}) {
           responseData[keyName] = res.rows[0] || null;
         }
       } else {
-        const res = await query(`SELECT * FROM public."${table}" WHERE id = $1 AND (deleted_at IS NULL OR 1=1) LIMIT 1`, [id]);
+        const res = await query(`SELECT * FROM public."${table}" WHERE id = $1 LIMIT 1`, [id]);
         responseData[keyName] = res.rows[0] || null;
       }
     } else if (rootField.endsWith('_aggregate')) {
