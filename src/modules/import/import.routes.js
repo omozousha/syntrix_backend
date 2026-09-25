@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const FormData = require('form-data');
 const crypto = require('crypto');
+const { randomUUID } = crypto;
 const { authenticate, requireRole } = require('../../middleware/auth.middleware');
 const { env } = require('../../config/env');
 const { createHttpError } = require('../../utils/httpError');
