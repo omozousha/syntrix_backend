@@ -24,6 +24,21 @@ function toCorsOrigins(value) {
   ]));
 }
 
+/**
+ * Merge the env-var whitelist with the built-in fallback so that
+ * an old Vercel deployment variable (e.g. IMPORT_ALLOWED_ENTITIES_ADMIN=devices,pops,projects,regions)
+ * cannot silently block a newly-added core entity like `customers`.
+ */
+function ensureCoreEntities(envName, fallback) {
+  const envList = toCsvList(process.env[envName]);
+  if (!envList.length) return toCsvList(fallback);
+  const allowed = new Set(envList);
+  for (const item of toCsvList(fallback)) {
+    allowed.add(item);
+  }
+  return Array.from(allowed);
+}
+
 function toBoolean(value, fallback) {
   if (value == null || value === '') {
     return fallback;
@@ -63,8 +78,8 @@ const env = {
   apiRateLimitWindowMs: toNumber(process.env.API_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
   apiRateLimitMax: toNumber(process.env.API_RATE_LIMIT_MAX, 500),
   importMaxRows: toNumber(process.env.IMPORT_MAX_ROWS, 2000),
-  importAllowedEntitiesAdmin: toCsvList(process.env.IMPORT_ALLOWED_ENTITIES_ADMIN, 'devices,pops,projects,regions,customers'),
-  importAllowedEntitiesUserAllRegion: toCsvList(process.env.IMPORT_ALLOWED_ENTITIES_USER_ALL_REGION, 'devices,pops,projects,customers'),
+  importAllowedEntitiesAdmin: ensureCoreEntities('IMPORT_ALLOWED_ENTITIES_ADMIN', 'devices,pops,projects,regions,customers'),
+  importAllowedEntitiesUserAllRegion: ensureCoreEntities('IMPORT_ALLOWED_ENTITIES_USER_ALL_REGION', 'devices,pops,projects,customers'),
   importAllowedEntitiesUserRegion: toCsvList(process.env.IMPORT_ALLOWED_ENTITIES_USER_REGION, 'devices,pops'),
   bootstrapAdminSecret: process.env.BOOTSTRAP_ADMIN_SECRET || '',
   validationWorkflowEnabled: toBoolean(process.env.VALIDATION_WORKFLOW_ENABLED, true),
