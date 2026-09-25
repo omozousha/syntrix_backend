@@ -164,12 +164,34 @@ function detectSourceFormat(filename, mimetype) {
   throw createHttpError(400, 'Unsupported import file format');
 }
 
+/**
+ * Return the first value that is not undefined/null/empty-after-trim.
+ * Mirrors the `pick` filter inside mapRowToEntity but without the key lookup,
+ * so callers can fall back to a value that is already resolved (e.g. a POP's
+ * coordinates). Unlike `a || b` this treats 0 and "0" as real values —
+ * longitude 0 is a valid coordinate.
+ */
+function firstFilledValue(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      return value;
+    }
+  }
+  return null;
+}
+
 function mapRowToEntity(entityType, row, defaults = {}) {
   const pick = (...keys) => keys.map((key) => row[key]).find((value) => value !== undefined && value !== null && String(value).trim() !== '');
 
   if (entityType === 'devices') {
     const deviceTypeKey = pick('device_type_key', 'device_type', 'Device Type', 'device type') || defaults.device_type_key || 'OLT';
     const isOdp = String(deviceTypeKey).toUpperCase() === 'ODP';
+    // OLT/OTB templates leave longitude/latitude optional because they live
+    // inside a POP building. They inherit the parent POP's coordinates, the
+    // same way the create form auto-fills both fields when a POP is picked.
+    // resolvePopReferences attaches those coordinates to the row as
+    // _pop_longitude / _pop_latitude after resolving the POP reference.
+    const inheritsPopCoordinates = ['OLT', 'OTB'].includes(String(deviceTypeKey).toUpperCase());
 
     return applyResourceNameNormalization('devices', {
       device_name: pick('device_name', 'Device Name', 'name', 'Name', 'device name'),
@@ -183,8 +205,12 @@ function mapRowToEntity(entityType, row, defaults = {}) {
       status: pick('status', 'Status') || defaults.status || 'installed',
       validation_status: pick('validation_status', 'Validation Status') || 'unvalidated',
       validation_date: pick('validation_date', 'Validation Date', 'Tanggal Validasi') || null,
-      longitude: pick('longitude', 'Longitude'),
-      latitude: pick('latitude', 'Latitude'),
+      longitude: inheritsPopCoordinates
+        ? firstFilledValue(pick('longitude', 'Longitude'), row._pop_longitude, defaults.longitude)
+        : pick('longitude', 'Longitude'),
+      latitude: inheritsPopCoordinates
+        ? firstFilledValue(pick('latitude', 'Latitude'), row._pop_latitude, defaults.latitude)
+        : pick('latitude', 'Latitude'),
       address: pick('address', 'Address') || null,
       serial_number: pick('serial_number', 'Serial Number') || null,
       management_ip: pick('management_ip', 'Management IP') || null,
@@ -234,6 +260,29 @@ function mapRowToEntity(entityType, row, defaults = {}) {
       description: pick('description', 'Description') || null,
       custom_fields: row,
     };
+  }
+
+  if (entityType === 'customers') {
+    return applyResourceNameNormalization('customers', {
+      customer_name: pick('customer_name', 'Customer Name', 'name', 'Name'),
+      installation_date: pick('installation_date', 'Installation Date', 'installed_date') || null,
+      customer_number: pick('customer_number', 'Customer Number', 'CID', 'cid') || null,
+      region_id: pick('region_id', 'Region ID', 'region', 'Region') || defaults.region_id || null,
+      pop_id: pick('pop_id', 'POP ID', 'pop', 'POP') || defaults.pop_id || null,
+      project_id: pick('project_id', 'Project ID') || defaults.project_id || null,
+      service_type_id: pick('service_type_id', 'Service Type ID', 'service_type', 'Service Type') || null,
+      service_type: pick('service_type', 'service_type', 'Service Type') || null,
+      contact_name: pick('contact_name', 'Contact Name') || null,
+      contact_phone: pick('contact_phone', 'Contact Phone') || null,
+      email: pick('email', 'Email') || null,
+      address: pick('address', 'Address') || null,
+      longitude: pick('longitude', 'Longitude'),
+      latitude: pick('latitude', 'Latitude'),
+      province: pick('province', 'Provinsi') || null,
+      city: pick('city', 'Kota/Kabupaten') || null,
+      status: pick('status', 'Status') || 'prospect',
+      custom_fields: row,
+    });
   }
 
   throw createHttpError(400, `Import apply is not yet supported for entity_type ${entityType}`);
@@ -379,6 +428,10 @@ function validateMappedEntity(entityType, mappedRow, index) {
 
   if (entityType === 'regions' && !mappedRow.region_name) {
     throw createHttpError(400, `Baris ${index + 1} (regions) tidak valid: region_name kosong`);
+  }
+
+  if (entityType === 'customers' && (!mappedRow.customer_name || !mappedRow.customer_number || !mappedRow.region_id)) {
+    throw createHttpError(400, `Baris ${index + 1} (customers) tidak valid: customer_name, customer_number (CID), atau region_id kosong`);
   }
 }
 

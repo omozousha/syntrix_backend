@@ -186,12 +186,15 @@ async function resolvePopReferences(rows) {
         pop_id
         pop_name
         pop_code
+        longitude
+        latitude
       }
     }
   `;
 
   const data = await executeHasura(query);
   const popMap = new Map();
+  const popCoordinateMap = new Map();
   const unresolved = new Set();
 
   for (const pop of data.pops || []) {
@@ -200,6 +203,17 @@ async function resolvePopReferences(rows) {
     popMap.set(String(pop.pop_id).toLowerCase(), popIdUuid);
     popMap.set(String(pop.pop_name).trim().toLowerCase(), popIdUuid);
     popMap.set(String(pop.pop_code).trim().toLowerCase(), popIdUuid);
+
+    // POP coordinates, keyed by the same identifiers as popMap, so OLT/OTB rows
+    // that leave longitude/latitude empty can inherit them in mapRowToEntity.
+    const coordinates = {
+      longitude: pop.longitude != null && String(pop.longitude).trim() !== '' ? pop.longitude : null,
+      latitude: pop.latitude != null && String(pop.latitude).trim() !== '' ? pop.latitude : null,
+    };
+    popCoordinateMap.set(String(pop.id).toLowerCase(), coordinates);
+    if (pop.pop_id) popCoordinateMap.set(String(pop.pop_id).toLowerCase(), coordinates);
+    if (pop.pop_name) popCoordinateMap.set(String(pop.pop_name).trim().toLowerCase(), coordinates);
+    if (pop.pop_code) popCoordinateMap.set(String(pop.pop_code).trim().toLowerCase(), coordinates);
   }
 
   return rows.map((row) => {
@@ -207,13 +221,20 @@ async function resolvePopReferences(rows) {
     if (value == null || value === '') return row;
 
     const normalized = String(value).trim().toLowerCase();
+    // Attach the parent POP's coordinates so OLT/OTB rows that leave
+    // longitude/latitude empty can inherit them in mapRowToEntity.
+    const coordinates = popCoordinateMap.get(normalized);
+    const withPopCoordinates = coordinates
+      ? { ...row, _pop_longitude: coordinates.longitude, _pop_latitude: coordinates.latitude }
+      : { ...row };
+
     if (isUuid(normalized)) {
-      return { ...row, pop_id: value };
+      return { ...withPopCoordinates, pop_id: value };
     }
 
     const resolved = popMap.get(normalized);
     if (resolved) {
-      return { ...row, pop_id: resolved };
+      return { ...withPopCoordinates, pop_id: resolved };
     }
     // DO NOT fall back to the raw text — that would cause a UUID column
     // type mismatch at insert time and produce an opaque "invalid input
@@ -302,23 +323,21 @@ importRouter.post('/ingest', authenticate, requireRole('admin', 'user_region', '
       parsedRows = parseKmlOrKmz(req.file.buffer, sourceFormat);
     }
 
-  if (['devices', 'pops', 'projects'].includes(entityType)) {
+  if (['devices', 'pops', 'projects', 'customers'].includes(entityType)) {
     parsedRows = await resolveRegionReferences(parsedRows);
-    if (entityType === 'devices') {
+    if (['devices', 'customers'].includes(entityType)) {
       parsedRows = await resolvePopReferences(parsedRows);
-      // Server-side validation for ODP imports: confirm any explicit `odp_type`
-      // column values are registered in the master `odp_types` table. Failing
-      // fast here gives operators an actionable message instead of opaque
-      // Hasura constraint errors.
+    }
+    if (entityType === 'devices') {
       await validateOdpTypeReferences(parsedRows);
     }
 
-    // ODP bulk-import regional authorization:
+    // Bulk-import regional authorization (devices + customers):
     // - adminregion (user_all_region): every resolved region_id must be inside
     //   the user's allowed region scope.
     // - superadmin (admin): the file must resolve to exactly one unique region_id.
     // - any other role: untouched (validator already blocked by requireRole).
-    if (entityType === 'devices' && applyImport && parsedRows.length) {
+    if (['devices', 'customers'].includes(entityType) && applyImport && parsedRows.length) {
       // Collect ALL parsed region tokens (UUID or text label) and resolve
       // them against the canonical regions table so we can build a useful
       // actionable error message that includes both the offending raw
@@ -451,7 +470,7 @@ importRouter.post('/ingest', authenticate, requireRole('admin', 'user_region', '
       // or Region identifier that could not be resolved to a UUID. This stops
       // opaque Hasura "invalid input syntax for type uuid" errors that would
       // otherwise hide the root cause from operators.
-      if (entityType === 'devices') {
+      if (['devices', 'customers'].includes(entityType)) {
         const unresolvedPops = [];
         const unresolvedRegions = [];
         const originalRows = Array.isArray(parsedRows)
