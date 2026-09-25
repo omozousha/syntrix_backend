@@ -330,7 +330,7 @@ async function storeImportAttachment(req, file, sourceFormat) {
 
   const record = await executeHasura(mutation, {
     object: {
-      bucket_id: bucketId,
+      bucket_id: env.defaultStorageBucket,
       storage_file_id: storageFile.id,
       entity_type: 'import_job',
       entity_id: null,
