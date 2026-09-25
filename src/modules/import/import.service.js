@@ -430,8 +430,8 @@ function validateMappedEntity(entityType, mappedRow, index) {
     throw createHttpError(400, `Baris ${index + 1} (regions) tidak valid: region_name kosong`);
   }
 
-  if (entityType === 'customers' && (!mappedRow.customer_name || !mappedRow.customer_number || !mappedRow.region_id)) {
-    throw createHttpError(400, `Baris ${index + 1} (customers) tidak valid: customer_name, customer_number (CID), atau region_id kosong`);
+  if (entityType === 'customers' && (!mappedRow.customer_name || !mappedRow.customer_number || !mappedRow.region_id || !mappedRow.service_type_id)) {
+    throw createHttpError(400, `Baris ${index + 1} (customers) tidak valid: customer_name, customer_number (CID), region_id, atau service_type_id kosong`);
   }
 }
 

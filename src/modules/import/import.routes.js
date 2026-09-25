@@ -245,6 +245,64 @@ async function resolvePopReferences(rows) {
   }).map((row) => row);
 }
 
+async function resolveServiceTypeReferences(rows) {
+  const rawRefs = rows
+    .map((row) => row.service_type_id || row.service_type || row['Service Type ID'] || row['Service Type'] || row['service type'] || row['service_type_code'])
+    .filter((value) => value !== undefined && value !== null && String(value).trim() !== '');
+
+  const refs = [...new Set(rawRefs.map((value) => String(value).trim()))];
+  if (!refs.length) return rows;
+
+  const query = `
+    query ResolveAllServiceTypes {
+      service_types {
+        id
+        service_type_code
+        service_type_name
+      }
+    }
+  `;
+
+  const data = await executeHasura(query);
+  const serviceTypeMap = new Map();
+  const serviceTypeNameMap = new Map();
+
+  for (const st of data.service_types || []) {
+    if (!st || !st.id) continue;
+    const stId = String(st.id);
+    const stName = String(st.service_type_name || '');
+    serviceTypeMap.set(stId.toLowerCase(), stId);
+    serviceTypeNameMap.set(stId.toLowerCase(), stName);
+    if (st.service_type_code) {
+      serviceTypeMap.set(String(st.service_type_code).trim().toLowerCase(), stId);
+      serviceTypeNameMap.set(String(st.service_type_code).trim().toLowerCase(), stName);
+    }
+    if (st.service_type_name) {
+      serviceTypeMap.set(String(st.service_type_name).trim().toLowerCase(), stId);
+      serviceTypeNameMap.set(String(st.service_type_name).trim().toLowerCase(), stName);
+    }
+  }
+
+  return rows.map((row) => {
+    const value = row.service_type_id || row.service_type || row['Service Type ID'] || row['Service Type'] || row['service type'] || row['service_type_code'];
+    if (value == null || value === '') return row;
+
+    const normalized = String(value).trim().toLowerCase();
+    if (isUuid(normalized)) {
+      const canonicalName = serviceTypeNameMap.get(normalized) || value;
+      return { ...row, service_type_id: value, service_type: canonicalName };
+    }
+
+    const resolvedId = serviceTypeMap.get(normalized);
+    const resolvedName = serviceTypeNameMap.get(normalized);
+    if (resolvedId) {
+      return { ...row, service_type_id: resolvedId, service_type: resolvedName || value };
+    }
+
+    return { ...row, _service_type_unresolved: String(value) };
+  });
+}
+
 async function storeImportAttachment(req, file, sourceFormat) {
   const storageKey = `import_${randomUUID()}_${file.originalname}`;
   await r2Upload(file.buffer, storageKey, file.mimetype);
@@ -327,6 +385,9 @@ importRouter.post('/ingest', authenticate, requireRole('admin', 'user_region', '
     parsedRows = await resolveRegionReferences(parsedRows);
     if (['devices', 'customers'].includes(entityType)) {
       parsedRows = await resolvePopReferences(parsedRows);
+    }
+    if (entityType === 'customers') {
+      parsedRows = await resolveServiceTypeReferences(parsedRows);
     }
     if (entityType === 'devices') {
       await validateOdpTypeReferences(parsedRows);
@@ -473,6 +534,7 @@ importRouter.post('/ingest', authenticate, requireRole('admin', 'user_region', '
       if (['devices', 'customers'].includes(entityType)) {
         const unresolvedPops = [];
         const unresolvedRegions = [];
+        const unresolvedServiceTypes = [];
         const originalRows = Array.isArray(parsedRows)
           ? parsedRows
           : Object.values(parsedRows);
@@ -493,12 +555,23 @@ importRouter.post('/ingest', authenticate, requireRole('admin', 'user_region', '
           if (originalRegion && !mapped.region_id) {
             unresolvedRegions.push(`Baris ${idx + 1}: Region "${originalRegion}" tidak ditemukan`);
           }
+          if (entityType === 'customers') {
+            const stUnresolved = row._service_type_unresolved;
+            if (stUnresolved) {
+              unresolvedServiceTypes.push(`Baris ${idx + 1}: Service Type "${stUnresolved}" tidak ditemukan`);
+            } else {
+              const originalSt = row.service_type || row['service type'] || row['Service Type'] || '';
+              if (originalSt && !mapped.service_type_id) {
+                unresolvedServiceTypes.push(`Baris ${idx + 1}: Service Type "${originalSt}" tidak ditemukan`);
+              }
+            }
+          }
         });
-        const allUnresolved = [...unresolvedPops, ...unresolvedRegions];
+        const allUnresolved = [...unresolvedPops, ...unresolvedRegions, ...unresolvedServiceTypes];
         if (allUnresolved.length) {
           throw createHttpError(
             400,
-            `Beberapa identifier POP/Region tidak ditemukan di database: ${allUnresolved.join('; ')}. Pastikan POP dan Region terdaftar dengan benar sebelum melakukan import.`,
+            `Beberapa identifier POP/Region/Service Type tidak ditemukan di database: ${allUnresolved.join('; ')}. Pastikan POP, Region, dan Service Type terdaftar dengan benar sebelum melakukan import.`,
           );
         }
       }
