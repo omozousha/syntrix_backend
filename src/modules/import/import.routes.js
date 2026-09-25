@@ -305,11 +305,11 @@ async function resolveServiceTypeReferences(rows) {
 }
 
 async function storeImportAttachment(req, file, sourceFormat) {
-  const storageKey = `import_${randomUUID()}_${file.originalname}`;
-  await r2Upload(file.buffer, storageKey, file.mimetype);
+  const storageFileId = randomUUID();
+  await r2Upload(file.buffer, storageFileId, file.mimetype);
 
   const storageFile = {
-    id: storageKey,
+    id: storageFileId,
     name: file.originalname,
     size: file.buffer.length,
     mimeType: file.mimetype,
