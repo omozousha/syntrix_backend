@@ -225,38 +225,38 @@ function mapRowToEntity(entityType, row, defaults = {}) {
 
   if (entityType === 'pops') {
     return applyResourceNameNormalization('pops', {
-      pop_name: pick('pop_name', 'POP Name', 'name', 'Name'),
-      pop_code: pick('pop_code', 'POP Code', 'code', 'Code'),
-      region_id: pick('region_id', 'Region ID') || defaults.region_id || null,
+      pop_name: pick('pop_name', 'POP Name', 'pop name', 'name', 'Name'),
+      pop_code: pick('pop_code', 'POP Code', 'pop code', 'code', 'Code'),
+      region_id: pick('region_id', 'Region ID', 'region', 'Region') || defaults.region_id || null,
       longitude: pick('longitude', 'Longitude'),
       latitude: pick('latitude', 'Latitude'),
       address: pick('address', 'Address') || null,
       province: pick('province', 'Provinsi') || null,
       city: pick('city', 'Kota/Kabupaten') || null,
-      status_pop: pick('status_pop', 'status_id', 'Status POP') || 'planning',
+      status_pop: pick('status_pop', 'status_id', 'Status POP', 'status pop') || 'planning',
       validation_status: pick('validation_status', 'Validation Status') || 'unvalidated',
       validation_date: pick('validation_date', 'Validation Date', 'Tanggal Validasi') || null,
-      pop_type: pick('pop_type', 'POP Type') || null,
+      pop_type: pick('pop_type', 'POP Type', 'pop type') || null,
       custom_fields: row,
     });
   }
 
   if (entityType === 'projects') {
     return {
-      project_name: pick('project_name', 'Project Name', 'name', 'Name'),
-      region_id: pick('region_id', 'Region ID') || defaults.region_id || null,
-      pop_id: pick('pop_id', 'POP ID') || defaults.pop_id || null,
+      project_name: pick('project_name', 'Project Name', 'project name', 'name', 'Name'),
+      region_id: pick('region_id', 'Region ID', 'region', 'Region') || defaults.region_id || null,
+      pop_id: pick('pop_id', 'POP ID', 'pop', 'POP') || defaults.pop_id || null,
       status: pick('status', 'Status') || 'planning',
       description: pick('description', 'Description') || null,
-      vendor_name: pick('vendor_name', 'Vendor Name') || null,
+      vendor_name: pick('vendor_name', 'Vendor Name', 'vendor name') || null,
       custom_fields: row,
     };
   }
 
   if (entityType === 'regions') {
     return {
-      region_name: pick('region_name', 'Region Name', 'name', 'Name'),
-      region_color: pick('region_color', 'Region Color') || '#1D4ED8',
+      region_name: pick('region_name', 'Region Name', 'region name', 'name', 'Name'),
+      region_color: pick('region_color', 'Region Color', 'region color') || '#1D4ED8',
       description: pick('description', 'Description') || null,
       custom_fields: row,
     };
@@ -264,16 +264,16 @@ function mapRowToEntity(entityType, row, defaults = {}) {
 
   if (entityType === 'customers') {
     return applyResourceNameNormalization('customers', {
-      customer_name: pick('customer_name', 'Customer Name', 'name', 'Name'),
-      installation_date: pick('installation_date', 'Installation Date', 'installed_date') || null,
-      customer_number: pick('customer_number', 'Customer Number', 'CID', 'cid') || null,
+      customer_name: pick('customer_name', 'Customer Name', 'customer name', 'name', 'Name'),
+      installation_date: pick('installation_date', 'Installation Date', 'installation date', 'installed_date') || null,
+      customer_number: pick('customer_number', 'Customer Number', 'customer number', 'CID', 'cid') || null,
       region_id: pick('region_id', 'Region ID', 'region', 'Region') || defaults.region_id || null,
       pop_id: pick('pop_id', 'POP ID', 'pop', 'POP') || defaults.pop_id || null,
-      project_id: pick('project_id', 'Project ID') || defaults.project_id || null,
-      service_type_id: pick('service_type_id', 'Service Type ID', 'service_type', 'Service Type') || null,
-      service_type: pick('service_type', 'service_type', 'Service Type') || null,
-      contact_name: pick('contact_name', 'Contact Name') || null,
-      contact_phone: pick('contact_phone', 'Contact Phone') || null,
+      project_id: pick('project_id', 'Project ID', 'project', 'Project') || defaults.project_id || null,
+      service_type_id: pick('service_type_id', 'Service Type ID', 'service_type', 'Service Type', 'service type') || null,
+      service_type: pick('service_type', 'service_type', 'Service Type', 'service type') || null,
+      contact_name: pick('contact_name', 'Contact Name', 'contact name') || null,
+      contact_phone: pick('contact_phone', 'Contact Phone', 'contact phone') || null,
       email: pick('email', 'Email') || null,
       address: pick('address', 'Address') || null,
       longitude: pick('longitude', 'Longitude'),
