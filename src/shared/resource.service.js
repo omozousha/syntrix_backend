@@ -194,10 +194,37 @@ async function enrichOptionalFields(config, data) {
   return data;
 }
 
+async function enrichPopCustomerCounts(data) {
+  if (!data?.items?.length) return data;
+  const ids = data.items.map((item) => item.id).filter(Boolean);
+  if (!ids.length) return data;
+  try {
+    const result = await dbQuery(
+      `SELECT pop_id, COUNT(*)::int AS customer_count
+       FROM public.customers
+       WHERE pop_id = ANY($1::uuid[])
+       GROUP BY pop_id`,
+      [ids],
+    );
+    const countsByPopId = new Map(result.rows.map((row) => [row.pop_id, row.customer_count]));
+    return {
+      ...data,
+      items: data.items.map((item) => ({
+        ...item,
+        customer_count: countsByPopId.get(item.id) ?? 0,
+      })),
+    };
+  } catch {
+    return data;
+  }
+}
+
 async function enrichResourceData(config, data) {
   let enriched = data;
   if (config.table === 'devices') {
     enriched = await enrichDeviceRelations(enriched);
+  } else if (config.table === 'pops') {
+    enriched = await enrichPopCustomerCounts(enriched);
   }
   return enriched;
 }
