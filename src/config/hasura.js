@@ -334,9 +334,9 @@ async function executeHasura(queryStr, variables = {}) {
         responseData[keyName] = res.rows[0] || null;
       } else if (isUpdate && id) {
         const setObj = args._set || args.set || variables.set || variables._set || {};
-        const entries = Object.entries(setObj).filter(([k]) => k !== 'id');
+        const entries = Object.entries(setObj).filter(([k]) => k !== 'id' && k !== 'updated_at');
         if (!entries.length) {
-          const res = await query(`SELECT * FROM public."${table}" WHERE id = $1`, [id]);
+          const res = await query(`UPDATE public."${table}" SET updated_at = NOW() WHERE id = $1 RETURNING *`, [id]);
           responseData[keyName] = res.rows[0] || null;
         } else {
           const setClauses = entries.map(([k], idx) => JSON_COLUMN_KEYS.has(k) ? `"${k}" = $${idx + 2}::jsonb` : TEXT_ARRAY_KEYS.has(k) ? `"${k}" = $${idx + 2}::text[]` : `"${k}" = $${idx + 2}`).join(', ');
@@ -405,9 +405,9 @@ async function executeHasura(queryStr, variables = {}) {
       const setObj = args._set || args.set || variables._set || variables.set || {};
       const { sql: whereSql, params } = parseWhereCondition(table, whereObj, []);
 
-      const setEntries = Object.entries(setObj);
+      const setEntries = Object.entries(setObj).filter(([k]) => k !== 'id' && k !== 'updated_at');
       if (!setEntries.length) {
-        const res = await query(`SELECT * FROM public."${table}" WHERE ${whereSql}`, params);
+        const res = await query(`UPDATE public."${table}" SET updated_at = NOW() WHERE ${whereSql} RETURNING *`, params);
         responseData[keyName] = { affected_rows: res.rows.length, returning: res.rows };
       } else {
         const setClauses = setEntries.map(([k], idx) => JSON_COLUMN_KEYS.has(k) ? `"${k}" = $${params.length + idx + 1}::jsonb` : TEXT_ARRAY_KEYS.has(k) ? `"${k}" = $${params.length + idx + 1}::text[]` : `"${k}" = $${params.length + idx + 1}`).join(', ');
