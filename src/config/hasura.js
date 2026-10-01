@@ -224,7 +224,8 @@ function parseGraphQLArguments(argStr, variables = {}) {
         jsonStr = jsonStr
           .replace(/:\s*(desc|asc)\b/gi, ':"$1"')
           .replace(/([a-zA-Z0-9_]+)\s*:/g, '"$1":')
-          .replace(/'/g, '"');
+          .replace(/'/g, '"')
+          .replace(/([}\]"0-9]|true|false|null)\s*\n\s*"/g, '$1,\n"');
         args[key] = JSON.parse(jsonStr);
       } catch (e) {
         args[key] = block;
