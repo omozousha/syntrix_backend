@@ -1331,6 +1331,27 @@ function normalizeDeviceStatus(status) {
   return VALID_DEVICE_STATUSES.has(normalized) ? normalized : null;
 }
 
+const VALID_PORT_STATUSES = new Set(['idle', 'used', 'reserved', 'down', 'maintenance']);
+
+function normalizePortStatus(status) {
+  if (status === undefined || status === null) return null;
+  const normalized = String(status).trim().toLowerCase();
+  if (VALID_PORT_STATUSES.has(normalized)) return normalized;
+  // ponytail: legacy/unknown port status falls back to `idle` (the schema default) rather than
+  // rejecting the whole approval; replace with a strict reject + request-bounce if that becomes noise.
+  return 'idle';
+}
+
+function sanitizePortStatusChange(changes) {
+  if (!('status' in changes)) return;
+  const normalized = normalizePortStatus(changes.status);
+  if (normalized === null) {
+    delete changes.status;
+  } else {
+    changes.status = normalized;
+  }
+}
+
 function normalizeDeviceTypeKey(value) {
   const normalized = String(value || '').trim().toUpperCase();
   return normalized || 'DEVICE';
@@ -1593,7 +1614,7 @@ async function applyProvisionDevicePortsRequest({ request }) {
       port_label: port.port_label || `#${portIndex}`,
       port_type: port.port_type || 'fiber',
       direction: port.direction || 'bidirectional',
-      status: port.status || 'idle',
+      status: normalizePortStatus(port.status) || 'idle',
       speed_profile: port.speed_profile || null,
       core_capacity: port.core_capacity ?? null,
       core_used: port.core_used ?? 0,
@@ -1937,6 +1958,7 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
       const existingByIndex = Number.isInteger(requestedPortIndex) ? currentPortByIndex.get(requestedPortIndex) : null;
       const portId = String(portPatch.id || existingByIndex?.id || '').trim();
       const changes = pickObject(portPatch, ['port_label', 'status', 'customer_id', 'ont_device_id', 'notes']);
+      sanitizePortStatusChange(changes);
       if (!Object.keys(changes).length) continue;
 
       if (!portId || !currentPortMap.has(portId)) {
@@ -1948,7 +1970,7 @@ async function applyValidationPayloadToAsset({ request, actorUserId = null }) {
           port_label: portPatch.port_label || `#${requestedPortIndex}`,
           port_type: portPatch.port_type || 'fiber',
           direction: portPatch.direction || 'bidirectional',
-          status: changes.status || 'idle',
+          status: normalizePortStatus(portPatch.status) || 'idle',
           customer_id: changes.customer_id || null,
           ont_device_id: changes.ont_device_id || null,
           notes: changes.notes || null,
