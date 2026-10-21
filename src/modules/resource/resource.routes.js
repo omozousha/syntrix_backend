@@ -3076,11 +3076,13 @@ async function deleteManagedUser(req, res, next) {
 
 async function markVerificationEmailSent(userId, metadata = {}) {
   const sentAt = new Date().toISOString();
+  // _set must be passed as a typed variable: the inline-literal path in the
+  // GraphQL->SQL translator mangles string values containing ':' (e.g. ISO timestamps).
   const mutation = `
-    mutation MarkVerificationEmailSent($id: uuid!, $metadata: jsonb!) {
+    mutation MarkVerificationEmailSent($id: uuid!, $changes: app_users_set_input!) {
       item: update_app_users_by_pk(
         pk_columns: { id: $id }
-        _set: { metadata: $metadata }
+        _set: $changes
       ) {
         id
         metadata
@@ -3089,10 +3091,12 @@ async function markVerificationEmailSent(userId, metadata = {}) {
   `;
   const data = await executeHasura(mutation, {
     id: userId,
-    metadata: {
-      ...(metadata || {}),
-      pending_email_verification: true,
-      verification_email_sent_at: sentAt,
+    changes: {
+      metadata: {
+        ...(metadata || {}),
+        pending_email_verification: true,
+        verification_email_sent_at: sentAt,
+      },
     },
   });
   return { item: data.item || null, sentAt };
@@ -3111,13 +3115,16 @@ async function resendManagedUserVerification(req, res, next) {
 
     let verificationSent = false;
     let verificationLink = null;
+    let verificationReason = null;
     try {
       const { sendVerificationEmail } = require('../auth/auth.service');
       const result = await sendVerificationEmail(existingUser.email);
       verificationSent = result.email_sent;
       verificationLink = result.verification_link;
+      verificationReason = result.reason || null;
     } catch (error) {
       console.warn('[Resend Verification Error]:', error.message);
+      verificationReason = error.message;
     }
     const { sentAt } = await markVerificationEmailSent(existingUser.id, {
       ...(existingUser.metadata || {}),
@@ -3142,6 +3149,7 @@ async function resendManagedUserVerification(req, res, next) {
         email: existingUser.email,
         email_sent: verificationSent,
         verification_link: verificationLink,
+        reason: verificationReason,
       },
       verificationSent
         ? 'Verification email sent successfully'

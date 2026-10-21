@@ -83,6 +83,7 @@ async function sendVerificationEmail(email, password) {
   const apiKey = env.firebaseWebApiKey;
 
   let verificationLink = null;
+  let smtpError = null;
 
   // 1. Generate verification link via Admin SDK (always reliable)
   if (admin) {
@@ -126,6 +127,7 @@ async function sendVerificationEmail(email, password) {
       return { success: true, email_sent: true, verification_link: verificationLink };
     } catch (smtpErr) {
       console.warn('[sendVerificationEmail] SMTP error:', smtpErr.message);
+      smtpError = smtpErr.message;
     }
   }
 
@@ -187,7 +189,7 @@ async function sendVerificationEmail(email, password) {
     success: emailSent || !!verificationLink,
     email_sent: emailSent,
     verification_link: verificationLink,
-    reason: sendError,
+    reason: smtpError || sendError,
   };
 }
 
