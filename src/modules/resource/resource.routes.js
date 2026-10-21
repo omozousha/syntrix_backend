@@ -3113,6 +3113,30 @@ async function resendManagedUserVerification(req, res, next) {
       throw createHttpError(400, 'Email is already verified');
     }
 
+    // Firebase silently refuses a second send to the same address within ~60s
+    // (surfaces as TOO_MANY_ATTEMPTS_TRY_LATER). Refuse locally instead so the
+    // admin gets a countdown rather than a rate-limit error, and so we never
+    // trip Firebase's project-wide abuse protection.
+    const lastSentAt = existingUser.metadata?.verification_email_sent_at;
+    const RETRY_COOLDOWN_MS = 90_000;
+    if (lastSentAt) {
+      const elapsed = Date.now() - new Date(lastSentAt).getTime();
+      if (Number.isFinite(elapsed) && elapsed >= 0 && elapsed < RETRY_COOLDOWN_MS) {
+        return sendSuccess(
+          res,
+          {
+            id: existingUser.id,
+            email: existingUser.email,
+            email_sent: false,
+            verification_link: null,
+            reason: 'RESEND_COOLDOWN',
+            retry_after_seconds: Math.ceil((RETRY_COOLDOWN_MS - elapsed) / 1000),
+          },
+          'Verification email was sent recently; retry after the cooldown',
+        );
+      }
+    }
+
     let verificationSent = false;
     let verificationLink = null;
     let verificationReason = null;
@@ -3126,10 +3150,16 @@ async function resendManagedUserVerification(req, res, next) {
       console.warn('[Resend Verification Error]:', error.message);
       verificationReason = error.message;
     }
-    const { sentAt } = await markVerificationEmailSent(existingUser.id, {
-      ...(existingUser.metadata || {}),
-      verification_link: verificationLink,
-    });
+
+    let sentAt = existingUser.metadata?.verification_email_sent_at || null;
+    if (verificationSent) {
+      // Only stamp on a real send. A failed attempt must not move the timestamp,
+      // or the cooldown above would report time that never actually passed.
+      ({ sentAt } = await markVerificationEmailSent(existingUser.id, {
+        ...(existingUser.metadata || {}),
+        verification_link: verificationLink,
+      }));
+    }
 
     await createAuditLog({
       actorUserId: req.auth.appUser.id,
@@ -3137,7 +3167,7 @@ async function resendManagedUserVerification(req, res, next) {
       entityType: 'app_user',
       entityId: existingUser.id,
       beforeData: { email: existingUser.email, verification_status: 'unverified' },
-      afterData: { email: existingUser.email, verification_email_sent_at: sentAt },
+      afterData: { email: existingUser.email, email_sent: verificationSent, verification_email_sent_at: sentAt },
       ipAddress: req.ip,
       userAgent: req.get('user-agent'),
     });
@@ -3150,6 +3180,7 @@ async function resendManagedUserVerification(req, res, next) {
         email_sent: verificationSent,
         verification_link: verificationLink,
         reason: verificationReason,
+        retry_after_seconds: verificationSent ? 90 : 0,
       },
       verificationSent
         ? 'Verification email sent successfully'
