@@ -113,6 +113,7 @@ async function sendVerificationOobCode({ email, password, apiKey, admin }) {
 
   try {
     let idToken = null;
+    let tokenError = null;
 
     if (password) {
       const signInUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`;
@@ -123,10 +124,14 @@ async function sendVerificationOobCode({ email, password, apiKey, admin }) {
       });
       const signInData = await signInRes.json();
       if (!signInData.error) idToken = signInData.idToken;
+      else tokenError = signInData.error.message;
     }
 
     if (!idToken && admin) {
-      const userRecord = await admin.auth().getUserByEmail(email).catch(() => null);
+      const userRecord = await admin.auth().getUserByEmail(email).catch((err) => {
+        tokenError = tokenError || err.message;
+        return null;
+      });
       if (userRecord) {
         const customToken = await admin.auth().createCustomToken(userRecord.uid);
         const exchangeUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${apiKey}`;
@@ -137,7 +142,10 @@ async function sendVerificationOobCode({ email, password, apiKey, admin }) {
         });
         const exchangeData = await exchangeRes.json();
         if (!exchangeData.error) idToken = exchangeData.idToken;
+        else tokenError = exchangeData.error.message;
       }
+    } else if (!idToken && !admin) {
+      tokenError = 'Firebase Admin SDK not configured';
     }
 
     if (idToken) {
@@ -154,6 +162,11 @@ async function sendVerificationOobCode({ email, password, apiKey, admin }) {
         error = verifyData.error.message;
         console.warn('[sendVerificationEmail] sendOobCode error:', error);
       }
+    } else {
+      // No ID token means sendOobCode was never attempted; say why instead of
+      // returning a silent false that surfaces as "not sent" with no reason.
+      error = `NO_ID_TOKEN: ${tokenError || 'could not obtain an ID token for this user'}`;
+      console.warn('[sendVerificationEmail]', error);
     }
   } catch (err) {
     error = err.message;
