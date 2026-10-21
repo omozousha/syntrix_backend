@@ -2731,20 +2731,24 @@ async function loadAuthVerificationMap(authUserIds) {
   const ids = Array.from(new Set((authUserIds || []).filter(Boolean)));
   if (!ids.length) return new Map();
 
-  const queryStr = `
-    query LoadAuthVerification($ids: [String!]!) {
-      items: app_users(where: { auth_user_id: { _in: $ids } }) {
-        auth_user_id
-        is_active
+  // Source of truth for email verification is Firebase Auth, not app_users.is_active.
+  const map = new Map();
+  const { getFirebaseAdmin } = require('../../config/firebase');
+  const admin = getFirebaseAdmin();
+  if (!admin) return map;
+
+  try {
+    for (let i = 0; i < ids.length; i += 100) {
+      const batch = ids.slice(i, i + 100);
+      const result = await admin.auth().getUsers(batch.map((uid) => ({ uid })));
+      for (const user of result.users || []) {
+        map.set(user.uid, Boolean(user.emailVerified));
       }
     }
-  `;
-  try {
-    const data = await executeHasura(queryStr, { ids });
-    return new Map((data.items || []).map((item) => [item.auth_user_id, Boolean(item.is_active)]));
   } catch (err) {
-    return new Map();
+    console.warn('[loadAuthVerificationMap] Firebase lookup failed:', err.message);
   }
+  return map;
 }
 
 function enrichUsersWithVerification(users, verificationMap) {

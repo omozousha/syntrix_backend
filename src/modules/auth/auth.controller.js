@@ -193,7 +193,7 @@ async function login(req, res, next) {
             delete appUser.metadata.pending_email_verification;
           }
         } else {
-          throw createHttpError(403, 'Email address has not been verified yet. Please check your inbox.');
+          throw createHttpError(403, 'EMAIL_NOT_VERIFIED: Email address has not been verified yet. Please check your inbox.');
         }
       } else {
         throw createHttpError(403, 'User is inactive in Syntrix');
