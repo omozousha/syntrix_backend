@@ -9,6 +9,7 @@
     "test": "node --check app.js",
     "audit:deps": "npm audit",
     "smoke": "node scripts/smoke-test.js",
+    "test:verification-single-path": "node scripts/test-verification-single-path.js",
     "test:validation-state-machine": "node scripts/test-validation-state-machine.js",
     "test:generic-validation-payload": "node scripts/test-generic-device-validation-payload.js",
     "test:validation-workflow": "node scripts/test-validation-workflow.js",

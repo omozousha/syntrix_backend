@@ -162,6 +162,8 @@ async function createSyntrixUser(payload) {
     app_user: appUser,
     region_scopes: scopes,
     verification_link: verificationResult?.verification_link || null,
+    email_sent: verificationResult?.email_sent || false,
+    verification_reason: verificationResult?.reason || null,
   };
 }
 
@@ -279,7 +281,9 @@ async function register(req, res, next) {
     return sendSuccess(
       res,
       result,
-      'User created. Verification email has been sent to the user email address.',
+      result.email_sent
+        ? 'User created. Verification email has been sent to the user email address.'
+        : 'User created, but the verification email could not be sent yet.',
       201,
     );
   } catch (error) {
