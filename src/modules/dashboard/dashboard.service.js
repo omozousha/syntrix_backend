@@ -240,7 +240,7 @@ async function getValidationProgress({ month, year } = {}) {
     ? new Date(Date.UTC(selectedYear, selectedMonth - 1, 1))
     : new Date(Date.UTC(selectedYear, 0, 1));
   const endDate = selectedMonth
-    ? new Date(Date.UTC(selectedMonth, selectedMonth, 0))
+    ? new Date(Date.UTC(selectedYear, selectedMonth, 0))
     : new Date(Date.UTC(selectedYear, 11, 31));
   const intervalStep = selectedMonth ? '1 day' : '1 month';
   const dateFormatter = selectedMonth ? 'YYYY-MM-DD' : 'YYYY-MM-01';
