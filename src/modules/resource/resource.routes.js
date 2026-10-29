@@ -181,6 +181,8 @@ function normalizeQrLabelSetting(row = {}) {
     qr_logo_original_name: row.qr_logo_original_name || null,
     qr_logo_mime_type: row.qr_logo_mime_type || null,
     footer_text: row.footer_text || DEFAULT_QR_LABEL_FOOTER,
+    device_template_style: row.device_template_style === 'hazard' ? 'hazard' : 'default',
+    customer_patch_cord_style: row.customer_patch_cord_style === 'qr' ? 'qr' : 'plain',
     is_active: row.is_active == null ? true : String(row.is_active) === 'true',
     updated_by_user_id: row.updated_by_user_id || null,
     updated_at: row.updated_at || null,
@@ -189,6 +191,10 @@ function normalizeQrLabelSetting(row = {}) {
 
 async function getQrLabelSetting() {
   await executeHasuraSql(`
+    alter table if exists public.qr_label_settings
+      add column if not exists device_template_style text not null default 'default',
+      add column if not exists customer_patch_cord_style text not null default 'plain';
+
     insert into public.qr_label_settings (setting_key, footer_text, is_active)
     values ('default', ${sqlLiteral(DEFAULT_QR_LABEL_FOOTER)}, true)
     on conflict (setting_key) do nothing;
@@ -202,6 +208,8 @@ async function getQrLabelSetting() {
       a.original_name as qr_logo_original_name,
       a.mime_type as qr_logo_mime_type,
       s.footer_text,
+      s.device_template_style,
+      s.customer_patch_cord_style,
       s.is_active::text,
       s.updated_by_user_id::text,
       s.updated_at::text
@@ -1510,6 +1518,7 @@ async function loadCustomersByIds(customerIds) {
       items: customers(where: { id: { _in: $ids } }) {
         id
         customer_id
+        customer_code
         customer_number
         customer_name
         region_id
@@ -4555,6 +4564,35 @@ resourceRouter.get('/topology/devices/:id/summary', authenticate, requireRole('a
 
     const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 200);
     const ports = await loadPortsByDeviceIds([device.id]);
+    const directCustomerIds = ports.map((port) => port.customer_id).filter(Boolean);
+    const ontDeviceIds = ports.map((port) => port.ont_device_id).filter(Boolean);
+    const ontCustomerMap = new Map();
+    if (ontDeviceIds.length) {
+      const ontDevices = await loadDevicesByIds(ontDeviceIds);
+      ontDevices.forEach((d) => {
+        if (d.customer_id) {
+          ontCustomerMap.set(d.id, d.customer_id);
+        }
+      });
+    }
+    const allCustomerIds = Array.from(new Set([
+      ...directCustomerIds,
+      ...Array.from(ontCustomerMap.values()),
+    ]));
+    if (allCustomerIds.length) {
+      const customers = await loadCustomersByIds(allCustomerIds);
+      const customerMap = new Map(customers.map((c) => [c.id, c]));
+      ports.forEach((p) => {
+        const cId = p.customer_id || (p.ont_device_id ? ontCustomerMap.get(p.ont_device_id) : null);
+        if (cId && customerMap.has(cId)) {
+          const c = customerMap.get(cId);
+          p.customer_id = p.customer_id || c.id;
+          p.customer_name = p.customer_name || c.customer_name;
+          p.customer_code = p.customer_code || c.customer_code || c.customer_id;
+          p.customer_number = p.customer_number || c.customer_number;
+        }
+      });
+    }
 
     // P7: Short-circuit non-ODC — skip expensive topology queries
     const deviceTypeKey = String(device.device_type_key || '').toUpperCase();
@@ -6065,6 +6103,10 @@ resourceRouter.patch('/qr-label-settings', authenticate, requireRole('admin'), a
     const footerText = String(req.body.footer_text || DEFAULT_QR_LABEL_FOOTER).trim() || DEFAULT_QR_LABEL_FOOTER;
     const resetLogo = Boolean(req.body.reset_logo);
     const logoAttachmentId = resetLogo ? null : normalizeNullableUuid(req.body.qr_logo_attachment_id);
+    const rawDeviceStyle = String(req.body.device_template_style || '').toLowerCase().trim();
+    const deviceTemplateStyle = ['default', 'hazard'].includes(rawDeviceStyle) ? rawDeviceStyle : (before.device_template_style || 'default');
+    const rawPatchCordStyle = String(req.body.customer_patch_cord_style || '').toLowerCase().trim();
+    const customerPatchCordStyle = ['plain', 'qr'].includes(rawPatchCordStyle) ? rawPatchCordStyle : (before.customer_patch_cord_style || 'plain');
 
     if (logoAttachmentId) {
       const attachment = await loadAttachmentById(logoAttachmentId);
@@ -6085,6 +6127,8 @@ resourceRouter.patch('/qr-label-settings', authenticate, requireRole('admin'), a
         setting_key,
         qr_logo_attachment_id,
         footer_text,
+        device_template_style,
+        customer_patch_cord_style,
         is_active,
         updated_by_user_id
       )
@@ -6092,6 +6136,8 @@ resourceRouter.patch('/qr-label-settings', authenticate, requireRole('admin'), a
         'default',
         ${logoAttachmentId ? `${sqlLiteral(logoAttachmentId)}::uuid` : 'null'},
         ${sqlLiteral(footerText)},
+        ${sqlLiteral(deviceTemplateStyle)},
+        ${sqlLiteral(customerPatchCordStyle)},
         ${sqlBoolean(req.body.is_active)},
         ${sqlLiteral(req.auth.appUser.id)}::uuid
       )
@@ -6099,6 +6145,8 @@ resourceRouter.patch('/qr-label-settings', authenticate, requireRole('admin'), a
       do update set
         qr_logo_attachment_id = excluded.qr_logo_attachment_id,
         footer_text = excluded.footer_text,
+        device_template_style = excluded.device_template_style,
+        customer_patch_cord_style = excluded.customer_patch_cord_style,
         is_active = excluded.is_active,
         updated_by_user_id = excluded.updated_by_user_id,
         updated_at = now();
