@@ -181,7 +181,7 @@ function normalizeQrLabelSetting(row = {}) {
     qr_logo_original_name: row.qr_logo_original_name || null,
     qr_logo_mime_type: row.qr_logo_mime_type || null,
     footer_text: row.footer_text || DEFAULT_QR_LABEL_FOOTER,
-    device_template_style: row.device_template_style === 'hazard' ? 'hazard' : 'default',
+    device_template_style: ['default', 'hazard', 'hazard_compact'].includes(row.device_template_style) ? row.device_template_style : 'default',
     customer_patch_cord_style: row.customer_patch_cord_style === 'qr' ? 'qr' : 'plain',
     is_active: row.is_active == null ? true : String(row.is_active) === 'true',
     updated_by_user_id: row.updated_by_user_id || null,
@@ -6104,7 +6104,7 @@ resourceRouter.patch('/qr-label-settings', authenticate, requireRole('admin'), a
     const resetLogo = Boolean(req.body.reset_logo);
     const logoAttachmentId = resetLogo ? null : normalizeNullableUuid(req.body.qr_logo_attachment_id);
     const rawDeviceStyle = String(req.body.device_template_style || '').toLowerCase().trim();
-    const deviceTemplateStyle = ['default', 'hazard'].includes(rawDeviceStyle) ? rawDeviceStyle : (before.device_template_style || 'default');
+    const deviceTemplateStyle = ['default', 'hazard', 'hazard_compact'].includes(rawDeviceStyle) ? rawDeviceStyle : (before.device_template_style || 'default');
     const rawPatchCordStyle = String(req.body.customer_patch_cord_style || '').toLowerCase().trim();
     const customerPatchCordStyle = ['plain', 'qr'].includes(rawPatchCordStyle) ? rawPatchCordStyle : (before.customer_patch_cord_style || 'plain');
 
