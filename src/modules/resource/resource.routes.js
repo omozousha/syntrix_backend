@@ -6088,7 +6088,7 @@ resourceRouter.get('/topology/trace', authenticate, requireRole('admin', 'user_r
   }
 });
 
-resourceRouter.get('/qr-label-settings', authenticate, requireRole('admin', 'user_all_region'), async (_req, res, next) => {
+resourceRouter.get('/qr-label-settings', authenticate, requireRole('admin', 'user_all_region', 'user_region'), async (_req, res, next) => {
   try {
     const setting = await getQrLabelSetting();
     return sendSuccess(res, setting, 'QR label settings fetched successfully');
