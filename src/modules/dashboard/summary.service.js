@@ -21,7 +21,10 @@ function isUuidLike(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || ''));
 }
 
-async function getOdpSummary(regionIds = [], popId = null, projectId = null) {
+async function getOdpSummary(regionIds = [], popId = null, projectId = null, deviceTypeKey = 'ODP') {
+  const safeTypeKey = /^[A-Z0-9_]+$/.test(String(deviceTypeKey || '').toUpperCase())
+    ? String(deviceTypeKey).toUpperCase()
+    : 'ODP';
   const deviceRegion = regionInClause(regionIds, 'd.region_id');
 
   const popFilter = popId && popId !== '__null__' && isUuidLike(popId) ? ` and d.pop_id = '${escapeSqlLiteral(popId)}'::uuid` : '';
@@ -30,17 +33,26 @@ async function getOdpSummary(regionIds = [], popId = null, projectId = null) {
 
   const mainSql = `
     select
-      (select count(*)::int from public.devices d where d.deleted_at is null and upper(d.device_type_key) = 'ODP' ${deviceRegion}${popFilter}${popIsNullFilter}${projectFilter}) as total,
-      (select count(*)::int from public.devices d where d.deleted_at is null and upper(d.device_type_key) = 'ODP' and (d.validation_status = 'valid' or d.validation_date is not null or d.last_validation_at is not null) ${deviceRegion}${popFilter}${popIsNullFilter}${projectFilter}) as validated
+      count(*)::int as total,
+      count(*) filter (where d.validation_status = 'valid' or d.validation_date is not null or d.last_validation_at is not null)::int as validated,
+      count(*) filter (where lower(coalesce(d.status, '')) = 'active')::int as active_count,
+      count(*) filter (where d.customer_id is not null)::int as customer_linked_count
+    from public.devices d
+    where d.deleted_at is null
+      and upper(d.device_type_key) = '${safeTypeKey}'
+      ${deviceRegion}${popFilter}${popIsNullFilter}${projectFilter}
   `;
 
   const portMetricsSql = `
     select
-      coalesce(sum(d.total_ports), 0)::int as total_ports,
-      coalesce(sum(d.used_ports), 0)::int as used_ports
+      coalesce(sum(coalesce(d.total_ports, nullif(coalesce(d.feeder_port_count, 0) + coalesce(d.distribution_port_count, 0), 0))), 0)::int as total_ports,
+      coalesce(sum(d.used_ports), 0)::int as used_ports,
+      coalesce(sum(d.capacity_core), 0)::int as total_cores,
+      coalesce(sum(d.used_core), 0)::int as used_cores,
+      coalesce(sum(d.cable_length_m), 0)::float8 as total_cable_length_m
     from public.devices d
     where d.deleted_at is null
-      and upper(d.device_type_key) = 'ODP'
+      and upper(d.device_type_key) = '${safeTypeKey}'
       ${deviceRegion}${popFilter}${popIsNullFilter}${projectFilter}
   `;
 
@@ -54,7 +66,7 @@ async function getOdpSummary(regionIds = [], popId = null, projectId = null) {
         d.last_validation_at
       from public.devices d
       where d.deleted_at is null
-        and upper(d.device_type_key) = 'ODP'
+        and upper(d.device_type_key) = '${safeTypeKey}'
         ${deviceRegion}${popFilter}${popIsNullFilter}${projectFilter}
     )
     select
@@ -71,11 +83,14 @@ async function getOdpSummary(regionIds = [], popId = null, projectId = null) {
   const popsPortsSql = `
     select
       coalesce(d.pop_id::text, 'null') as pop_id,
-      coalesce(sum(d.total_ports), 0)::int as total_ports,
-      coalesce(sum(d.used_ports), 0)::int as used_ports
+      coalesce(sum(coalesce(d.total_ports, nullif(coalesce(d.feeder_port_count, 0) + coalesce(d.distribution_port_count, 0), 0))), 0)::int as total_ports,
+      coalesce(sum(d.used_ports), 0)::int as used_ports,
+      coalesce(sum(d.capacity_core), 0)::int as total_cores,
+      coalesce(sum(d.used_core), 0)::int as used_cores,
+      coalesce(sum(d.cable_length_m), 0)::float8 as total_cable_length_m
     from public.devices d
     where d.deleted_at is null
-      and upper(d.device_type_key) = 'ODP'
+      and upper(d.device_type_key) = '${safeTypeKey}'
       ${deviceRegion}${popFilter}${popIsNullFilter}${projectFilter}
     group by d.pop_id
   `;
@@ -105,16 +120,27 @@ async function getOdpSummary(regionIds = [], popId = null, projectId = null) {
     const validated = Number(mainData.validated ?? 0);
     const unvalidated = Math.max(total - validated, 0);
     const validationRate = total > 0 ? Math.round((validated / total) * 100) : null;
+    const activeCount = Number(mainData.active_count ?? 0);
+    const customerLinkedCount = Number(mainData.customer_linked_count ?? 0);
 
     const totalPorts = Number(portMetricsData.total_ports ?? 0);
     const usedPorts = Number(portMetricsData.used_ports ?? 0);
     const availablePorts = Math.max(totalPorts - usedPorts, 0);
+
+    const totalCores = Number(portMetricsData.total_cores ?? 0);
+    const usedCores = Number(portMetricsData.used_cores ?? 0);
+    const availableCores = Math.max(totalCores - usedCores, 0);
+    const cableLengthM = Number(portMetricsData.total_cable_length_m ?? 0);
 
     const pops = popsBreakdownData.map((pop) => {
       const portStat = popsPortsData.find((ps) => ps.pop_id === pop.pop_id);
       const popTotalPorts = Number(portStat?.total_ports ?? 0);
       const popUsedPorts = Number(portStat?.used_ports ?? 0);
       const popAvailablePorts = Math.max(popTotalPorts - popUsedPorts, 0);
+      const popTotalCores = Number(portStat?.total_cores ?? 0);
+      const popUsedCores = Number(portStat?.used_cores ?? 0);
+      const popAvailableCores = Math.max(popTotalCores - popUsedCores, 0);
+      const popCableLengthM = Number(portStat?.total_cable_length_m ?? 0);
       const popValidated = Number(pop.validated ?? 0);
       const popTotal = Number(pop.total ?? 0);
       const popValidationRate = popTotal > 0 ? Math.round((popValidated / popTotal) * 100) : null;
@@ -130,6 +156,10 @@ async function getOdpSummary(regionIds = [], popId = null, projectId = null) {
         totalPorts: popTotalPorts,
         usedPorts: popUsedPorts,
         availablePorts: popAvailablePorts,
+        totalCores: popTotalCores,
+        usedCores: popUsedCores,
+        availableCores: popAvailableCores,
+        cableLengthM: popCableLengthM,
       };
     });
 
@@ -144,6 +174,14 @@ async function getOdpSummary(regionIds = [], popId = null, projectId = null) {
           used: usedPorts,
           available: availablePorts,
         },
+        cores: {
+          total: totalCores,
+          used: usedCores,
+          available: availableCores,
+        },
+        cableLengthM,
+        activeCount,
+        customerLinkedCount,
       },
       pops,
     };

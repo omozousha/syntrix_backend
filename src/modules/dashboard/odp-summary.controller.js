@@ -15,8 +15,10 @@ async function getSummary(req, res, next) {
 
     const popId = String(req.query.pop_id || '').trim() || null;
     const projectId = String(req.query.project_id || '').trim() || null;
+    const rawTypeKey = String(req.query.device_type_key || 'ODP').trim().toUpperCase();
+    const deviceTypeKey = /^[A-Z0-9_]+$/.test(rawTypeKey) ? rawTypeKey : 'ODP';
 
-    const summary = await getOdpSummary(regionIds, popId, projectId);
+    const summary = await getOdpSummary(regionIds, popId, projectId, deviceTypeKey);
 
     return res.json({ success: true, data: summary });
   } catch (error) {
