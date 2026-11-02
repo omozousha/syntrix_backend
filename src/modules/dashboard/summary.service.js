@@ -67,7 +67,7 @@ async function getOdpSummary(regionIds = [], popId = null, projectId = null, dev
       from public.devices d
       where d.deleted_at is null
         and upper(d.device_type_key) = '${safeTypeKey}'
-        ${deviceRegion}${popFilter}${popIsNullFilter}${projectFilter}
+        ${deviceRegion}${projectFilter}
     )
     select
       coalesce(owp.pop_id::text, 'null') as pop_id,
@@ -91,7 +91,7 @@ async function getOdpSummary(regionIds = [], popId = null, projectId = null, dev
     from public.devices d
     where d.deleted_at is null
       and upper(d.device_type_key) = '${safeTypeKey}'
-      ${deviceRegion}${popFilter}${popIsNullFilter}${projectFilter}
+      ${deviceRegion}${projectFilter}
     group by d.pop_id
   `;
 
